@@ -734,12 +734,16 @@ class WhatsAppClient {
       `;
     }
     
+    // Reactions display
+    const reactionsHtml = this.renderReactions(message.reactions);
+    
     return `
       <div class="message ${isOutgoing ? 'outgoing' : 'incoming'}" data-message-id="${messageId}">
         ${forwarded}
         ${sender}
         ${quotedMessage}
         ${content}
+        ${reactionsHtml}
         <div class="message-footer">
           ${translationIndicator}
           <span class="message-time">${time}</span>
@@ -1133,11 +1137,90 @@ class WhatsAppClient {
         throw new Error(result.error || 'Failed to send reaction');
       }
 
+      // Update local message with the reaction
+      const messages = this.messages.get(contactId);
+      if (messages) {
+        const message = messages.find(m => m.id === messageId);
+        if (message) {
+          // Initialize reactions map if needed
+          if (!message.reactions) {
+            message.reactions = {};
+          }
+          
+          // Get my phone number for tracking who reacted
+          const myPhone = document.getElementById('user-phone')?.textContent?.replace('+', '') || 'me';
+          
+          // Remove my previous reaction (if any)
+          for (const [existingEmoji, reactors] of Object.entries(message.reactions)) {
+            message.reactions[existingEmoji] = reactors.filter(r => r !== myPhone);
+            if (message.reactions[existingEmoji].length === 0) {
+              delete message.reactions[existingEmoji];
+            }
+          }
+          
+          // Add new reaction (empty emoji means remove)
+          if (emoji) {
+            if (!message.reactions[emoji]) {
+              message.reactions[emoji] = [];
+            }
+            message.reactions[emoji].push(myPhone);
+          }
+          
+          // Update the message display
+          this.updateMessageReactions(messageId);
+        }
+      }
+      
       console.log('Reaction sent successfully');
     } catch (err) {
       console.error('Failed to send reaction:', err);
       alert('Failed to send reaction: ' + err.message);
     }
+  }
+
+  // Update reactions display for a specific message
+  updateMessageReactions(messageId) {
+    const messageEl = document.querySelector(`.message[data-message-id="${messageId}"]`);
+    if (!messageEl) return;
+    
+    const messages = this.messages.get(this.currentContactId);
+    if (!messages) return;
+    
+    const message = messages.find(m => m.id === messageId);
+    if (!message || !message.reactions) return;
+    
+    // Remove existing reactions container
+    const existingReactions = messageEl.querySelector('.message-reactions');
+    if (existingReactions) {
+      existingReactions.remove();
+    }
+    
+    // Build reactions HTML
+    const reactionsHtml = this.renderReactions(message.reactions);
+    if (reactionsHtml) {
+      // Insert before message-footer
+      const footer = messageEl.querySelector('.message-footer');
+      if (footer) {
+        footer.insertAdjacentHTML('beforebegin', reactionsHtml);
+      }
+    }
+  }
+
+  // Render reactions for a message
+  renderReactions(reactions) {
+    if (!reactions || Object.keys(reactions).length === 0) return '';
+    
+    const reactionItems = Object.entries(reactions)
+      .filter(([emoji, reactors]) => reactors.length > 0)
+      .map(([emoji, reactors]) => {
+        const count = reactors.length > 1 ? `<span class="reaction-count">${reactors.length}</span>` : '';
+        return `<span class="reaction-item">${emoji}${count}</span>`;
+      })
+      .join('');
+    
+    if (!reactionItems) return '';
+    
+    return `<div class="message-reactions">${reactionItems}</div>`;
   }
 
   // Set reply state for a message
