@@ -369,21 +369,35 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 
 			if isGroup {
 				msg.Chat.Type = "group"
-				// Try to get group info
-				groupInfo, err := c.client.GetGroupInfo(c.ctx, chatJIDParsed)
-				if err == nil {
-					msg.Chat.Name = groupInfo.Name
-					count := len(groupInfo.Participants)
-					msg.Chat.ParticipantCount = &count
+				// First try to get name from the conversation object (most reliable for history)
+				if conv.Name != nil && *conv.Name != "" {
+					msg.Chat.Name = *conv.Name
+				} else if conv.DisplayName != nil && *conv.DisplayName != "" {
+					msg.Chat.Name = *conv.DisplayName
+				} else {
+					// Fallback to GetGroupInfo (may fail for left/archived groups)
+					groupInfo, err := c.client.GetGroupInfo(c.ctx, chatJIDParsed)
+					if err == nil {
+						msg.Chat.Name = groupInfo.Name
+						count := len(groupInfo.Participants)
+						msg.Chat.ParticipantCount = &count
+					}
 				}
 			} else {
-				// Private chat - get contact name
-				contactInfo, err := c.client.Store.Contacts.GetContact(c.ctx, chatJIDParsed)
-				if err == nil && contactInfo.Found {
-					if contactInfo.FullName != "" {
-						msg.Chat.Name = contactInfo.FullName
-					} else if contactInfo.PushName != "" {
-						msg.Chat.Name = contactInfo.PushName
+				// Private chat - first try conversation DisplayName/Name
+				if conv.DisplayName != nil && *conv.DisplayName != "" {
+					msg.Chat.Name = *conv.DisplayName
+				} else if conv.Name != nil && *conv.Name != "" {
+					msg.Chat.Name = *conv.Name
+				} else {
+					// Fallback to contact store
+					contactInfo, err := c.client.Store.Contacts.GetContact(c.ctx, chatJIDParsed)
+					if err == nil && contactInfo.Found {
+						if contactInfo.FullName != "" {
+							msg.Chat.Name = contactInfo.FullName
+						} else if contactInfo.PushName != "" {
+							msg.Chat.Name = contactInfo.PushName
+						}
 					}
 				}
 			}
