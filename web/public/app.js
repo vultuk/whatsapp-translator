@@ -1099,8 +1099,37 @@ class WhatsAppClient {
         }
       
       case 'location':
-        const locName = content.name || content.address || 'Location';
-        return `<div class="message-media">[ Location: ${this.escapeHtml(locName)} ]</div>`;
+        const lat = content.latitude;
+        const lng = content.longitude;
+        const locName = content.name || content.address || 'Shared Location';
+        const locAddress = content.address && content.address !== content.name ? content.address : '';
+        const mapsUrl = lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : null;
+        
+        if (mapsUrl) {
+          return `
+            <div class="message-location">
+              <a href="${mapsUrl}" target="_blank" rel="noopener" class="location-link">
+                <div class="location-preview">
+                  <img src="https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=15&size=300x150&markers=color:red%7C${lat},${lng}&key=" 
+                       onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"
+                       alt="Map">
+                  <div class="location-placeholder" style="display:none;">
+                    <svg viewBox="0 0 24 24" width="32" height="32">
+                      <path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                    </svg>
+                  </div>
+                </div>
+                <div class="location-info">
+                  <span class="location-name">${this.escapeHtml(locName)}</span>
+                  ${locAddress ? `<span class="location-address">${this.escapeHtml(locAddress)}</span>` : ''}
+                  <span class="location-coords">${lat.toFixed(6)}, ${lng.toFixed(6)}</span>
+                </div>
+              </a>
+            </div>
+          `;
+        } else {
+          return `<div class="message-media">[ Location: ${this.escapeHtml(locName)} ]</div>`;
+        }
       
       case 'contact':
         return `<div class="message-media">[ Contact: ${this.escapeHtml(content.name)} ]</div>`;
