@@ -1631,12 +1631,15 @@ class WhatsAppClient {
       
       // Update the local message with translation
       message.translated_text = result.translatedText;
+      message.translatedText = result.translatedText;
       message.source_language = result.sourceLanguage;
+      message.sourceLanguage = result.sourceLanguage;
       message.is_translated = true;
       message.isTranslated = true;
       
       // Re-render messages to show translation
-      this.renderMessages();
+      const currentMessages = this.messages.get(this.currentContactId) || [];
+      this.renderMessages(currentMessages);
       
     } catch (err) {
       console.error('Translation failed:', err);
