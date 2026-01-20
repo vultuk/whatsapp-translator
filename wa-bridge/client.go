@@ -292,6 +292,8 @@ func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageC
 	// Size limit for media downloads (50MB)
 	const maxMediaSize uint64 = 50 * 1024 * 1024
 
+	SendEvent(NewLogEvent("debug", fmt.Sprintf("Attempting media download for type: %s, size: %d", content.Type, content.FileSize)))
+
 	switch content.Type {
 	case "image":
 		if waMsg.ImageMessage != nil {
@@ -299,7 +301,10 @@ func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageC
 				SendEvent(NewLogEvent("warn", fmt.Sprintf("Image too large to download: %d bytes", content.FileSize)))
 				return
 			}
+			SendEvent(NewLogEvent("debug", "Downloading image..."))
 			data, err = c.client.Download(c.ctx, waMsg.ImageMessage)
+		} else {
+			SendEvent(NewLogEvent("warn", "Image content type but ImageMessage is nil"))
 		}
 	case "video":
 		if waMsg.VideoMessage != nil {
@@ -307,7 +312,10 @@ func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageC
 				SendEvent(NewLogEvent("warn", fmt.Sprintf("Video too large to download: %d bytes", content.FileSize)))
 				return
 			}
+			SendEvent(NewLogEvent("debug", "Downloading video..."))
 			data, err = c.client.Download(c.ctx, waMsg.VideoMessage)
+		} else {
+			SendEvent(NewLogEvent("warn", "Video content type but VideoMessage is nil"))
 		}
 	case "audio":
 		if waMsg.AudioMessage != nil {
@@ -315,7 +323,10 @@ func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageC
 				SendEvent(NewLogEvent("warn", fmt.Sprintf("Audio too large to download: %d bytes", content.FileSize)))
 				return
 			}
+			SendEvent(NewLogEvent("debug", "Downloading audio..."))
 			data, err = c.client.Download(c.ctx, waMsg.AudioMessage)
+		} else {
+			SendEvent(NewLogEvent("warn", "Audio content type but AudioMessage is nil"))
 		}
 	case "document":
 		if waMsg.DocumentMessage != nil {
@@ -323,11 +334,17 @@ func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageC
 				SendEvent(NewLogEvent("warn", fmt.Sprintf("Document too large to download: %d bytes", content.FileSize)))
 				return
 			}
+			SendEvent(NewLogEvent("debug", "Downloading document..."))
 			data, err = c.client.Download(c.ctx, waMsg.DocumentMessage)
+		} else {
+			SendEvent(NewLogEvent("warn", "Document content type but DocumentMessage is nil"))
 		}
 	case "sticker":
 		if waMsg.StickerMessage != nil {
+			SendEvent(NewLogEvent("debug", "Downloading sticker..."))
 			data, err = c.client.Download(c.ctx, waMsg.StickerMessage)
+		} else {
+			SendEvent(NewLogEvent("warn", "Sticker content type but StickerMessage is nil"))
 		}
 	default:
 		return
@@ -339,7 +356,10 @@ func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageC
 	}
 
 	if len(data) > 0 {
+		SendEvent(NewLogEvent("debug", fmt.Sprintf("Media downloaded successfully: %d bytes", len(data))))
 		content.MediaData = base64.StdEncoding.EncodeToString(data)
+	} else {
+		SendEvent(NewLogEvent("warn", "Media download returned empty data"))
 	}
 }
 
