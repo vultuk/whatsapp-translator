@@ -500,6 +500,112 @@ body {
   opacity: 0.95;
 }
 
+/* Video messages */
+.message-video {
+  max-width: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+  margin: -4px -8px;
+  margin-bottom: 4px;
+}
+
+.message-video video {
+  max-width: 100%;
+  max-height: 300px;
+  display: block;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+}
+
+/* Audio messages */
+.message-audio {
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.message-audio audio {
+  width: 100%;
+  min-width: 200px;
+  max-width: 300px;
+  height: 40px;
+}
+
+.message-audio.voice-note {
+  background: rgba(0, 0, 0, 0.1);
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin: -4px -8px;
+  margin-bottom: 4px;
+}
+
+.voice-note-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Document messages */
+.message-document {
+  margin: 4px 0;
+}
+
+.document-download {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.15s;
+}
+
+.document-download:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.document-download svg {
+  flex-shrink: 0;
+  color: var(--accent-color);
+}
+
+.document-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.document-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.document-size {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Sticker messages */
+.message-sticker {
+  margin: -4px -8px;
+  margin-bottom: 4px;
+}
+
+.message-sticker img {
+  max-width: 150px;
+  max-height: 150px;
+  display: block;
+}
+
 /* Fullscreen image view */
 .message-image img.fullscreen {
   position: fixed;

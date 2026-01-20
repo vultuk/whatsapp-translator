@@ -289,18 +289,41 @@ func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageC
 	var data []byte
 	var err error
 
+	// Size limit for media downloads (50MB)
+	const maxMediaSize uint64 = 50 * 1024 * 1024
+
 	switch content.Type {
 	case "image":
 		if waMsg.ImageMessage != nil {
+			if content.FileSize > 0 && content.FileSize > maxMediaSize {
+				SendEvent(NewLogEvent("warn", fmt.Sprintf("Image too large to download: %d bytes", content.FileSize)))
+				return
+			}
 			data, err = c.client.Download(c.ctx, waMsg.ImageMessage)
 		}
 	case "video":
-		// Videos can be large, skip for now or limit size
-		// TODO: implement video download with size limit
-		return
+		if waMsg.VideoMessage != nil {
+			if content.FileSize > 0 && content.FileSize > maxMediaSize {
+				SendEvent(NewLogEvent("warn", fmt.Sprintf("Video too large to download: %d bytes", content.FileSize)))
+				return
+			}
+			data, err = c.client.Download(c.ctx, waMsg.VideoMessage)
+		}
 	case "audio":
 		if waMsg.AudioMessage != nil {
+			if content.FileSize > 0 && content.FileSize > maxMediaSize {
+				SendEvent(NewLogEvent("warn", fmt.Sprintf("Audio too large to download: %d bytes", content.FileSize)))
+				return
+			}
 			data, err = c.client.Download(c.ctx, waMsg.AudioMessage)
+		}
+	case "document":
+		if waMsg.DocumentMessage != nil {
+			if content.FileSize > 0 && content.FileSize > maxMediaSize {
+				SendEvent(NewLogEvent("warn", fmt.Sprintf("Document too large to download: %d bytes", content.FileSize)))
+				return
+			}
+			data, err = c.client.Download(c.ctx, waMsg.DocumentMessage)
 		}
 	case "sticker":
 		if waMsg.StickerMessage != nil {

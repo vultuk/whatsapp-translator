@@ -1017,23 +1017,86 @@ class WhatsAppClient {
         }
       
       case 'video':
-        return `
-          <div class="message-media video">[ Video ]${content.duration ? ' - ' + this.formatDuration(content.duration) : ''}</div>
-          ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
-        `;
+        const videoData = content.media_data || content.mediaData;
+        if (videoData) {
+          const videoMime = content.mime_type || content.mimeType || 'video/mp4';
+          const videoSrc = videoData.startsWith('data:') ? videoData : `data:${videoMime};base64,${videoData}`;
+          return `
+            <div class="message-video">
+              <video controls preload="metadata" onclick="event.stopPropagation()">
+                <source src="${videoSrc}" type="${videoMime}">
+                Your browser does not support video playback.
+              </video>
+            </div>
+            ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
+          `;
+        } else {
+          return `
+            <div class="message-media video">[ Video ]${content.duration_seconds ? ' - ' + this.formatDuration(content.duration_seconds) : ''}${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
+            ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
+          `;
+        }
       
       case 'audio':
-        const audioType = content.isVoiceNote ? 'Voice Note' : 'Audio';
-        return `<div class="message-media audio">[ ${audioType} ]${content.duration ? ' - ' + this.formatDuration(content.duration) : ''}</div>`;
+        const audioData = content.media_data || content.mediaData;
+        const isVoiceNote = content.is_voice_note || content.isVoiceNote;
+        if (audioData) {
+          const audioMime = content.mime_type || content.mimeType || 'audio/ogg';
+          const audioSrc = audioData.startsWith('data:') ? audioData : `data:${audioMime};base64,${audioData}`;
+          return `
+            <div class="message-audio ${isVoiceNote ? 'voice-note' : ''}">
+              <audio controls preload="metadata">
+                <source src="${audioSrc}" type="${audioMime}">
+                Your browser does not support audio playback.
+              </audio>
+              ${isVoiceNote ? '<span class="voice-note-label">Voice Note</span>' : ''}
+            </div>
+          `;
+        } else {
+          const audioType = isVoiceNote ? 'Voice Note' : 'Audio';
+          return `<div class="message-media audio">[ ${audioType} ]${content.duration_seconds ? ' - ' + this.formatDuration(content.duration_seconds) : ''}</div>`;
+        }
       
       case 'document':
-        return `
-          <div class="message-media document">[ Document: ${this.escapeHtml(content.fileName || 'file')} ]</div>
-          ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
-        `;
+        const docData = content.media_data || content.mediaData;
+        const fileName = content.file_name || content.fileName || 'document';
+        const docMime = content.mime_type || content.mimeType || 'application/octet-stream';
+        if (docData) {
+          const docSrc = docData.startsWith('data:') ? docData : `data:${docMime};base64,${docData}`;
+          return `
+            <div class="message-document">
+              <a href="${docSrc}" download="${this.escapeHtml(fileName)}" class="document-download">
+                <svg viewBox="0 0 24 24" width="24" height="24">
+                  <path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/>
+                </svg>
+                <div class="document-info">
+                  <span class="document-name">${this.escapeHtml(fileName)}</span>
+                  <span class="document-size">${content.file_size ? this.formatSize(content.file_size) : ''}</span>
+                </div>
+              </a>
+            </div>
+            ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
+          `;
+        } else {
+          return `
+            <div class="message-media document">[ Document: ${this.escapeHtml(fileName)} ]${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
+            ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
+          `;
+        }
       
       case 'sticker':
-        return `<div class="message-media">[ ${content.animated ? 'Animated ' : ''}Sticker ]</div>`;
+        const stickerData = content.media_data || content.mediaData;
+        if (stickerData) {
+          const stickerMime = content.mime_type || content.mimeType || 'image/webp';
+          const stickerSrc = stickerData.startsWith('data:') ? stickerData : `data:${stickerMime};base64,${stickerData}`;
+          return `
+            <div class="message-sticker">
+              <img src="${stickerSrc}" alt="Sticker" loading="lazy">
+            </div>
+          `;
+        } else {
+          return `<div class="message-media">[ ${content.is_animated || content.isAnimated ? 'Animated ' : ''}Sticker ]</div>`;
+        }
       
       case 'location':
         const locName = content.name || content.address || 'Location';
