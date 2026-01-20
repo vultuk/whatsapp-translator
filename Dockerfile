@@ -75,7 +75,7 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${WA_PORT}/api/status || exit 1
 
-# Volume for persistent data (WhatsApp session)
-VOLUME ["/data"]
+# Note: For persistent data (WhatsApp session), mount a volume to /data
+# On Railway, use Railway Volumes: https://docs.railway.com/reference/volumes
 
 ENTRYPOINT ["/app/whatsapp-translator"]
