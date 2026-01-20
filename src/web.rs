@@ -5,7 +5,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, State,
+        Path, Query, State,
     },
     http::StatusCode,
     response::{IntoResponse, Json},
@@ -283,6 +283,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/stats", get(get_stats))
         .route("/api/usage", get(get_global_usage))
         .route("/api/usage/:contact_id", get(get_conversation_usage))
+        .route("/api/link-preview", get(get_link_preview))
         // WebSocket
         .route("/ws", get(websocket_handler))
         // Serve static files
@@ -589,6 +590,59 @@ async fn get_conversation_usage(
         Err(e) => {
             error!("Failed to get conversation usage: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get usage").into_response()
+        }
+    }
+}
+
+/// Query parameters for link preview
+#[derive(Deserialize)]
+struct LinkPreviewQuery {
+    url: String,
+}
+
+/// Get link preview for a URL (with caching)
+async fn get_link_preview(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<LinkPreviewQuery>,
+) -> impl IntoResponse {
+    use crate::link_preview;
+
+    let url = query.url;
+
+    // Cache duration: 24 hours for successful fetches, 1 hour for errors
+    let cache_duration = 24 * 60 * 60; // 24 hours
+
+    // Check cache first
+    match state.store.get_link_preview(&url, cache_duration) {
+        Ok(Some(preview)) => {
+            return Json(preview).into_response();
+        }
+        Ok(None) => {
+            // Not in cache, need to fetch
+        }
+        Err(e) => {
+            warn!("Failed to check link preview cache: {}", e);
+            // Continue to fetch
+        }
+    }
+
+    // Fetch the preview
+    match link_preview::fetch_link_preview(&url).await {
+        Ok(preview) => {
+            // Cache the result
+            if let Err(e) = state.store.save_link_preview(&preview) {
+                warn!("Failed to cache link preview: {}", e);
+            }
+            Json(preview).into_response()
+        }
+        Err(e) => {
+            error!("Failed to fetch link preview for {}: {}", url, e);
+            // Return error preview
+            let error_preview =
+                link_preview::LinkPreview::error(url, format!("Failed to fetch: {}", e));
+            // Cache the error for a shorter duration (by saving it)
+            let _ = state.store.save_link_preview(&error_preview);
+            Json(error_preview).into_response()
         }
     }
 }

@@ -6,6 +6,7 @@
 mod bridge;
 mod cli;
 mod display;
+mod link_preview;
 mod storage;
 mod translation;
 mod web;

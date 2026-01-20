@@ -54,6 +54,9 @@ uuid = { version = "1", features = ["v4"] }
 # URL encoding/decoding
 urlencoding = "2"
 
+# Regex for URL extraction
+regex = "1"
+
 [build-dependencies]
 # For compiling Go bridge at build time
 

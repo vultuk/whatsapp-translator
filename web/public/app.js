@@ -10,6 +10,8 @@ class WhatsAppClient {
     this.avatarCache = new Map(); // JID -> URL
     this.avatarFetching = new Set(); // JIDs currently being fetched
     this.globalUsage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    this.linkPreviewCache = new Map(); // URL -> LinkPreview
+    this.linkPreviewFetching = new Set(); // URLs currently being fetched
     
     this.init();
   }
@@ -492,6 +494,27 @@ class WhatsAppClient {
     
     container.innerHTML = html;
     this.scrollToBottom();
+    
+    // Load link previews for all messages
+    this.loadAllLinkPreviews();
+  }
+
+  // Load link previews for all messages in the current view
+  loadAllLinkPreviews() {
+    const containers = document.querySelectorAll('.link-previews-container[data-urls]');
+    containers.forEach(container => {
+      try {
+        const urls = JSON.parse(container.dataset.urls);
+        if (urls && urls.length > 0) {
+          const messageEl = container.closest('.message');
+          if (messageEl) {
+            this.loadLinkPreviews(messageEl, urls);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to parse URLs:', e);
+      }
+    });
   }
 
   // Render a single message
@@ -578,9 +601,16 @@ class WhatsAppClient {
       displayText = content.body || content.text || '';
     }
     
+    // Extract URLs for link previews
+    const urls = this.extractUrls(displayText);
+    const hasUrls = urls.length > 0;
+    
     switch (content.type) {
       case 'text':
-        return `<div class="message-text">${this.escapeHtml(displayText)}</div>`;
+        return `
+          <div class="message-text">${this.linkifyText(displayText)}</div>
+          ${hasUrls ? `<div class="link-previews-container" data-urls="${this.escapeHtml(JSON.stringify(urls))}"></div>` : ''}
+        `;
       
       case 'image':
         return `
@@ -653,6 +683,20 @@ class WhatsAppClient {
     
     html += this.renderMessage(message);
     container.insertAdjacentHTML('beforeend', html);
+    
+    // Load link previews for the new message
+    const newMessage = container.lastElementChild;
+    const previewContainer = newMessage?.querySelector('.link-previews-container[data-urls]');
+    if (previewContainer) {
+      try {
+        const urls = JSON.parse(previewContainer.dataset.urls);
+        if (urls && urls.length > 0) {
+          this.loadLinkPreviews(newMessage, urls);
+        }
+      } catch (e) {
+        console.error('Failed to parse URLs:', e);
+      }
+    }
   }
 
   // Scroll to bottom of messages
@@ -958,6 +1002,121 @@ class WhatsAppClient {
     const costEl = document.getElementById('chat-cost');
     if (costEl) {
       costEl.textContent = this.formatCost(usage.costUsd || 0);
+    }
+  }
+
+  // Extract URLs from text
+  extractUrls(text) {
+    if (!text) return [];
+    const urlRegex = /https?:\/\/[^\s<>\[\](){}|\\^`\x00-\x1f\x7f]+/gi;
+    const matches = text.match(urlRegex) || [];
+    
+    // Clean trailing punctuation
+    return matches.map(url => {
+      while (url.match(/[.,!?)\]};:'"]+$/)) {
+        url = url.slice(0, -1);
+      }
+      return url;
+    });
+  }
+
+  // Fetch link preview from API
+  async fetchLinkPreview(url) {
+    // Check memory cache first
+    if (this.linkPreviewCache.has(url)) {
+      return this.linkPreviewCache.get(url);
+    }
+
+    // Skip if already fetching
+    if (this.linkPreviewFetching.has(url)) {
+      return null;
+    }
+
+    this.linkPreviewFetching.add(url);
+
+    try {
+      const response = await fetch(`/api/link-preview?url=${encodeURIComponent(url)}`);
+      const preview = await response.json();
+      
+      // Cache the result
+      this.linkPreviewCache.set(url, preview);
+      
+      return preview;
+    } catch (err) {
+      console.error('Failed to fetch link preview:', err);
+      return null;
+    } finally {
+      this.linkPreviewFetching.delete(url);
+    }
+  }
+
+  // Render link preview card HTML
+  renderLinkPreviewCard(preview, url) {
+    if (!preview || preview.error) {
+      return ''; // Don't show card for errors
+    }
+
+    const hasImage = preview.imageUrl && !preview.imageUrl.includes('undefined');
+    const title = preview.title || this.getDomainFromUrl(url);
+    const description = preview.description || '';
+    const siteName = preview.siteName || this.getDomainFromUrl(url);
+
+    return `
+      <a href="${this.escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="link-preview-card">
+        ${hasImage ? `
+          <div class="link-preview-image">
+            <img src="${this.escapeHtml(preview.imageUrl)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+          </div>
+        ` : ''}
+        <div class="link-preview-content">
+          <div class="link-preview-site">${this.escapeHtml(siteName)}</div>
+          <div class="link-preview-title">${this.escapeHtml(title)}</div>
+          ${description ? `<div class="link-preview-description">${this.escapeHtml(description)}</div>` : ''}
+        </div>
+      </a>
+    `;
+  }
+
+  // Get domain from URL for display
+  getDomainFromUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.hostname.replace(/^www\./, '');
+    } catch {
+      return url;
+    }
+  }
+
+  // Convert URLs in text to clickable links
+  linkifyText(text) {
+    if (!text) return '';
+    
+    const urlRegex = /(https?:\/\/[^\s<>\[\](){}|\\^`\x00-\x1f\x7f]+)/gi;
+    return text.replace(urlRegex, (url) => {
+      // Clean trailing punctuation for display
+      let cleanUrl = url;
+      let trailing = '';
+      while (cleanUrl.match(/[.,!?)\]};:'"]+$/)) {
+        trailing = cleanUrl.slice(-1) + trailing;
+        cleanUrl = cleanUrl.slice(0, -1);
+      }
+      return `<a href="${this.escapeHtml(cleanUrl)}" target="_blank" rel="noopener noreferrer" class="message-link">${this.escapeHtml(cleanUrl)}</a>${this.escapeHtml(trailing)}`;
+    });
+  }
+
+  // Load link previews for a message element
+  async loadLinkPreviews(messageEl, urls) {
+    const container = messageEl.querySelector('.link-previews-container');
+    if (!container || urls.length === 0) return;
+
+    for (const url of urls) {
+      const preview = await this.fetchLinkPreview(url);
+      if (preview && !preview.error) {
+        const cardHtml = this.renderLinkPreviewCard(preview, url);
+        if (cardHtml) {
+          container.insertAdjacentHTML('beforeend', cardHtml);
+        }
+      }
     }
   }
 }
