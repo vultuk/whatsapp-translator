@@ -176,6 +176,36 @@ impl MessageStore {
         // Add translation columns if they don't exist (migration for existing databases)
         self.migrate_add_translation_columns(&conn)?;
 
+        // Fix contact types based on JID suffix
+        self.migrate_fix_contact_types(&conn)?;
+
+        Ok(())
+    }
+
+    /// Fix contact types based on JID suffix (groups end with @g.us)
+    fn migrate_fix_contact_types(&self, conn: &Connection) -> Result<()> {
+        // Update contacts where type is NULL but we can infer it from the JID
+        let updated = conn.execute(
+            r#"
+            UPDATE contacts 
+            SET type = CASE 
+                WHEN id LIKE '%@g.us' THEN 'group'
+                WHEN id LIKE '%@s.whatsapp.net' THEN 'private'
+                WHEN id LIKE '%@broadcast' THEN 'broadcast'
+                ELSE 'private'
+            END
+            WHERE type IS NULL
+            "#,
+            [],
+        )?;
+
+        if updated > 0 {
+            info!(
+                "Fixed contact types for {} contacts based on JID suffix",
+                updated
+            );
+        }
+
         Ok(())
     }
 

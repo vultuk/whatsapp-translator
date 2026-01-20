@@ -753,6 +753,10 @@ async fn send_message(
     let contact_info = state.store.get_contact(&req.contact_id).ok().flatten();
     let contact_name = contact_info.as_ref().and_then(|c| c.name.clone());
     let contact_phone = contact_info.as_ref().and_then(|c| c.phone.clone());
+    let chat_type = contact_info
+        .as_ref()
+        .and_then(|c| c.contact_type.clone())
+        .unwrap_or_else(|| "private".to_string());
 
     let stored_msg = StoredMessage {
         id: temp_message_id.clone(),
@@ -764,7 +768,7 @@ async fn send_message(
         sender_phone: state.phone.read().await.clone(),
         contact_name,
         contact_phone,
-        chat_type: "private".to_string(), // Default to private, could be improved
+        chat_type,
         content_type: "Text".to_string(),
         // Store English (what user typed) as the content for display
         content_json: serde_json::json!({"type": "text", "body": req.text.clone()}).to_string(),
@@ -873,6 +877,10 @@ async fn send_image(
     let contact_info = state.store.get_contact(&req.contact_id).ok().flatten();
     let contact_name = contact_info.as_ref().and_then(|c| c.name.clone());
     let contact_phone = contact_info.as_ref().and_then(|c| c.phone.clone());
+    let chat_type = contact_info
+        .as_ref()
+        .and_then(|c| c.contact_type.clone())
+        .unwrap_or_else(|| "private".to_string());
 
     // Store the sent image message locally
     let stored_msg = crate::storage::StoredMessage {
@@ -885,7 +893,7 @@ async fn send_image(
         sender_phone: state.phone.read().await.clone(),
         contact_name,
         contact_phone,
-        chat_type: "private".to_string(),
+        chat_type,
         content_type: "Image".to_string(),
         content_json: serde_json::json!({
             "type": "image",
