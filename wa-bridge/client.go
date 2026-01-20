@@ -174,6 +174,23 @@ func (c *Client) handleEvent(evt interface{}) {
 			SendEvent(NewLogEvent("debug", fmt.Sprintf("Presence: %s is %s", v.From, v.Unavailable)))
 		}
 
+	case *events.ChatPresence:
+		// Typing/recording indicators
+		state := "paused"
+		switch v.State {
+		case types.ChatPresenceComposing:
+			// Check if it's audio recording vs text typing
+			if v.Media == types.ChatPresenceMediaAudio {
+				state = "recording"
+			} else {
+				state = "typing"
+			}
+		case types.ChatPresencePaused:
+			state = "paused"
+		}
+		// Always send chat presence events (they're useful for UX)
+		SendEvent(NewChatPresenceEvent(v.Chat.String(), v.Sender.String(), state))
+
 	case *events.HistorySync:
 		// History sync - could be useful for archiving old messages
 		SendEvent(NewLogEvent("info", fmt.Sprintf("Received history sync: %d conversations", len(v.Data.Conversations))))

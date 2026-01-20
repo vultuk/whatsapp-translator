@@ -75,6 +75,11 @@ pub enum WebSocketEvent {
     Message {
         message: StoredMessage,
     },
+    Typing {
+        chat_id: String,
+        user_id: String,
+        state: String, // "typing", "paused", or "recording"
+    },
     Error {
         error: String,
     },
@@ -186,6 +191,15 @@ impl AppState {
     /// Broadcast a new message
     pub fn broadcast_message(&self, message: StoredMessage) {
         let _ = self.broadcast_tx.send(WebSocketEvent::Message { message });
+    }
+
+    /// Broadcast a typing indicator
+    pub fn broadcast_typing(&self, chat_id: String, user_id: String, state: String) {
+        let _ = self.broadcast_tx.send(WebSocketEvent::Typing {
+            chat_id,
+            user_id,
+            state,
+        });
     }
 
     /// Get next request ID

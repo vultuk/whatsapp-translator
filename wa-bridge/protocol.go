@@ -136,6 +136,14 @@ type ProfilePictureEvent struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// ChatPresenceEvent is sent when someone starts/stops typing
+type ChatPresenceEvent struct {
+	Type   string `json:"type"`
+	ChatID string `json:"chat_id"` // The chat JID
+	UserID string `json:"user_id"` // Who is typing (for groups)
+	State  string `json:"state"`   // "typing", "paused", or "recording"
+}
+
 // Command types received from Rust CLI (via stdin)
 
 // Command represents a command from the Rust CLI
@@ -210,6 +218,15 @@ func NewProfilePictureEvent(requestID int, jid, url, id, errMsg string) ProfileP
 		URL:       url,
 		ID:        id,
 		Error:     errMsg,
+	}
+}
+
+func NewChatPresenceEvent(chatID, userID, state string) ChatPresenceEvent {
+	return ChatPresenceEvent{
+		Type:   "chat_presence",
+		ChatID: chatID,
+		UserID: userID,
+		State:  state,
 	}
 }
 

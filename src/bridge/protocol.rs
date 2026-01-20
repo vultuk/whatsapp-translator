@@ -43,6 +43,13 @@ pub enum BridgeEvent {
         error: Option<String>,
     },
 
+    /// Chat presence (typing/recording indicator)
+    ChatPresence {
+        chat_id: String,
+        user_id: String,
+        state: ChatPresenceState,
+    },
+
     /// Error occurred
     Error { code: String, message: String },
 
@@ -62,6 +69,18 @@ pub enum ConnectionState {
     Disconnected,
     Reconnecting,
     LoggedOut,
+}
+
+/// Chat presence states (typing indicators)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatPresenceState {
+    /// User is typing a message
+    Typing,
+    /// User stopped typing
+    Paused,
+    /// User is recording audio
+    Recording,
 }
 
 /// A WhatsApp message with full metadata

@@ -383,6 +383,29 @@ body {
   color: var(--text-secondary);
 }
 
+/* Typing Indicator in Chat Header */
+.typing-indicator {
+  font-size: 12px;
+  color: var(--accent-color);
+  font-style: italic;
+  animation: typing-pulse 1.5s ease-in-out infinite;
+}
+
+.typing-indicator.hidden {
+  display: none;
+}
+
+@keyframes typing-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Typing preview in contact list */
+.typing-preview {
+  color: var(--accent-color);
+  font-style: italic;
+}
+
 /* Chat Cost Badge */
 .chat-cost {
   margin-left: auto;

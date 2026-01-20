@@ -286,6 +286,21 @@ async fn handle_web_event(
             // Notify the waiting request
             state.handle_profile_picture_response(request_id, url).await;
         }
+
+        BridgeEvent::ChatPresence {
+            chat_id,
+            user_id,
+            state: presence_state,
+        } => {
+            let state_str = match presence_state {
+                bridge::ChatPresenceState::Typing => "typing",
+                bridge::ChatPresenceState::Paused => "paused",
+                bridge::ChatPresenceState::Recording => "recording",
+            };
+            debug!("Chat presence: {} is {} in {}", user_id, state_str, chat_id);
+            // Broadcast to WebSocket clients
+            state.broadcast_typing(chat_id, user_id, state_str.to_string());
+        }
     }
 
     Ok(())
@@ -596,6 +611,11 @@ async fn handle_terminal_event(
             // Profile pictures are only used in web mode
             debug!("Ignoring profile picture event in terminal mode");
         }
+
+        BridgeEvent::ChatPresence { .. } => {
+            // Typing indicators are only used in web mode
+            debug!("Ignoring chat presence event in terminal mode");
+        }
     }
 
     Ok(())
@@ -689,6 +709,21 @@ impl serde::Serialize for BridgeEvent {
                 if let Some(err) = error {
                     map.serialize_entry("error", err)?;
                 }
+            }
+            BridgeEvent::ChatPresence {
+                chat_id,
+                user_id,
+                state,
+            } => {
+                map.serialize_entry("type", "chat_presence")?;
+                map.serialize_entry("chat_id", chat_id)?;
+                map.serialize_entry("user_id", user_id)?;
+                let state_str = match state {
+                    bridge::ChatPresenceState::Typing => "typing",
+                    bridge::ChatPresenceState::Paused => "paused",
+                    bridge::ChatPresenceState::Recording => "recording",
+                };
+                map.serialize_entry("state", state_str)?;
             }
         }
 

@@ -12,6 +12,8 @@ class WhatsAppClient {
     this.globalUsage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
     this.linkPreviewCache = new Map(); // URL -> LinkPreview
     this.linkPreviewFetching = new Set(); // URLs currently being fetched
+    this.typingState = new Map(); // chatId -> { userId, state, timestamp }
+    this.typingTimeouts = new Map(); // chatId -> timeoutId (auto-clear after 10s)
     
     this.init();
   }
@@ -79,6 +81,10 @@ class WhatsAppClient {
       
       case 'message':
         this.handleNewMessage(data.message);
+        break;
+      
+      case 'typing':
+        this.handleTyping(data);
         break;
       
       case 'error':
@@ -214,6 +220,103 @@ class WhatsAppClient {
       this.fetchGlobalUsage();
       if (this.currentContactId === message.contactId) {
         this.fetchConversationUsage(message.contactId);
+      }
+    }
+    
+    // Clear typing indicator when message arrives from that user
+    if (!message.isFromMe && !message.is_from_me) {
+      this.clearTypingState(message.contactId);
+    }
+  }
+
+  // Handle typing indicator
+  handleTyping(data) {
+    const { chat_id, user_id, state } = data;
+    
+    // Clear existing timeout for this chat
+    if (this.typingTimeouts.has(chat_id)) {
+      clearTimeout(this.typingTimeouts.get(chat_id));
+      this.typingTimeouts.delete(chat_id);
+    }
+    
+    if (state === 'paused') {
+      // Remove typing state
+      this.typingState.delete(chat_id);
+    } else {
+      // Set typing or recording state
+      this.typingState.set(chat_id, {
+        userId: user_id,
+        state: state, // 'typing' or 'recording'
+        timestamp: Date.now()
+      });
+      
+      // Auto-clear after 10 seconds (in case paused event is missed)
+      const timeoutId = setTimeout(() => {
+        this.clearTypingState(chat_id);
+      }, 10000);
+      this.typingTimeouts.set(chat_id, timeoutId);
+    }
+    
+    // Update UI if this is the current chat
+    if (this.currentContactId === chat_id) {
+      this.updateTypingIndicator();
+    }
+    
+    // Also update the contact list preview
+    this.updateContactTypingPreview(chat_id);
+  }
+
+  // Clear typing state for a chat
+  clearTypingState(chatId) {
+    this.typingState.delete(chatId);
+    if (this.typingTimeouts.has(chatId)) {
+      clearTimeout(this.typingTimeouts.get(chatId));
+      this.typingTimeouts.delete(chatId);
+    }
+    
+    if (this.currentContactId === chatId) {
+      this.updateTypingIndicator();
+    }
+    this.updateContactTypingPreview(chatId);
+  }
+
+  // Update typing indicator in chat header
+  updateTypingIndicator() {
+    const indicatorEl = document.getElementById('typing-indicator');
+    if (!indicatorEl) return;
+    
+    const typingInfo = this.typingState.get(this.currentContactId);
+    
+    if (typingInfo) {
+      const text = typingInfo.state === 'recording' ? 'recording audio...' : 'typing...';
+      indicatorEl.textContent = text;
+      indicatorEl.classList.remove('hidden');
+    } else {
+      indicatorEl.classList.add('hidden');
+    }
+  }
+
+  // Update contact list to show typing preview
+  updateContactTypingPreview(chatId) {
+    const contactItem = document.querySelector(`.contact-item[data-contact-id="${chatId}"]`);
+    if (!contactItem) return;
+    
+    const previewEl = contactItem.querySelector('.preview-text');
+    if (!previewEl) return;
+    
+    const typingInfo = this.typingState.get(chatId);
+    
+    if (typingInfo) {
+      const text = typingInfo.state === 'recording' ? 'recording audio...' : 'typing...';
+      previewEl.innerHTML = `<span class="typing-preview">${text}</span>`;
+    } else {
+      // Restore the original preview
+      const contact = this.contacts.find(c => c.id === chatId);
+      if (contact) {
+        const messages = this.messages.get(chatId) || [];
+        const lastMessage = messages[messages.length - 1];
+        const preview = lastMessage ? this.getMessagePreview(lastMessage) : '';
+        previewEl.textContent = preview;
       }
     }
   }
