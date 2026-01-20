@@ -202,6 +202,12 @@ class WhatsAppClient {
       return;
     }
     
+    // Skip protocol and unknown messages - these shouldn't be displayed
+    if (message.content && (message.content.type === 'protocol' || message.content.type === 'unknown')) {
+      console.log('Skipping non-displayable message type:', message.content.type);
+      return;
+    }
+    
     // Add to local cache
     if (!this.messages.has(message.contactId)) {
       this.messages.set(message.contactId, []);

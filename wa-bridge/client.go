@@ -270,6 +270,11 @@ func (c *Client) handleMessage(evt *events.Message) {
 	// Set message content (with media download)
 	msg.Content = c.buildMessageContent(evt.Message)
 
+	// Skip protocol messages and unknown types - these shouldn't be displayed
+	if msg.Content.Type == "protocol" || msg.Content.Type == "unknown" {
+		return
+	}
+
 	// Download media for image/video/audio/document messages
 	if evt.Message != nil {
 		c.downloadMediaForMessage(evt.Message, &msg.Content)
@@ -507,14 +512,28 @@ func (c *Client) buildMessageContent(msg *waE2E.Message) MessageContent {
 		}
 	}
 
-	// Protocol message (includes revoked/deleted messages)
+	// Protocol message (includes revoked/deleted messages, ephemeral settings, etc.)
 	if msg.ProtocolMessage != nil {
 		if msg.ProtocolMessage.Type != nil {
 			switch *msg.ProtocolMessage.Type {
 			case waE2E.ProtocolMessage_REVOKE:
 				return MessageContent{Type: "revoked"}
+			default:
+				// Other protocol messages (ephemeral settings, history sync, etc.)
+				// should be ignored - return special type that will be filtered out
+				return MessageContent{Type: "protocol", RawType: msg.ProtocolMessage.Type.String()}
 			}
 		}
+	}
+
+	// Sender key distribution message (group encryption setup) - ignore
+	if msg.SenderKeyDistributionMessage != nil {
+		return MessageContent{Type: "protocol", RawType: "sender_key_distribution"}
+	}
+
+	// Message context info only (no actual content) - ignore
+	if msg.MessageContextInfo != nil && msg.Conversation == nil && msg.ExtendedTextMessage == nil {
+		return MessageContent{Type: "protocol", RawType: "context_info_only"}
 	}
 
 	// Poll creation message
