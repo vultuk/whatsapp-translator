@@ -1330,12 +1330,25 @@ class WhatsAppClient {
     // Get sender JID for the reply
     const senderJid = isFromMe ? null : (message.senderPhone || message.sender_phone || '');
     
+    // Capture image data if replying to an image (for AI compose)
+    let imageData = null;
+    let imageType = null;
+    if (content.type === 'image') {
+      const mediaData = content.media_data || content.mediaData;
+      if (mediaData) {
+        imageData = mediaData;
+        imageType = content.mime_type || content.mimeType || 'image/jpeg';
+      }
+    }
+    
     this.replyingTo = {
       messageId: message.id,
       senderJid: senderJid,
       senderName: senderName,
       text: previewText,
-      isFromMe: isFromMe
+      isFromMe: isFromMe,
+      imageData: imageData,
+      imageType: imageType
     };
     
     this.updateReplyPreview();
@@ -1415,6 +1428,12 @@ class WhatsAppClient {
       if (this.replyingTo) {
         requestBody.replyToText = this.replyingTo.text;
         requestBody.replyToSender = this.replyingTo.senderName;
+        
+        // Include image data if replying to an image
+        if (this.replyingTo.imageData) {
+          requestBody.replyToImage = this.replyingTo.imageData;
+          requestBody.replyToImageType = this.replyingTo.imageType;
+        }
       }
       
       const response = await fetch('/api/ai-compose', {

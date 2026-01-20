@@ -176,6 +176,10 @@ pub struct AiComposeRequest {
     pub reply_to_text: Option<String>,
     /// Optional: who sent the message being replied to
     pub reply_to_sender: Option<String>,
+    /// Optional: base64 image data if replying to an image
+    pub reply_to_image: Option<String>,
+    /// Optional: mime type of the image (e.g., "image/jpeg")
+    pub reply_to_image_type: Option<String>,
 }
 
 /// AI compose response
@@ -816,9 +820,15 @@ async fn ai_compose(
         _ => None,
     };
 
-    // Call the AI compose method
+    // Build image context if provided
+    let reply_image = match (&req.reply_to_image_type, &req.reply_to_image) {
+        (Some(mime_type), Some(data)) => Some((mime_type.as_str(), data.as_str())),
+        _ => None,
+    };
+
+    // Call the AI compose method (using Opus 4.5)
     match translator
-        .compose_ai_message(&req.prompt, reply_context)
+        .compose_ai_message(&req.prompt, reply_context, reply_image)
         .await
     {
         Ok((message, usage)) => {

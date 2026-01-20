@@ -10,16 +10,20 @@ use tracing::{debug, info, warn};
 /// Models to use for translation
 const DETECTION_MODEL: &str = "claude-3-5-haiku-latest";
 const TRANSLATION_MODEL: &str = "claude-sonnet-4-20250514";
+const AI_COMPOSE_MODEL: &str = "claude-opus-4-5-20250514";
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// Pricing per million tokens (as of 2024)
-/// Haiku: $0.25/M input, $1.25/M output
-/// Sonnet 4: $3/M input, $15/M output
-const HAIKU_INPUT_COST_PER_M: f64 = 0.25;
-const HAIKU_OUTPUT_COST_PER_M: f64 = 1.25;
+/// Pricing per million tokens (as of 2025)
+/// Haiku 4.5: $1/M input, $5/M output
+/// Sonnet 4.5: $3/M input, $15/M output
+/// Opus 4.5: $5/M input, $25/M output
+const HAIKU_INPUT_COST_PER_M: f64 = 1.0;
+const HAIKU_OUTPUT_COST_PER_M: f64 = 5.0;
 const SONNET_INPUT_COST_PER_M: f64 = 3.0;
 const SONNET_OUTPUT_COST_PER_M: f64 = 15.0;
+const OPUS_INPUT_COST_PER_M: f64 = 5.0;
+const OPUS_OUTPUT_COST_PER_M: f64 = 25.0;
 
 /// Translation service for processing messages
 pub struct TranslationService {
@@ -55,6 +59,35 @@ struct ClaudeRequest {
 struct ClaudeMessage {
     role: String,
     content: String,
+}
+
+/// Claude API request with vision support
+#[derive(Serialize)]
+struct ClaudeVisionRequest {
+    model: String,
+    max_tokens: u32,
+    messages: Vec<ClaudeVisionMessage>,
+}
+
+#[derive(Serialize)]
+struct ClaudeVisionMessage {
+    role: String,
+    content: Vec<VisionContentBlock>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum VisionContentBlock {
+    Text { text: String },
+    Image { source: ImageSource },
+}
+
+#[derive(Serialize)]
+struct ImageSource {
+    #[serde(rename = "type")]
+    source_type: String,
+    media_type: String,
+    data: String,
 }
 
 /// Claude API response structure
@@ -119,6 +152,13 @@ impl TranslationService {
     fn calculate_sonnet_cost(usage: &ApiUsage) -> f64 {
         let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * SONNET_INPUT_COST_PER_M;
         let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * SONNET_OUTPUT_COST_PER_M;
+        input_cost + output_cost
+    }
+
+    /// Calculate cost for Opus model usage
+    fn calculate_opus_cost(usage: &ApiUsage) -> f64 {
+        let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * OPUS_INPUT_COST_PER_M;
+        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * OPUS_OUTPUT_COST_PER_M;
         input_cost + output_cost
     }
 
@@ -438,11 +478,15 @@ Text to translate:
     /// Compose an AI-generated message based on user's prompt
     /// Returns the composed message and usage info
     ///
-    /// If reply_context is provided, it contains (sender_name, message_text) of the message being replied to
+    /// Parameters:
+    /// - prompt: The user's instruction for what message to compose
+    /// - reply_context: Optional (sender_name, message_text) of the message being replied to
+    /// - reply_image: Optional (media_type, base64_data) of an image being replied to
     pub async fn compose_ai_message(
         &self,
         prompt: &str,
         reply_context: Option<(&str, &str)>,
+        reply_image: Option<(&str, &str)>,
     ) -> Result<(String, UsageInfo)> {
         // Validate input length (max 1000 chars for the prompt)
         if prompt.trim().is_empty() {
@@ -462,11 +506,12 @@ IMPORTANT RULES:
 5. If the request is unclear, write a friendly, neutral message
 6. Do not pretend to be someone specific or impersonate anyone
 7. Do not include private information or make up facts about real people
+8. If an image is provided, you can reference what you see in it when composing your reply
 
 Respond with ONLY the message text, nothing else."#;
 
         // Build the user message with optional reply context
-        let user_message = if let Some((sender, text)) = reply_context {
+        let text_content = if let Some((sender, text)) = reply_context {
             format!(
                 "{}\n\nThe user is REPLYING to this message from {}:\n\"{}\"\n\nUser's request for their reply: {}",
                 system_prompt,
@@ -478,25 +523,69 @@ Respond with ONLY the message text, nothing else."#;
             format!("{}\n\nUser request: {}", system_prompt, prompt)
         };
 
-        let request = ClaudeRequest {
-            model: TRANSLATION_MODEL.to_string(),
-            max_tokens: 300, // Limit output to keep messages short
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: user_message,
-            }],
-        };
+        // Build request - use vision API if image is provided
+        let response = if let Some((media_type, base64_data)) = reply_image {
+            // Vision request with image
+            let mut content_blocks = vec![
+                VisionContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".to_string(),
+                        media_type: media_type.to_string(),
+                        data: base64_data.to_string(),
+                    },
+                },
+                VisionContentBlock::Text { text: text_content },
+            ];
 
-        let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send AI compose request")?;
+            // If there's text context about the image, add it
+            if let Some((sender, _)) = reply_context {
+                content_blocks.insert(
+                    1,
+                    VisionContentBlock::Text {
+                        text: format!("The above image was sent by {}.", sender),
+                    },
+                );
+            }
+
+            let request = ClaudeVisionRequest {
+                model: AI_COMPOSE_MODEL.to_string(),
+                max_tokens: 300,
+                messages: vec![ClaudeVisionMessage {
+                    role: "user".to_string(),
+                    content: content_blocks,
+                }],
+            };
+
+            self.client
+                .post(ANTHROPIC_API_URL)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .header("content-type", "application/json")
+                .json(&request)
+                .send()
+                .await
+                .context("Failed to send AI compose request")?
+        } else {
+            // Text-only request
+            let request = ClaudeRequest {
+                model: AI_COMPOSE_MODEL.to_string(),
+                max_tokens: 300,
+                messages: vec![ClaudeMessage {
+                    role: "user".to_string(),
+                    content: text_content,
+                }],
+            };
+
+            self.client
+                .post(ANTHROPIC_API_URL)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .header("content-type", "application/json")
+                .json(&request)
+                .send()
+                .await
+                .context("Failed to send AI compose request")?
+        };
 
         if !response.status().is_success() {
             let status = response.status();
@@ -512,7 +601,7 @@ Respond with ONLY the message text, nothing else."#;
         let usage_info = UsageInfo {
             input_tokens: claude_response.usage.input_tokens,
             output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
+            cost_usd: Self::calculate_opus_cost(&claude_response.usage),
         };
 
         let composed = claude_response
