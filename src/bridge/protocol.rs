@@ -161,6 +161,8 @@ pub enum MessageContent {
         file_size: u64,
         /// SHA256 hash of the file
         file_hash: Option<String>,
+        /// Base64 encoded image data
+        media_data: Option<String>,
     },
 
     /// Video message
@@ -234,6 +236,18 @@ pub enum BridgeCommand {
         request_id: Option<i32>,
         to: String,
         text: String,
+    },
+
+    /// Send an image message
+    SendImage {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<i32>,
+        to: String,
+        /// Base64 encoded image data
+        media_data: String,
+        mime_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
     },
 
     /// Get profile picture for a JID

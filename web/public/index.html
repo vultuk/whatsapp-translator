@@ -116,6 +116,13 @@
 
           <footer class="message-input-area">
             <div class="input-container">
+              <input type="file" id="image-input" accept="image/*" style="display: none;">
+              <button id="attach-button" class="attach-button" title="Send image">
+                <svg viewBox="0 0 24 24" width="24" height="24">
+                  <path fill="currentColor" d="M19.5 4.5l-7.5 7.5-7.5-7.5-1.5 1.5 9 9 9-9z" transform="rotate(-90 12 12)"/>
+                  <path fill="currentColor" d="M21 19H3v2h18v-2zM21 5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h14a2 2 0 002-2V5zm-2 10H5V5h14v10zm-5.04-6.71l-2.75 3.54-1.96-2.36L6.5 13h11l-3.54-4.71z"/>
+                </svg>
+              </button>
               <textarea 
                 id="message-input" 
                 placeholder="Type a message (Ctrl+Enter to send)" 

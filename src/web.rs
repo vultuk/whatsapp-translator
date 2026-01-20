@@ -121,6 +121,25 @@ pub struct SendMessageResponse {
     pub source_language: Option<String>,
 }
 
+/// Send image request
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendImageRequest {
+    pub contact_id: String,
+    /// Base64 encoded image data
+    pub media_data: String,
+    pub mime_type: String,
+    pub caption: Option<String>,
+}
+
+/// Send image response
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendImageResponse {
+    pub message_id: String,
+    pub timestamp: i64,
+}
+
 impl AppState {
     pub fn new(
         store: MessageStore,
@@ -303,6 +322,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/avatar/:jid", get(get_avatar))
         .route("/api/qr", get(get_qr))
         .route("/api/send", post(send_message))
+        .route("/api/send-image", post(send_image))
         .route("/api/stats", get(get_stats))
         .route("/api/usage", get(get_global_usage))
         .route("/api/usage/:contact_id", get(get_conversation_usage))
@@ -560,6 +580,109 @@ async fn send_message(
             None
         },
         source_language: target_language,
+    })
+    .into_response()
+}
+
+async fn send_image(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SendImageRequest>,
+) -> impl IntoResponse {
+    // Validate input
+    if req.contact_id.is_empty() || req.media_data.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "contact_id and media_data are required"
+            })),
+        )
+            .into_response();
+    }
+
+    // Check if connected
+    if !*state.connected.read().await {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Not connected to WhatsApp"
+            })),
+        )
+            .into_response();
+    }
+
+    // Send the image via bridge
+    let cmd = BridgeCommand::SendImage {
+        request_id: None,
+        to: req.contact_id.clone(),
+        media_data: req.media_data.clone(),
+        mime_type: req.mime_type.clone(),
+        caption: req.caption.clone(),
+    };
+
+    if let Err(e) = state.send_bridge_command(cmd).await {
+        error!("Failed to send image: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to send image: {}", e)
+            })),
+        )
+            .into_response();
+    }
+
+    // Generate a temporary message ID and timestamp for immediate response
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    let temp_message_id = format!("pending_img_{}", timestamp);
+
+    // Store the sent image message locally
+    let stored_msg = crate::storage::StoredMessage {
+        id: temp_message_id.clone(),
+        contact_id: req.contact_id.clone(),
+        timestamp,
+        is_from_me: true,
+        is_forwarded: false,
+        sender_name: state.name.read().await.clone(),
+        sender_phone: state.phone.read().await.clone(),
+        chat_type: "private".to_string(),
+        content_type: "Image".to_string(),
+        content_json: serde_json::json!({
+            "type": "image",
+            "mime_type": req.mime_type,
+            "caption": req.caption,
+            "media_data": req.media_data
+        })
+        .to_string(),
+        content: Some(serde_json::json!({
+            "type": "image",
+            "mime_type": req.mime_type,
+            "caption": req.caption,
+            "media_data": req.media_data
+        })),
+        original_text: None,
+        translated_text: None,
+        source_language: None,
+        is_translated: false,
+    };
+
+    // Store the message
+    if let Err(e) = state.store.add_message(&stored_msg) {
+        error!("Failed to store sent image: {}", e);
+    }
+
+    // Update contact's last message time
+    if let Err(e) = state.store.upsert_contact(
+        &stored_msg.contact_id,
+        None,
+        None,
+        Some(&stored_msg.chat_type),
+        stored_msg.timestamp,
+    ) {
+        error!("Failed to update contact: {}", e);
+    }
+
+    Json(SendImageResponse {
+        message_id: temp_message_id,
+        timestamp,
     })
     .into_response()
 }

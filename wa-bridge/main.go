@@ -158,6 +158,19 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			SendEvent(NewProfilePictureEvent(cmd.RequestID, cmd.To, url, id, ""))
 		}
 
+	case "send_image":
+		if cmd.To == "" || cmd.MediaData == "" {
+			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, "missing 'to' or 'media_data' field"))
+			return
+		}
+
+		messageID, timestamp, err := client.SendImageMessage(ctx, cmd.To, cmd.MediaData, cmd.MimeType, cmd.Caption)
+		if err != nil {
+			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, err.Error()))
+		} else {
+			SendEvent(NewSendResultEvent(cmd.RequestID, true, messageID, timestamp, ""))
+		}
+
 	default:
 		SendEvent(NewLogEvent("warn", fmt.Sprintf("Unknown command type: %s", cmd.Type)))
 	}

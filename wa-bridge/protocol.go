@@ -100,6 +100,7 @@ type MessageContent struct {
 	FileName        string   `json:"file_name,omitempty"`
 	FileSize        uint64   `json:"file_size,omitempty"`
 	FileHash        string   `json:"file_hash,omitempty"`
+	MediaData       string   `json:"media_data,omitempty"` // Base64 encoded media data
 	DurationSeconds *uint32  `json:"duration_seconds,omitempty"`
 	IsVoiceNote     bool     `json:"is_voice_note,omitempty"`
 	IsAnimated      bool     `json:"is_animated,omitempty"`
@@ -152,6 +153,10 @@ type Command struct {
 	RequestID int    `json:"request_id,omitempty"`
 	To        string `json:"to,omitempty"`
 	Text      string `json:"text,omitempty"`
+	// For send_image command
+	MediaData string `json:"media_data,omitempty"` // Base64 encoded image
+	MimeType  string `json:"mime_type,omitempty"`
+	Caption   string `json:"caption,omitempty"`
 }
 
 // Helper functions to create events

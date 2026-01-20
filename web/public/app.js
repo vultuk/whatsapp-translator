@@ -735,10 +735,24 @@ class WhatsAppClient {
         `;
       
       case 'image':
-        return `
-          <div class="message-media image">[ Image ]${content.size ? ' - ' + this.formatSize(content.size) : ''}</div>
-          ${content.caption ? `<div class="message-caption">${this.escapeHtml(content.caption)}</div>` : ''}
-        `;
+        // Check if we have the actual image data
+        const mediaData = content.media_data || content.mediaData;
+        if (mediaData) {
+          const mimeType = content.mime_type || content.mimeType || 'image/jpeg';
+          const imgSrc = mediaData.startsWith('data:') ? mediaData : `data:${mimeType};base64,${mediaData}`;
+          return `
+            <div class="message-image">
+              <img src="${imgSrc}" alt="Image" loading="lazy" onclick="this.classList.toggle('fullscreen')">
+            </div>
+            ${content.caption ? `<div class="message-caption">${this.escapeHtml(content.caption)}</div>` : ''}
+          `;
+        } else {
+          // Fallback for images without data
+          return `
+            <div class="message-media image">[ Image ]${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
+            ${content.caption ? `<div class="message-caption">${this.escapeHtml(content.caption)}</div>` : ''}
+          `;
+        }
       
       case 'video':
         return `
@@ -903,6 +917,97 @@ class WhatsAppClient {
     }
   }
 
+  // Send an image
+  async sendImage(file) {
+    if (!file || !this.currentContactId) return;
+
+    // Check file size (limit to 16MB)
+    if (file.size > 16 * 1024 * 1024) {
+      alert('Image is too large. Maximum size is 16MB.');
+      return;
+    }
+
+    // Check file type
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file.');
+      return;
+    }
+
+    const attachButton = document.getElementById('attach-button');
+    attachButton.disabled = true;
+
+    try {
+      // Read file as base64
+      const mediaData = await this.fileToBase64(file);
+      
+      const response = await fetch('/api/send-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contactId: this.currentContactId,
+          mediaData: mediaData,
+          mimeType: file.type,
+          caption: null
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to send image');
+      }
+
+      // Create a local message representation
+      const localMessage = {
+        id: result.messageId || 'temp-img-' + Date.now(),
+        timestamp: result.timestamp || Date.now(),
+        contactId: this.currentContactId,
+        isFromMe: true,
+        isForwarded: false,
+        content: { 
+          type: 'image', 
+          mime_type: file.type,
+          media_data: mediaData
+        }
+      };
+
+      // Add to local store and display
+      if (!this.messages.has(this.currentContactId)) {
+        this.messages.set(this.currentContactId, []);
+      }
+
+      const messages = this.messages.get(this.currentContactId);
+      if (!messages.some(m => m.id === localMessage.id)) {
+        messages.push(localMessage);
+        this.appendMessage(localMessage);
+        this.scrollToBottom();
+      }
+
+      // Update contact list
+      this.updateContactInList(localMessage);
+
+    } catch (err) {
+      console.error('Failed to send image:', err);
+      alert('Failed to send image: ' + err.message);
+    } finally {
+      attachButton.disabled = false;
+    }
+  }
+
+  // Convert file to base64
+  fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        // Remove the data URL prefix (e.g., "data:image/jpeg;base64,")
+        const base64 = reader.result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
   // Update send button state
   updateSendButton() {
     const input = document.getElementById('message-input');
@@ -964,6 +1069,26 @@ class WhatsAppClient {
     // Send button click
     sendButton.addEventListener('click', () => {
       this.sendMessage();
+    });
+
+    // Image attach button
+    const attachButton = document.getElementById('attach-button');
+    const imageInput = document.getElementById('image-input');
+    
+    attachButton.addEventListener('click', () => {
+      if (this.currentContactId) {
+        imageInput.click();
+      }
+    });
+
+    // Handle image selection
+    imageInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (file && this.currentContactId) {
+        await this.sendImage(file);
+      }
+      // Reset input so the same file can be selected again
+      imageInput.value = '';
     });
 
     // Handle visibility change (for reconnecting on mobile)

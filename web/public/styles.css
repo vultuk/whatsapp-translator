@@ -477,6 +477,48 @@ body {
   gap: 6px;
 }
 
+/* Image messages */
+.message-image {
+  max-width: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+  margin: -4px -8px;
+  margin-bottom: 4px;
+}
+
+.message-image img {
+  max-width: 100%;
+  max-height: 300px;
+  display: block;
+  cursor: pointer;
+  transition: transform 0.2s;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.message-image img:hover {
+  opacity: 0.95;
+}
+
+/* Fullscreen image view */
+.message-image img.fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.95);
+  z-index: 9999;
+  cursor: zoom-out;
+  border-radius: 0;
+  margin: 0;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
 .message-media::before {
   content: '';
   display: inline-block;
@@ -694,6 +736,30 @@ body {
 
 #message-input::placeholder {
   color: var(--text-secondary);
+}
+
+.attach-button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  color: var(--text-secondary);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+
+.attach-button:hover {
+  color: var(--accent-color);
+  background: rgba(0, 168, 132, 0.1);
+}
+
+.attach-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .send-button {

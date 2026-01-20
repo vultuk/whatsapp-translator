@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -266,11 +267,52 @@ func (c *Client) handleMessage(evt *events.Message) {
 	// Set chat info
 	msg.Chat = c.buildChat(evt.Info)
 
-	// Set message content
+	// Set message content (with media download)
 	msg.Content = c.buildMessageContent(evt.Message)
+
+	// Download media for image/video/audio/document messages
+	if evt.Message != nil {
+		c.downloadMediaForMessage(evt.Message, &msg.Content)
+	}
 
 	// Send the message event
 	SendEvent(NewMessageEvent(msg))
+}
+
+// downloadMediaForMessage downloads media data and adds it to the content
+func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageContent) {
+	var data []byte
+	var err error
+
+	switch content.Type {
+	case "image":
+		if waMsg.ImageMessage != nil {
+			data, err = c.client.Download(c.ctx, waMsg.ImageMessage)
+		}
+	case "video":
+		// Videos can be large, skip for now or limit size
+		// TODO: implement video download with size limit
+		return
+	case "audio":
+		if waMsg.AudioMessage != nil {
+			data, err = c.client.Download(c.ctx, waMsg.AudioMessage)
+		}
+	case "sticker":
+		if waMsg.StickerMessage != nil {
+			data, err = c.client.Download(c.ctx, waMsg.StickerMessage)
+		}
+	default:
+		return
+	}
+
+	if err != nil {
+		SendEvent(NewLogEvent("warn", fmt.Sprintf("Failed to download media: %v", err)))
+		return
+	}
+
+	if len(data) > 0 {
+		content.MediaData = base64.StdEncoding.EncodeToString(data)
+	}
 }
 
 // buildContact creates a Contact from a JID
@@ -536,6 +578,59 @@ func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string
 	resp, err := c.client.SendMessage(ctx, jid, msg)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to send message: %w", err)
+	}
+
+	return resp.ID, resp.Timestamp.Unix(), nil
+}
+
+// SendImageMessage sends an image message to the specified JID
+func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB64 string, mimeType string, caption string) (string, int64, error) {
+	// Parse the JID
+	jid, err := types.ParseJID(jidStr)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid JID: %w", err)
+	}
+
+	// Decode base64 image data
+	imageData, err := base64.StdEncoding.DecodeString(mediaDataB64)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to decode image data: %w", err)
+	}
+
+	// Default mime type if not provided
+	if mimeType == "" {
+		mimeType = "image/jpeg"
+	}
+
+	// Upload the image to WhatsApp
+	uploadResp, err := c.client.Upload(ctx, imageData, whatsmeow.MediaImage)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to upload image: %w", err)
+	}
+
+	// Create the image message
+	imageMsg := &waE2E.ImageMessage{
+		Mimetype:      &mimeType,
+		URL:           &uploadResp.URL,
+		DirectPath:    &uploadResp.DirectPath,
+		MediaKey:      uploadResp.MediaKey,
+		FileEncSHA256: uploadResp.FileEncSHA256,
+		FileSHA256:    uploadResp.FileSHA256,
+		FileLength:    &uploadResp.FileLength,
+	}
+
+	if caption != "" {
+		imageMsg.Caption = &caption
+	}
+
+	msg := &waE2E.Message{
+		ImageMessage: imageMsg,
+	}
+
+	// Send the message
+	resp, err := c.client.SendMessage(ctx, jid, msg)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to send image: %w", err)
 	}
 
 	return resp.ID, resp.Timestamp.Unix(), nil
