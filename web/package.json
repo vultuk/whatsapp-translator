@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-translator-web",
+  "version": "1.0.0",
+  "description": "Web frontend for WhatsApp Translator",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "better-sqlite3": "^11.7.0",
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
+  }
+}

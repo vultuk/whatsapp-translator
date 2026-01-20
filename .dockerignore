@@ -1,0 +1,44 @@
+# Rust build artifacts
+/target/
+
+# Go build artifacts
+wa-bridge/wa-bridge
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Session data (contains secrets)
+*.db
+*.db-wal
+*.db-shm
+session.db*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local configuration
+.env
+.env.local
+
+# Build artifacts
+/dist/
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Node modules (not needed for Rust/Go build)
+web/node_modules/
+
+# Documentation
+*.md
+LICENSE

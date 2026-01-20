@@ -1,0 +1,32 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+
+# Go
+wa-bridge/wa-bridge
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Session data (contains secrets)
+*.db
+*.db-wal
+*.db-shm
+session.db*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local configuration
+.env
+.env.local
+
+# Build artifacts
+/dist/

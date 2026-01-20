@@ -1,0 +1,62 @@
+[package]
+name = "whatsapp-translator"
+version = "0.1.0"
+edition = "2021"
+description = "WhatsApp Business account archiver with real-time message display"
+license = "MIT"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive", "env"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Terminal UI
+crossterm = "0.27"
+qrcode = "0.14"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Platform directories
+dirs = "5"
+
+# Async channels
+futures = "0.3"
+
+# HTTP server for web frontend
+axum = { version = "0.7", features = ["ws"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+
+# HTTP client for Claude API
+reqwest = { version = "0.12", features = ["json"] }
+
+# SQLite database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# UUID generation for message IDs
+uuid = { version = "1", features = ["v4"] }
+
+# URL encoding/decoding
+urlencoding = "2"
+
+[build-dependencies]
+# For compiling Go bridge at build time
+
+[profile.release]
+lto = true
+strip = true
