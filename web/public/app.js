@@ -14,6 +14,7 @@ class WhatsAppClient {
     this.linkPreviewFetching = new Set(); // URLs currently being fetched
     this.typingState = new Map(); // chatId -> { userId, state, timestamp }
     this.typingTimeouts = new Map(); // chatId -> timeoutId (auto-clear after 10s)
+    this.replyingTo = null; // { messageId, senderJid, senderName, text, isFromMe }
     
     this.init();
   }
@@ -519,6 +520,9 @@ class WhatsAppClient {
     try {
       this.currentContactId = contactId;
       
+      // Clear any pending reply from previous chat
+      this.clearReply();
+      
       // Mark as read
       const contact = this.contacts.find(c => c.id === contactId);
       if (contact) {
@@ -694,6 +698,13 @@ class WhatsAppClient {
     const senderJid = message.senderPhone || message.sender_phone || '';
     const contactId = message.contactId || message.contact_id || this.currentContactId;
     
+    // Reply button
+    const replyButton = `
+      <button class="reply-button" onclick="event.stopPropagation(); app.handleReplyClick('${messageId}')" title="Reply">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
+      </button>
+    `;
+    
     // Reaction button with quick emoji picker
     const reactionButton = `
       <div class="reaction-button-container">
@@ -719,6 +730,7 @@ class WhatsAppClient {
         <div class="message-footer">
           ${translationIndicator}
           <span class="message-time">${time}</span>
+          ${replyButton}
           ${reactionButton}
         </div>
       </div>
@@ -732,16 +744,23 @@ class WhatsAppClient {
     const isFromMe = message.isFromMe || message.is_from_me;
     
     // Display logic - always show MY language (English) in the bubble:
-    // - Outgoing: show content.body (English - what I typed)
+    // - Outgoing: show content.body/caption (English - what I typed)
     // - Incoming translated: show translated_text (English translation of what they sent)
-    // - Incoming non-translated: show content.body (already English)
+    // - Incoming non-translated: show content.body/caption (already English)
     let displayText;
+    let displayCaption;
+    
     if (isTranslated && !isFromMe) {
       // Incoming translated: show the English translation
-      displayText = message.translated_text || message.translatedText || content.body || content.text || '';
+      // translated_text contains the translated body or caption
+      const translatedContent = message.translated_text || message.translatedText || '';
+      displayText = translatedContent || content.body || content.text || '';
+      // For media with captions, the translated_text IS the translated caption
+      displayCaption = content.caption ? translatedContent : null;
     } else {
-      // Outgoing (translated or not) or incoming non-translated: show content.body
+      // Outgoing (translated or not) or incoming non-translated: show content.body/caption
       displayText = content.body || content.text || '';
+      displayCaption = content.caption || null;
     }
     
     // Extract URLs for link previews
@@ -767,20 +786,20 @@ class WhatsAppClient {
             <div class="message-image">
               <img src="${imgSrc}" alt="Image" loading="lazy" onclick="this.classList.toggle('fullscreen')">
             </div>
-            ${content.caption ? `<div class="message-caption">${this.escapeHtml(content.caption)}</div>` : ''}
+            ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
           `;
         } else {
           // Fallback for images without data
           return `
             <div class="message-media image">[ Image ]${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
-            ${content.caption ? `<div class="message-caption">${this.escapeHtml(content.caption)}</div>` : ''}
+            ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
           `;
         }
       
       case 'video':
         return `
           <div class="message-media video">[ Video ]${content.duration ? ' - ' + this.formatDuration(content.duration) : ''}</div>
-          ${content.caption ? `<div class="message-caption">${this.escapeHtml(content.caption)}</div>` : ''}
+          ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
         `;
       
       case 'audio':
@@ -790,7 +809,7 @@ class WhatsAppClient {
       case 'document':
         return `
           <div class="message-media document">[ Document: ${this.escapeHtml(content.fileName || 'file')} ]</div>
-          ${content.caption ? `<div class="message-caption">${this.escapeHtml(content.caption)}</div>` : ''}
+          ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
         `;
       
       case 'sticker':
@@ -874,14 +893,28 @@ class WhatsAppClient {
     const sendButton = document.getElementById('send-button');
     sendButton.disabled = true;
     
+    // Capture reply state before clearing
+    const replyTo = this.replyingTo ? this.replyingTo.messageId : null;
+    const replyToSender = this.replyingTo ? this.replyingTo.senderJid : null;
+    
     try {
+      const requestBody = {
+        contactId: this.currentContactId,
+        text: text
+      };
+      
+      // Add reply params if replying
+      if (replyTo) {
+        requestBody.replyTo = replyTo;
+        if (replyToSender) {
+          requestBody.replyToSender = replyToSender;
+        }
+      }
+      
       const response = await fetch('/api/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contactId: this.currentContactId,
-          text: text
-        })
+        body: JSON.stringify(requestBody)
       });
       
       const result = await response.json();
@@ -890,8 +923,9 @@ class WhatsAppClient {
         throw new Error(result.error || 'Failed to send message');
       }
       
-      // Clear input on success
+      // Clear input and reply state on success
       input.value = '';
+      this.clearReply();
       this.updateSendButton();
       this.autoResizeTextarea(input);
       
@@ -958,20 +992,34 @@ class WhatsAppClient {
 
     const attachButton = document.getElementById('attach-button');
     attachButton.disabled = true;
+    
+    // Capture reply state before clearing
+    const replyTo = this.replyingTo ? this.replyingTo.messageId : null;
+    const replyToSender = this.replyingTo ? this.replyingTo.senderJid : null;
 
     try {
       // Read file as base64
       const mediaData = await this.fileToBase64(file);
       
+      const requestBody = {
+        contactId: this.currentContactId,
+        mediaData: mediaData,
+        mimeType: file.type,
+        caption: null
+      };
+      
+      // Add reply params if replying
+      if (replyTo) {
+        requestBody.replyTo = replyTo;
+        if (replyToSender) {
+          requestBody.replyToSender = replyToSender;
+        }
+      }
+      
       const response = await fetch('/api/send-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contactId: this.currentContactId,
-          mediaData: mediaData,
-          mimeType: file.type,
-          caption: null
-        })
+        body: JSON.stringify(requestBody)
       });
 
       const result = await response.json();
@@ -980,6 +1028,9 @@ class WhatsAppClient {
         throw new Error(result.error || 'Failed to send image');
       }
 
+      // Clear reply state on success
+      this.clearReply();
+      
       // Create a local message representation
       const localMessage = {
         id: result.messageId || 'temp-img-' + Date.now(),
@@ -1063,6 +1114,105 @@ class WhatsAppClient {
     } catch (err) {
       console.error('Failed to send reaction:', err);
       alert('Failed to send reaction: ' + err.message);
+    }
+  }
+
+  // Set reply state for a message
+  setReplyTo(message) {
+    const content = message.content;
+    const isFromMe = message.isFromMe || message.is_from_me;
+    
+    // Get message preview text for display
+    let previewText = '';
+    switch (content.type) {
+      case 'text':
+        previewText = content.body || content.text || '';
+        break;
+      case 'image':
+        previewText = content.caption || '[ Image ]';
+        break;
+      case 'video':
+        previewText = content.caption || '[ Video ]';
+        break;
+      case 'audio':
+        previewText = content.isVoiceNote ? '[ Voice Note ]' : '[ Audio ]';
+        break;
+      case 'document':
+        previewText = '[ Document: ' + (content.fileName || 'file') + ' ]';
+        break;
+      case 'sticker':
+        previewText = '[ Sticker ]';
+        break;
+      default:
+        previewText = '[ Message ]';
+    }
+    
+    // Truncate long messages
+    if (previewText.length > 100) {
+      previewText = previewText.substring(0, 100) + '...';
+    }
+    
+    // Get sender name
+    let senderName = 'You';
+    if (!isFromMe) {
+      senderName = message.senderName || message.sender_name || message.senderPhone || message.sender_phone || 'Unknown';
+    }
+    
+    // Get sender JID for the reply
+    const senderJid = isFromMe ? null : (message.senderPhone || message.sender_phone || '');
+    
+    this.replyingTo = {
+      messageId: message.id,
+      senderJid: senderJid,
+      senderName: senderName,
+      text: previewText,
+      isFromMe: isFromMe
+    };
+    
+    this.updateReplyPreview();
+    
+    // Focus the input
+    document.getElementById('message-input').focus();
+  }
+
+  // Clear reply state
+  clearReply() {
+    this.replyingTo = null;
+    this.updateReplyPreview();
+  }
+
+  // Update the reply preview UI
+  updateReplyPreview() {
+    const previewContainer = document.getElementById('reply-preview');
+    if (!previewContainer) return;
+    
+    if (this.replyingTo) {
+      const senderEl = previewContainer.querySelector('.reply-preview-sender');
+      const textEl = previewContainer.querySelector('.reply-preview-text');
+      
+      if (senderEl) senderEl.textContent = this.replyingTo.senderName;
+      if (textEl) textEl.textContent = this.replyingTo.text;
+      
+      previewContainer.classList.remove('hidden');
+    } else {
+      previewContainer.classList.add('hidden');
+    }
+  }
+
+  // Handle reply button click
+  handleReplyClick(messageId) {
+    // Close any open reaction pickers
+    document.querySelectorAll('.reaction-picker.show').forEach(el => el.classList.remove('show'));
+    
+    // Find the message in our cache
+    if (!this.currentContactId) return;
+    
+    const messages = this.messages.get(this.currentContactId);
+    if (!messages) return;
+    
+    const message = messages.find(m => m.id === messageId);
+    if (message) {
+      this.setReplyTo(message);
     }
   }
 
@@ -1183,6 +1333,7 @@ class WhatsAppClient {
   // Close chat view (mobile)
   closeChat() {
     this.currentContactId = null;
+    this.clearReply();
     document.getElementById('main-container').classList.remove('chat-open');
     document.getElementById('chat-view').classList.add('hidden');
     document.getElementById('no-chat-selected').classList.remove('hidden');

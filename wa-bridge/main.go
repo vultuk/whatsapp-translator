@@ -74,6 +74,11 @@ func main() {
 func readCommands(ctx context.Context, client *Client, cancel context.CancelFunc) {
 	scanner := bufio.NewScanner(os.Stdin)
 
+	// Increase buffer size to handle large payloads like base64-encoded images
+	// 32MB should be enough for 16MB images (base64 increases size by ~33%)
+	const maxScannerBuffer = 32 * 1024 * 1024
+	scanner.Buffer(make([]byte, 64*1024), maxScannerBuffer)
+
 	// Read commands in a separate goroutine so we can also watch for context cancellation
 	lineChan := make(chan string)
 	errChan := make(chan error)
@@ -138,7 +143,7 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			return
 		}
 
-		messageID, timestamp, err := client.SendTextMessage(ctx, cmd.To, cmd.Text)
+		messageID, timestamp, err := client.SendTextMessage(ctx, cmd.To, cmd.Text, cmd.ReplyTo, cmd.ReplyToSender)
 		if err != nil {
 			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, err.Error()))
 		} else {
@@ -164,7 +169,7 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			return
 		}
 
-		messageID, timestamp, err := client.SendImageMessage(ctx, cmd.To, cmd.MediaData, cmd.MimeType, cmd.Caption)
+		messageID, timestamp, err := client.SendImageMessage(ctx, cmd.To, cmd.MediaData, cmd.MimeType, cmd.Caption, cmd.ReplyTo, cmd.ReplyToSender)
 		if err != nil {
 			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, err.Error()))
 		} else {

@@ -562,16 +562,40 @@ func (c *Client) GetStore() *store.Device {
 }
 
 // SendTextMessage sends a text message to the specified JID
-func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string) (string, int64, error) {
+// If replyToID is provided, the message will be a reply to that message
+func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string, replyToID string, replyToSender string) (string, int64, error) {
 	// Parse the JID
 	jid, err := types.ParseJID(jidStr)
 	if err != nil {
 		return "", 0, fmt.Errorf("invalid JID: %w", err)
 	}
 
-	// Create the message
-	msg := &waE2E.Message{
-		Conversation: &text,
+	var msg *waE2E.Message
+
+	// Check if this is a reply
+	if replyToID != "" {
+		// Create context info for the reply
+		contextInfo := &waE2E.ContextInfo{
+			StanzaID: &replyToID,
+		}
+
+		// Set the participant (sender of the quoted message)
+		if replyToSender != "" {
+			contextInfo.Participant = &replyToSender
+		}
+
+		// Use ExtendedTextMessage for replies (required for ContextInfo)
+		msg = &waE2E.Message{
+			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+				Text:        &text,
+				ContextInfo: contextInfo,
+			},
+		}
+	} else {
+		// Simple message without reply
+		msg = &waE2E.Message{
+			Conversation: &text,
+		}
 	}
 
 	// Send the message
@@ -584,7 +608,8 @@ func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string
 }
 
 // SendImageMessage sends an image message to the specified JID
-func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB64 string, mimeType string, caption string) (string, int64, error) {
+// If replyToID is provided, the message will be a reply to that message
+func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB64 string, mimeType string, caption string, replyToID string, replyToSender string) (string, int64, error) {
 	// Parse the JID
 	jid, err := types.ParseJID(jidStr)
 	if err != nil {
@@ -621,6 +646,17 @@ func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB
 
 	if caption != "" {
 		imageMsg.Caption = &caption
+	}
+
+	// Add reply context if provided
+	if replyToID != "" {
+		contextInfo := &waE2E.ContextInfo{
+			StanzaID: &replyToID,
+		}
+		if replyToSender != "" {
+			contextInfo.Participant = &replyToSender
+		}
+		imageMsg.ContextInfo = contextInfo
 	}
 
 	msg := &waE2E.Message{

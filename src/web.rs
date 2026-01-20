@@ -101,10 +101,16 @@ struct QrResponse {
 
 /// Send message request
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SendMessageRequest {
-    #[serde(rename = "contactId")]
     pub contact_id: String,
     pub text: String,
+    /// Message ID to reply to (optional)
+    pub reply_to: Option<String>,
+    /// Sender JID of the replied message (optional)
+    pub reply_to_sender: Option<String>,
+    /// Text preview of the replied message (for storage)
+    pub reply_to_text: Option<String>,
 }
 
 /// Send message response
@@ -130,6 +136,10 @@ pub struct SendImageRequest {
     pub media_data: String,
     pub mime_type: String,
     pub caption: Option<String>,
+    /// Message ID to reply to (optional)
+    pub reply_to: Option<String>,
+    /// Sender JID of the replied message (optional)
+    pub reply_to_sender: Option<String>,
 }
 
 /// Send image response
@@ -517,6 +527,8 @@ async fn send_message(
         request_id: None, // We don't track request IDs for now, response is fire-and-forget
         to: req.contact_id.clone(),
         text: text_to_send.clone(),
+        reply_to: req.reply_to.clone(),
+        reply_to_sender: req.reply_to_sender.clone(),
     };
 
     if let Err(e) = state.send_bridge_command(cmd).await {
@@ -635,6 +647,8 @@ async fn send_image(
         media_data: req.media_data.clone(),
         mime_type: req.mime_type.clone(),
         caption: req.caption.clone(),
+        reply_to: req.reply_to.clone(),
+        reply_to_sender: req.reply_to_sender.clone(),
     };
 
     if let Err(e) = state.send_bridge_command(cmd).await {
