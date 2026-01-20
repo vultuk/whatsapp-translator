@@ -73,6 +73,7 @@ type Message struct {
 	Content     MessageContent `json:"content"`
 	IsFromMe    bool           `json:"is_from_me"`
 	IsForwarded bool           `json:"is_forwarded"`
+	IsHistory   bool           `json:"is_history,omitempty"` // True for history sync messages (no translation)
 	PushName    string         `json:"push_name,omitempty"`
 }
 

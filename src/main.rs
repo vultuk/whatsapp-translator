@@ -346,12 +346,12 @@ async fn process_message(
         bridge::Chat::Status { .. } => "status",
     };
 
-    // Extract text content for translation
+    // Extract text content for translation (skip history messages)
     let (original_text, translated_text, source_language, is_translated) =
         if let Some(translator) = translator {
             if let Some(text) = extract_text_content(&msg.content) {
-                if !msg.is_from_me {
-                    // Only translate incoming messages
+                if !msg.is_from_me && !msg.is_history {
+                    // Only translate incoming messages (not history sync)
                     let result = translator.process_text(&text).await;
 
                     // Record usage if we have a store and there was actual API usage

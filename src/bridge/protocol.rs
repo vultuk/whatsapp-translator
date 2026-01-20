@@ -108,6 +108,10 @@ pub struct Message {
     /// Whether this is a forwarded message
     pub is_forwarded: bool,
 
+    /// Whether this is a history sync message (no translation)
+    #[serde(default)]
+    pub is_history: bool,
+
     /// Push name (display name set by sender)
     pub push_name: Option<String>,
 }

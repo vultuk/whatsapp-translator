@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -200,8 +202,9 @@ func (c *Client) handleEvent(evt interface{}) {
 		SendEvent(NewChatPresenceEvent(v.Chat.String(), v.Sender.String(), state))
 
 	case *events.HistorySync:
-		// History sync - could be useful for archiving old messages
+		// History sync - import historical messages
 		SendEvent(NewLogEvent("info", fmt.Sprintf("Received history sync: %d conversations", len(v.Data.Conversations))))
+		c.processHistorySync(v.Data)
 
 	case *events.UndecryptableMessage:
 		// Message couldn't be decrypted
@@ -282,6 +285,127 @@ func (c *Client) handleMessage(evt *events.Message) {
 
 	// Send the message event
 	SendEvent(NewMessageEvent(msg))
+}
+
+// processHistorySync processes historical messages from WhatsApp history sync
+func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
+	if data == nil {
+		return
+	}
+
+	totalMessages := 0
+	for _, conv := range data.Conversations {
+		if conv == nil || conv.ID == nil {
+			continue
+		}
+
+		chatJID := *conv.ID
+
+		for _, historyMsg := range conv.Messages {
+			if historyMsg == nil || historyMsg.Message == nil {
+				continue
+			}
+
+			webMsg := historyMsg.Message
+			if webMsg.Key == nil {
+				continue
+			}
+
+			// Parse the message
+			msg := Message{
+				ID:        webMsg.Key.GetID(),
+				Timestamp: time.Unix(int64(webMsg.GetMessageTimestamp()), 0).Unix(),
+				IsFromMe:  webMsg.Key.GetFromMe(),
+			}
+
+			// Determine sender and chat
+			if webMsg.Key.GetFromMe() {
+				// Outgoing message - sender is me
+				if c.client.Store.ID != nil {
+					msg.From = Contact{
+						JID:   c.client.Store.ID.String(),
+						Phone: c.client.Store.ID.User,
+					}
+				}
+			} else {
+				// Incoming message
+				if webMsg.Key.Participant != nil && *webMsg.Key.Participant != "" {
+					// Group message - participant is sender
+					participantJID, _ := types.ParseJID(*webMsg.Key.Participant)
+					msg.From = c.buildContact(participantJID)
+				} else if webMsg.Key.RemoteJID != nil {
+					// Private message - remote JID is sender
+					senderJID, _ := types.ParseJID(*webMsg.Key.RemoteJID)
+					msg.From = c.buildContact(senderJID)
+				}
+			}
+
+			// Set push name if available
+			if webMsg.PushName != nil {
+				msg.PushName = *webMsg.PushName
+			}
+
+			// Build chat info
+			chatJIDParsed, err := types.ParseJID(chatJID)
+			if err != nil {
+				continue
+			}
+
+			// Determine if it's a group
+			isGroup := strings.HasSuffix(chatJID, "@g.us")
+
+			msg.Chat = Chat{
+				JID:  chatJID,
+				Type: "private",
+			}
+
+			if isGroup {
+				msg.Chat.Type = "group"
+				// Try to get group info
+				groupInfo, err := c.client.GetGroupInfo(c.ctx, chatJIDParsed)
+				if err == nil {
+					msg.Chat.Name = groupInfo.Name
+					count := len(groupInfo.Participants)
+					msg.Chat.ParticipantCount = &count
+				}
+			} else {
+				// Private chat - get contact name
+				contactInfo, err := c.client.Store.Contacts.GetContact(c.ctx, chatJIDParsed)
+				if err == nil && contactInfo.Found {
+					if contactInfo.FullName != "" {
+						msg.Chat.Name = contactInfo.FullName
+					} else if contactInfo.PushName != "" {
+						msg.Chat.Name = contactInfo.PushName
+					}
+				}
+			}
+
+			// Parse message content
+			if webMsg.Message == nil {
+				continue
+			}
+
+			// The message is wrapped in a WebMessageInfo, need to unwrap
+			waMessage := webMsg.Message
+			msg.Content = c.buildMessageContent(waMessage)
+
+			// Skip protocol/unknown messages
+			if msg.Content.Type == "protocol" || msg.Content.Type == "unknown" {
+				continue
+			}
+
+			// Don't download media for history (too slow) - just send metadata
+			// Users can see what media exists but won't have the actual data
+
+			// Mark as history message (no translation)
+			msg.IsHistory = true
+
+			SendEvent(NewMessageEvent(msg))
+			totalMessages++
+		}
+	}
+
+	SendEvent(NewLogEvent("info", fmt.Sprintf("History sync complete: imported %d messages", totalMessages)))
 }
 
 // downloadMediaForMessage downloads media data and adds it to the content
