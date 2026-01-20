@@ -138,19 +138,7 @@ async fn run_web_mode(
         args.password.clone(),
     );
 
-    // Channel for receiving events from the bridge
-    let (event_tx, mut event_rx) = mpsc::channel::<BridgeEvent>(100);
-
-    // Spawn the bridge process
-    print_info("Starting WhatsApp bridge...");
-    let bridge = BridgeProcess::spawn(config, event_tx)
-        .await
-        .context("Failed to start bridge process")?;
-
-    // Pass the bridge's command sender to the app state for sending messages
-    state.set_command_tx(bridge.command_sender()).await;
-
-    // Spawn the web server
+    // Spawn the web server (once, outside the bridge loop)
     let server_state = state.clone();
     let host = args.host.clone();
     let port = args.port;
@@ -161,32 +149,63 @@ async fn run_web_mode(
     });
 
     // Handle Ctrl+C for graceful shutdown
-    let shutdown = async {
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move {
         signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
-    };
+        let _ = shutdown_tx.send(());
+    });
 
-    tokio::pin!(shutdown);
-
+    // Bridge restart loop - restarts bridge after logout
     loop {
-        tokio::select! {
-            _ = &mut shutdown => {
-                print_info("Shutting down...");
-                bridge.shutdown().await?;
-                break;
-            }
+        // Channel for receiving events from the bridge
+        let (event_tx, mut event_rx) = mpsc::channel::<BridgeEvent>(100);
 
-            event = event_rx.recv() => {
-                match event {
-                    Some(event) => {
-                        handle_web_event(event, &state, &store, translator.as_ref()).await?;
-                    }
-                    None => {
-                        print_error("Bridge process terminated unexpectedly");
-                        break;
+        // Spawn the bridge process
+        print_info("Starting WhatsApp bridge...");
+        let bridge = match BridgeProcess::spawn(config.clone(), event_tx).await {
+            Ok(b) => b,
+            Err(e) => {
+                print_error(&format!("Failed to start bridge: {}", e));
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                continue;
+            }
+        };
+
+        // Pass the bridge's command sender to the app state for sending messages
+        state.set_command_tx(bridge.command_sender()).await;
+
+        // Event loop for this bridge instance
+        let should_exit = loop {
+            tokio::select! {
+                _ = &mut shutdown_rx => {
+                    print_info("Shutting down...");
+                    let _ = bridge.shutdown().await;
+                    break true; // Exit completely
+                }
+
+                event = event_rx.recv() => {
+                    match event {
+                        Some(event) => {
+                            if let Err(e) = handle_web_event(event, &state, &store, translator.as_ref()).await {
+                                error!("Error handling event: {}", e);
+                            }
+                        }
+                        None => {
+                            // Bridge terminated - check if it was a logout or unexpected
+                            info!("Bridge process terminated, restarting...");
+                            break false; // Restart bridge
+                        }
                     }
                 }
             }
+        };
+
+        if should_exit {
+            break;
         }
+
+        // Small delay before restarting
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
     Ok(())

@@ -186,9 +186,18 @@ class WhatsAppClient {
         this.avatarCache.clear();
         this.currentContactId = null;
 
-        // Reload the page to start fresh
-        alert('Logged out successfully. The page will now reload.');
-        window.location.reload();
+        // Clear the UI
+        document.getElementById('contacts-list').innerHTML = `
+          <div class="empty-state">
+            <p>No conversations yet</p>
+            <p class="hint">Messages will appear here</p>
+          </div>
+        `;
+
+        // Show connecting overlay - bridge will restart and send new QR
+        this.showConnecting();
+        
+        // The WebSocket will receive the new QR code when bridge restarts
       } else {
         alert('Logout failed: ' + (result.error || 'Unknown error'));
       }
