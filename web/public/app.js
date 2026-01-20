@@ -1455,7 +1455,8 @@ class WhatsAppClient {
       }
       
       // Clear the input and set the AI-composed message
-      const aiMessage = `Claude Says: ${result.message}`;
+      // Use WhatsApp formatting: *bold* and newline
+      const aiMessage = `*ClaudAI Says:*\n${result.message}`;
       input.value = aiMessage;
       this.autoResizeTextarea(input);
       this.updateSendButton();
