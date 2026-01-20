@@ -67,10 +67,22 @@ pub struct MessageStore {
 impl MessageStore {
     /// Create a new message store
     pub fn new(data_dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(data_dir)?;
+        // Ensure data directory exists with proper permissions
+        std::fs::create_dir_all(data_dir)
+            .with_context(|| format!("Failed to create data directory: {:?}", data_dir))?;
+
         let db_path = data_dir.join("messages.db");
 
-        let conn = Connection::open(&db_path).context("Failed to open messages database")?;
+        info!("Opening database at {:?}", db_path);
+
+        // Open with explicit create flag
+        let conn = Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+                | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,
+        )
+        .with_context(|| format!("unable to open database file: {:?}", db_path))?;
 
         // Enable WAL mode for better performance
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;

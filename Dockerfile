@@ -29,11 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd -m -u 1000 app
-
 # Create data directory
-RUN mkdir -p /data && chown app:app /data
+RUN mkdir -p /data
 
 WORKDIR /app
 
@@ -46,11 +43,6 @@ COPY web/public/ /app/web/public/
 
 # Make binaries executable
 RUN chmod +x /app/wa-bridge /app/whatsapp-translator
-
-# Set ownership
-RUN chown -R app:app /app
-
-USER app
 
 # Environment variables with defaults
 # WA_VERBOSE - Enable verbose logging (true/false)
