@@ -292,17 +292,19 @@ class WhatsAppClient {
 
   // Update avatar display for a specific JID
   updateAvatarDisplay(jid, url) {
+    const initial = this.getInitial(jid);
+    
     // Update in contacts list
     const contactItem = document.querySelector(`.contact-item[data-contact-id="${jid}"] .avatar`);
     if (contactItem) {
-      contactItem.innerHTML = `<img src="${url}" alt="" onerror="this.parentElement.innerHTML='<span>${this.getInitial(jid)}</span>'">`;
+      contactItem.innerHTML = `<img src="${url}" alt="" onerror="this.parentElement.innerHTML='<span>${initial}</span>'">`;
     }
 
     // Update in chat header if this is the current contact
     if (this.currentContactId === jid) {
-      const chatAvatar = document.getElementById('chat-avatar-initial');
+      const chatAvatar = document.querySelector('.chat-header .avatar');
       if (chatAvatar) {
-        chatAvatar.parentElement.innerHTML = `<img src="${url}" alt="" onerror="this.parentElement.innerHTML='<span id=\\'chat-avatar-initial\\'>${this.getInitial(jid)}</span>'">`;
+        chatAvatar.innerHTML = `<img src="${url}" alt="" onerror="this.parentElement.innerHTML='<span>${initial}</span>'">`;
       }
     }
   }
@@ -403,57 +405,64 @@ class WhatsAppClient {
 
   // Select a contact
   async selectContact(contactId) {
-    this.currentContactId = contactId;
-    
-    // Mark as read
-    const contact = this.contacts.find(c => c.id === contactId);
-    if (contact) {
-      contact.unreadCount = 0;
-    }
-    
-    // Update UI
-    document.getElementById('no-chat-selected').classList.add('hidden');
-    document.getElementById('chat-view').classList.remove('hidden');
-    
-    // Add chat-open class for mobile view
-    document.getElementById('main-container').classList.add('chat-open');
-    
-    // Push history state for mobile back button
-    if (this.isMobile()) {
-      history.pushState({ chat: contactId }, '', `?chat=${encodeURIComponent(contactId)}`);
-    }
-    
-    // Update chat header
-    if (contact) {
-      document.getElementById('chat-name').textContent = contact.name || contact.phone || 'Unknown';
-      document.getElementById('chat-phone').textContent = contact.phone ? '+' + contact.phone : '';
+    try {
+      this.currentContactId = contactId;
       
-      const initial = (contact.name || contact.phone || '?').charAt(0).toUpperCase();
-      const avatarContainer = document.getElementById('chat-avatar-initial').parentElement;
-      const avatarUrl = this.avatarCache.get(contactId);
-      
-      if (avatarUrl) {
-        avatarContainer.innerHTML = `<img src="${avatarUrl}" alt="" onerror="this.parentElement.innerHTML='<span id=\\'chat-avatar-initial\\'>${initial}</span>'">`;
-      } else {
-        avatarContainer.innerHTML = `<span id="chat-avatar-initial">${initial}</span>`;
-        // Fetch avatar if not cached
-        this.fetchAvatar(contactId);
+      // Mark as read
+      const contact = this.contacts.find(c => c.id === contactId);
+      if (contact) {
+        contact.unreadCount = 0;
       }
-    }
-    
-    // Load messages
-    await this.loadMessages(contactId);
-    
-    // Load conversation usage
-    this.fetchConversationUsage(contactId);
-    
-    // Re-render contacts to update active state and unread
-    this.renderContacts();
-    
-    // Update send button state and focus input (only on desktop)
-    this.updateSendButton();
-    if (!this.isMobile()) {
-      document.getElementById('message-input').focus();
+      
+      // Update UI
+      document.getElementById('no-chat-selected').classList.add('hidden');
+      document.getElementById('chat-view').classList.remove('hidden');
+      
+      // Add chat-open class for mobile view
+      document.getElementById('main-container').classList.add('chat-open');
+      
+      // Push history state for mobile back button
+      if (this.isMobile()) {
+        history.pushState({ chat: contactId }, '', `?chat=${encodeURIComponent(contactId)}`);
+      }
+      
+      // Update chat header
+      if (contact) {
+        document.getElementById('chat-name').textContent = contact.name || contact.phone || 'Unknown';
+        document.getElementById('chat-phone').textContent = contact.phone ? '+' + contact.phone : '';
+        
+        const initial = (contact.name || contact.phone || '?').charAt(0).toUpperCase();
+        // Get avatar container - it's the .avatar element in .chat-header
+        const avatarContainer = document.querySelector('.chat-header .avatar');
+        const avatarUrl = this.avatarCache.get(contactId);
+        
+        if (avatarContainer) {
+          if (avatarUrl) {
+            avatarContainer.innerHTML = `<img src="${avatarUrl}" alt="" onerror="this.parentElement.innerHTML='<span>${initial}</span>'">`;
+          } else {
+            avatarContainer.innerHTML = `<span>${initial}</span>`;
+            // Fetch avatar if not cached
+            this.fetchAvatar(contactId);
+          }
+        }
+      }
+      
+      // Load messages
+      await this.loadMessages(contactId);
+      
+      // Load conversation usage
+      this.fetchConversationUsage(contactId);
+      
+      // Re-render contacts to update active state and unread
+      this.renderContacts();
+      
+      // Update send button state and focus input (only on desktop)
+      this.updateSendButton();
+      if (!this.isMobile()) {
+        document.getElementById('message-input').focus();
+      }
+    } catch (err) {
+      console.error('Error selecting contact:', err);
     }
   }
 
@@ -1087,21 +1096,29 @@ class WhatsAppClient {
     }
   }
 
-  // Convert URLs in text to clickable links
+  // Convert URLs in text to clickable links (escapes non-URL text for safety)
   linkifyText(text) {
     if (!text) return '';
     
     const urlRegex = /(https?:\/\/[^\s<>\[\](){}|\\^`\x00-\x1f\x7f]+)/gi;
-    return text.replace(urlRegex, (url) => {
-      // Clean trailing punctuation for display
-      let cleanUrl = url;
-      let trailing = '';
-      while (cleanUrl.match(/[.,!?)\]};:'"]+$/)) {
-        trailing = cleanUrl.slice(-1) + trailing;
-        cleanUrl = cleanUrl.slice(0, -1);
+    const parts = text.split(urlRegex);
+    
+    return parts.map((part, index) => {
+      // Even indices are non-URL text, odd indices are URLs (due to capture group)
+      if (index % 2 === 0) {
+        // Non-URL text - escape it
+        return this.escapeHtml(part);
+      } else {
+        // URL - clean trailing punctuation and create link
+        let cleanUrl = part;
+        let trailing = '';
+        while (cleanUrl.match(/[.,!?)\]};:'"]+$/)) {
+          trailing = cleanUrl.slice(-1) + trailing;
+          cleanUrl = cleanUrl.slice(0, -1);
+        }
+        return `<a href="${this.escapeHtml(cleanUrl)}" target="_blank" rel="noopener noreferrer" class="message-link">${this.escapeHtml(cleanUrl)}</a>${this.escapeHtml(trailing)}`;
       }
-      return `<a href="${this.escapeHtml(cleanUrl)}" target="_blank" rel="noopener noreferrer" class="message-link">${this.escapeHtml(cleanUrl)}</a>${this.escapeHtml(trailing)}`;
-    });
+    }).join('');
   }
 
   // Load link previews for a message element
