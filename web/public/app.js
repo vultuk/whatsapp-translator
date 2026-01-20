@@ -643,16 +643,26 @@ class WhatsAppClient {
     const sorted = [...this.contacts].sort((a, b) => b.lastMessageTime - a.lastMessageTime);
     
     container.innerHTML = sorted.map(contact => {
+      const isGroup = contact.type === 'group';
       const initial = (contact.name || contact.phone || '?').charAt(0).toUpperCase();
       const time = this.formatTime(contact.lastMessageTime);
       const isActive = contact.id === this.currentContactId;
       const unread = contact.unreadCount > 0 ? 
         `<span class="unread-badge">${contact.unreadCount}</span>` : '';
       
-      // Get last message preview
+      // Get last message preview - for groups, show sender name
       const messages = this.messages.get(contact.id) || [];
       const lastMessage = messages[messages.length - 1];
-      const preview = lastMessage ? this.getMessagePreview(lastMessage) : '';
+      let preview = lastMessage ? this.getMessagePreview(lastMessage) : '';
+      
+      // For groups, prefix with sender name if not from me
+      if (isGroup && lastMessage && !lastMessage.isFromMe && lastMessage.senderName) {
+        const senderFirst = lastMessage.senderName.split(' ')[0];
+        // Remove "You: " prefix if present (shouldn't be for incoming)
+        if (!preview.startsWith('You: ')) {
+          preview = `${senderFirst}: ${preview}`;
+        }
+      }
       
       // Check for cached avatar
       const avatarUrl = this.avatarCache.get(contact.id);
@@ -660,10 +670,14 @@ class WhatsAppClient {
         ? `<img src="${avatarUrl}" alt="" onerror="this.parentElement.innerHTML='<span>${initial}</span>'">`
         : `<span>${initial}</span>`;
       
+      // Group indicator (fold mark in corner)
+      const groupIndicator = isGroup ? '<div class="group-indicator"></div>' : '';
+      
       return `
-        <div class="contact-item ${isActive ? 'active' : ''}" data-contact-id="${contact.id}">
+        <div class="contact-item ${isActive ? 'active' : ''} ${isGroup ? 'is-group' : ''}" data-contact-id="${contact.id}">
           <div class="avatar">
             ${avatarContent}
+            ${groupIndicator}
           </div>
           <div class="contact-details">
             <div class="contact-header">
