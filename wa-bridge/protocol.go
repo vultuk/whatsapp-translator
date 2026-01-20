@@ -126,6 +126,16 @@ type SendResultEvent struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// ProfilePictureEvent is sent with profile picture data
+type ProfilePictureEvent struct {
+	Type      string `json:"type"`
+	RequestID int    `json:"request_id"`
+	JID       string `json:"jid"`
+	URL       string `json:"url,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 // Command types received from Rust CLI (via stdin)
 
 // Command represents a command from the Rust CLI
@@ -188,6 +198,17 @@ func NewSendResultEvent(requestID int, success bool, messageID string, timestamp
 		Success:   success,
 		MessageID: messageID,
 		Timestamp: timestamp,
+		Error:     errMsg,
+	}
+}
+
+func NewProfilePictureEvent(requestID int, jid, url, id, errMsg string) ProfilePictureEvent {
+	return ProfilePictureEvent{
+		Type:      "profile_picture",
+		RequestID: requestID,
+		JID:       jid,
+		URL:       url,
+		ID:        id,
 		Error:     errMsg,
 	}
 }

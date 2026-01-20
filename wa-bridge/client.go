@@ -516,3 +516,27 @@ func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string
 
 	return resp.ID, resp.Timestamp.Unix(), nil
 }
+
+// GetProfilePicture fetches the profile picture URL for a JID
+func (c *Client) GetProfilePicture(ctx context.Context, jidStr string) (string, string, error) {
+	// Parse the JID
+	jid, err := types.ParseJID(jidStr)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid JID: %w", err)
+	}
+
+	// Get profile picture info
+	params := &whatsmeow.GetProfilePictureParams{
+		Preview: false, // Get full size image
+	}
+	pic, err := c.client.GetProfilePictureInfo(ctx, jid, params)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get profile picture: %w", err)
+	}
+
+	if pic == nil {
+		return "", "", nil // No profile picture set
+	}
+
+	return pic.URL, pic.ID, nil
+}

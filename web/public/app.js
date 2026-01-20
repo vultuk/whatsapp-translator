@@ -7,6 +7,8 @@ class WhatsAppClient {
     this.contacts = [];
     this.currentContactId = null;
     this.messages = new Map();
+    this.avatarCache = new Map(); // JID -> URL
+    this.avatarFetching = new Set(); // JIDs currently being fetched
     
     this.init();
   }
@@ -239,9 +241,62 @@ class WhatsAppClient {
       const response = await fetch('/api/contacts');
       this.contacts = await response.json();
       this.renderContacts();
+      
+      // Fetch avatars for all contacts in the background
+      this.contacts.forEach(contact => {
+        this.fetchAvatar(contact.id);
+      });
     } catch (err) {
       console.error('Failed to load contacts:', err);
     }
+  }
+
+  // Fetch avatar for a contact
+  async fetchAvatar(jid) {
+    // Skip if already cached or being fetched
+    if (this.avatarCache.has(jid) || this.avatarFetching.has(jid)) {
+      return;
+    }
+
+    this.avatarFetching.add(jid);
+
+    try {
+      const response = await fetch(`/api/avatar/${encodeURIComponent(jid)}`);
+      const data = await response.json();
+      
+      if (data.url) {
+        this.avatarCache.set(jid, data.url);
+        // Update any visible avatars for this contact
+        this.updateAvatarDisplay(jid, data.url);
+      }
+    } catch (err) {
+      console.error('Failed to fetch avatar:', err);
+    } finally {
+      this.avatarFetching.delete(jid);
+    }
+  }
+
+  // Update avatar display for a specific JID
+  updateAvatarDisplay(jid, url) {
+    // Update in contacts list
+    const contactItem = document.querySelector(`.contact-item[data-contact-id="${jid}"] .avatar`);
+    if (contactItem) {
+      contactItem.innerHTML = `<img src="${url}" alt="" onerror="this.parentElement.innerHTML='<span>${this.getInitial(jid)}</span>'">`;
+    }
+
+    // Update in chat header if this is the current contact
+    if (this.currentContactId === jid) {
+      const chatAvatar = document.getElementById('chat-avatar-initial');
+      if (chatAvatar) {
+        chatAvatar.parentElement.innerHTML = `<img src="${url}" alt="" onerror="this.parentElement.innerHTML='<span id=\\'chat-avatar-initial\\'>${this.getInitial(jid)}</span>'">`;
+      }
+    }
+  }
+
+  // Get initial for a contact by JID
+  getInitial(jid) {
+    const contact = this.contacts.find(c => c.id === jid);
+    return (contact?.name || contact?.phone || '?').charAt(0).toUpperCase();
   }
 
   // Render contacts list
@@ -273,10 +328,16 @@ class WhatsAppClient {
       const lastMessage = messages[messages.length - 1];
       const preview = lastMessage ? this.getMessagePreview(lastMessage) : '';
       
+      // Check for cached avatar
+      const avatarUrl = this.avatarCache.get(contact.id);
+      const avatarContent = avatarUrl 
+        ? `<img src="${avatarUrl}" alt="" onerror="this.parentElement.innerHTML='<span>${initial}</span>'">`
+        : `<span>${initial}</span>`;
+      
       return `
         <div class="contact-item ${isActive ? 'active' : ''}" data-contact-id="${contact.id}">
           <div class="avatar">
-            <span>${initial}</span>
+            ${avatarContent}
           </div>
           <div class="contact-details">
             <div class="contact-header">
@@ -352,8 +413,18 @@ class WhatsAppClient {
     if (contact) {
       document.getElementById('chat-name').textContent = contact.name || contact.phone || 'Unknown';
       document.getElementById('chat-phone').textContent = contact.phone ? '+' + contact.phone : '';
-      document.getElementById('chat-avatar-initial').textContent = 
-        (contact.name || contact.phone || '?').charAt(0).toUpperCase();
+      
+      const initial = (contact.name || contact.phone || '?').charAt(0).toUpperCase();
+      const avatarContainer = document.getElementById('chat-avatar-initial').parentElement;
+      const avatarUrl = this.avatarCache.get(contactId);
+      
+      if (avatarUrl) {
+        avatarContainer.innerHTML = `<img src="${avatarUrl}" alt="" onerror="this.parentElement.innerHTML='<span id=\\'chat-avatar-initial\\'>${initial}</span>'">`;
+      } else {
+        avatarContainer.innerHTML = `<span id="chat-avatar-initial">${initial}</span>`;
+        // Fetch avatar if not cached
+        this.fetchAvatar(contactId);
+      }
     }
     
     // Load messages

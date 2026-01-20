@@ -271,6 +271,20 @@ async fn handle_web_event(
             }
             // TODO: Could broadcast send result to WebSocket clients for UI updates
         }
+
+        BridgeEvent::ProfilePicture {
+            request_id,
+            jid: _,
+            url,
+            id: _,
+            error,
+        } => {
+            if let Some(err) = error {
+                debug!("Profile picture error (request {}): {}", request_id, err);
+            }
+            // Notify the waiting request
+            state.handle_profile_picture_response(request_id, url).await;
+        }
     }
 
     Ok(())
@@ -556,6 +570,11 @@ async fn handle_terminal_event(
                 );
             }
         }
+
+        BridgeEvent::ProfilePicture { .. } => {
+            // Profile pictures are only used in web mode
+            debug!("Ignoring profile picture event in terminal mode");
+        }
     }
 
     Ok(())
@@ -625,6 +644,26 @@ impl serde::Serialize for BridgeEvent {
                 }
                 if let Some(ts) = timestamp {
                     map.serialize_entry("timestamp", ts)?;
+                }
+                if let Some(err) = error {
+                    map.serialize_entry("error", err)?;
+                }
+            }
+            BridgeEvent::ProfilePicture {
+                request_id,
+                jid,
+                url,
+                id,
+                error,
+            } => {
+                map.serialize_entry("type", "profile_picture")?;
+                map.serialize_entry("request_id", request_id)?;
+                map.serialize_entry("jid", jid)?;
+                if let Some(u) = url {
+                    map.serialize_entry("url", u)?;
+                }
+                if let Some(i) = id {
+                    map.serialize_entry("id", i)?;
                 }
                 if let Some(err) = error {
                     map.serialize_entry("error", err)?;

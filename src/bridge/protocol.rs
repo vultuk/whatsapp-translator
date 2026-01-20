@@ -34,6 +34,15 @@ pub enum BridgeEvent {
         error: Option<String>,
     },
 
+    /// Profile picture response
+    ProfilePicture {
+        request_id: i32,
+        jid: String,
+        url: Option<String>,
+        id: Option<String>,
+        error: Option<String>,
+    },
+
     /// Error occurred
     Error { code: String, message: String },
 
@@ -207,6 +216,9 @@ pub enum BridgeCommand {
         to: String,
         text: String,
     },
+
+    /// Get profile picture for a JID
+    GetProfilePicture { request_id: i32, to: String },
 
     /// Disconnect and exit
     Disconnect,

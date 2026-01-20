@@ -145,6 +145,19 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			SendEvent(NewSendResultEvent(cmd.RequestID, true, messageID, timestamp, ""))
 		}
 
+	case "get_profile_picture":
+		if cmd.To == "" {
+			SendEvent(NewProfilePictureEvent(cmd.RequestID, "", "", "", "missing 'to' field"))
+			return
+		}
+
+		url, id, err := client.GetProfilePicture(ctx, cmd.To)
+		if err != nil {
+			SendEvent(NewProfilePictureEvent(cmd.RequestID, cmd.To, "", "", err.Error()))
+		} else {
+			SendEvent(NewProfilePictureEvent(cmd.RequestID, cmd.To, url, id, ""))
+		}
+
 	default:
 		SendEvent(NewLogEvent("warn", fmt.Sprintf("Unknown command type: %s", cmd.Type)))
 	}

@@ -14,10 +14,12 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, oneshot, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tracing::{error, info};
@@ -26,6 +28,13 @@ use crate::bridge::BridgeCommand;
 use crate::storage::{MessageStore, StoredMessage};
 use crate::translation::TranslationService;
 use tokio::sync::mpsc;
+
+/// Profile picture cache entry
+#[derive(Debug, Clone)]
+pub struct ProfilePicture {
+    pub url: Option<String>,
+    pub fetched_at: i64,
+}
 
 /// Shared application state
 pub struct AppState {
@@ -38,6 +47,12 @@ pub struct AppState {
     pub web_dir: PathBuf,
     pub command_tx: RwLock<Option<mpsc::Sender<BridgeCommand>>>,
     pub translator: Option<Arc<TranslationService>>,
+    /// Cache of profile pictures (JID -> ProfilePicture)
+    pub avatar_cache: RwLock<HashMap<String, ProfilePicture>>,
+    /// Pending profile picture requests (request_id -> sender)
+    pub pending_avatar_requests: RwLock<HashMap<i32, oneshot::Sender<Option<String>>>>,
+    /// Request ID counter
+    pub request_id_counter: AtomicI32,
 }
 
 /// Events sent to WebSocket clients
@@ -119,6 +134,9 @@ impl AppState {
             web_dir,
             command_tx: RwLock::new(None),
             translator,
+            avatar_cache: RwLock::new(HashMap::new()),
+            pending_avatar_requests: RwLock::new(HashMap::new()),
+            request_id_counter: AtomicI32::new(1),
         })
     }
 
@@ -169,6 +187,79 @@ impl AppState {
     pub fn broadcast_message(&self, message: StoredMessage) {
         let _ = self.broadcast_tx.send(WebSocketEvent::Message { message });
     }
+
+    /// Get next request ID
+    pub fn next_request_id(&self) -> i32 {
+        self.request_id_counter.fetch_add(1, Ordering::SeqCst)
+    }
+
+    /// Request a profile picture and wait for the response
+    pub async fn get_profile_picture(&self, jid: &str) -> Option<String> {
+        // Check cache first (valid for 1 hour)
+        let now = chrono::Utc::now().timestamp();
+        {
+            let cache = self.avatar_cache.read().await;
+            if let Some(cached) = cache.get(jid) {
+                if now - cached.fetched_at < 3600 {
+                    return cached.url.clone();
+                }
+            }
+        }
+
+        // Not in cache or expired, request from bridge
+        let request_id = self.next_request_id();
+        let (tx, rx) = oneshot::channel();
+
+        // Register pending request
+        {
+            let mut pending = self.pending_avatar_requests.write().await;
+            pending.insert(request_id, tx);
+        }
+
+        // Send command to bridge
+        let cmd = BridgeCommand::GetProfilePicture {
+            request_id,
+            to: jid.to_string(),
+        };
+
+        if let Err(e) = self.send_bridge_command(cmd).await {
+            error!("Failed to request profile picture: {}", e);
+            // Clean up pending request
+            let mut pending = self.pending_avatar_requests.write().await;
+            pending.remove(&request_id);
+            return None;
+        }
+
+        // Wait for response with timeout
+        match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+            Ok(Ok(url)) => {
+                // Cache the result
+                let mut cache = self.avatar_cache.write().await;
+                cache.insert(
+                    jid.to_string(),
+                    ProfilePicture {
+                        url: url.clone(),
+                        fetched_at: now,
+                    },
+                );
+                url
+            }
+            _ => {
+                // Timeout or error, clean up
+                let mut pending = self.pending_avatar_requests.write().await;
+                pending.remove(&request_id);
+                None
+            }
+        }
+    }
+
+    /// Handle profile picture response from bridge
+    pub async fn handle_profile_picture_response(&self, request_id: i32, url: Option<String>) {
+        let mut pending = self.pending_avatar_requests.write().await;
+        if let Some(tx) = pending.remove(&request_id) {
+            let _ = tx.send(url);
+        }
+    }
 }
 
 /// Create the web server router
@@ -186,6 +277,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/status", get(get_status))
         .route("/api/contacts", get(get_contacts))
         .route("/api/messages/:contact_id", get(get_messages))
+        .route("/api/avatar/:jid", get(get_avatar))
         .route("/api/qr", get(get_qr))
         .route("/api/send", post(send_message))
         .route("/api/stats", get(get_stats))
@@ -251,6 +343,29 @@ async fn get_qr(State(state): State<Arc<AppState>>) -> Json<QrResponse> {
     Json(QrResponse {
         qr: state.qr_code.read().await.clone(),
     })
+}
+
+/// Avatar response
+#[derive(Serialize)]
+struct AvatarResponse {
+    url: Option<String>,
+}
+
+async fn get_avatar(
+    State(state): State<Arc<AppState>>,
+    Path(jid): Path<String>,
+) -> impl IntoResponse {
+    let jid = urlencoding::decode(&jid)
+        .map(|s| s.into_owned())
+        .unwrap_or(jid);
+
+    // Check if connected
+    if !*state.connected.read().await {
+        return Json(AvatarResponse { url: None }).into_response();
+    }
+
+    let url = state.get_profile_picture(&jid).await;
+    Json(AvatarResponse { url }).into_response()
 }
 
 async fn send_message(
