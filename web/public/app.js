@@ -620,6 +620,12 @@ class WhatsAppClient {
     try {
       const response = await fetch('/api/contacts');
       this.contacts = await response.json();
+      
+      // Debug: log contacts with their types
+      console.log('Loaded contacts:', this.contacts.length);
+      const groups = this.contacts.filter(c => c.type === 'group');
+      console.log('Groups found:', groups.length, groups.map(g => ({ id: g.id, name: g.name, type: g.type })));
+      
       this.renderContacts();
       
       // Fetch avatars for all contacts in the background
@@ -700,7 +706,18 @@ class WhatsAppClient {
     
     container.innerHTML = sorted.map(contact => {
       const isGroup = contact.type === 'group';
-      const initial = (contact.name || contact.phone || '?').charAt(0).toUpperCase();
+      // Better display name logic
+      let displayName = contact.name;
+      if (!displayName && contact.phone) {
+        displayName = '+' + contact.phone;
+      } else if (!displayName && isGroup) {
+        displayName = 'Group Chat';
+      } else if (!displayName) {
+        // Extract phone from JID if available
+        const phoneFromJid = contact.id?.split('@')[0];
+        displayName = phoneFromJid ? '+' + phoneFromJid : 'Unknown';
+      }
+      const initial = (displayName || '?').charAt(0).toUpperCase();
       const time = this.formatTime(contact.lastMessageTime);
       const isActive = contact.id === this.currentContactId;
       const unread = contact.unreadCount > 0 ? 
@@ -737,7 +754,7 @@ class WhatsAppClient {
           </div>
           <div class="contact-details">
             <div class="contact-header">
-              <span class="contact-name">${this.escapeHtml(contact.name || contact.phone || 'Unknown')}</span>
+              <span class="contact-name">${this.escapeHtml(displayName)}</span>
               <span class="contact-time">${time}</span>
             </div>
             <div class="contact-preview">

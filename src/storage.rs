@@ -184,7 +184,8 @@ impl MessageStore {
 
     /// Fix contact types based on JID suffix (groups end with @g.us)
     fn migrate_fix_contact_types(&self, conn: &Connection) -> Result<()> {
-        // Update contacts where type is NULL but we can infer it from the JID
+        // Update contacts where type doesn't match the JID suffix
+        // This fixes both NULL types and incorrectly set types
         let updated = conn.execute(
             r#"
             UPDATE contacts 
@@ -194,7 +195,10 @@ impl MessageStore {
                 WHEN id LIKE '%@broadcast' THEN 'broadcast'
                 ELSE 'private'
             END
-            WHERE type IS NULL
+            WHERE type IS NULL 
+               OR (id LIKE '%@g.us' AND type != 'group')
+               OR (id LIKE '%@s.whatsapp.net' AND type != 'private')
+               OR (id LIKE '%@broadcast' AND type != 'broadcast')
             "#,
             [],
         )?;
