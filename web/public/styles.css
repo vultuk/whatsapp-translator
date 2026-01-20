@@ -1013,6 +1013,112 @@ body {
   color: var(--accent-color);
 }
 
+/* Send button group with dropdown */
+.send-button-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.send-dropdown-toggle {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 2px;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+  margin-left: -4px;
+}
+
+.send-dropdown-toggle:hover:not(:disabled) {
+  color: var(--accent-color);
+  background: rgba(0, 168, 132, 0.1);
+}
+
+.send-dropdown-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.send-dropdown-toggle:not(:disabled) {
+  color: var(--accent-color);
+}
+
+.send-dropdown {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 4px;
+  margin-bottom: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  min-width: 150px;
+}
+
+.send-dropdown.hidden {
+  display: none;
+}
+
+.send-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s;
+  text-align: left;
+}
+
+.send-dropdown-item:hover {
+  background: var(--hover-color);
+}
+
+.send-dropdown-item svg {
+  color: var(--accent-color);
+  flex-shrink: 0;
+}
+
+.send-dropdown-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* AI composing indicator */
+.ai-composing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(167, 139, 250, 0.1);
+  border-left: 3px solid #a78bfa;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #a78bfa;
+}
+
+.ai-composing-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(167, 139, 250, 0.3);
+  border-top-color: #a78bfa;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
 /* Sending state */
 .message.sending {
   opacity: 0.7;

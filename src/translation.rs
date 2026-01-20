@@ -434,4 +434,107 @@ Text to translate:
             usage: total_usage,
         }
     }
+
+    /// Compose an AI-generated message based on user's prompt
+    /// Returns the composed message and usage info
+    ///
+    /// If reply_context is provided, it contains (sender_name, message_text) of the message being replied to
+    pub async fn compose_ai_message(
+        &self,
+        prompt: &str,
+        reply_context: Option<(&str, &str)>,
+    ) -> Result<(String, UsageInfo)> {
+        // Validate input length (max 1000 chars for the prompt)
+        if prompt.trim().is_empty() {
+            anyhow::bail!("Prompt cannot be empty");
+        }
+        if prompt.len() > 1000 {
+            anyhow::bail!("Prompt is too long (max 1000 characters)");
+        }
+
+        let system_prompt = r#"You are a helpful assistant composing WhatsApp messages. Your task is to write a message based on the user's request.
+
+IMPORTANT RULES:
+1. Keep your response SHORT and appropriate for a chat message (max 500 characters)
+2. Write ONLY the message content - no explanations, no quotes, no "Here's a message:" prefixes
+3. Be conversational and natural, matching the tone requested
+4. Do not include anything harmful, offensive, or inappropriate
+5. If the request is unclear, write a friendly, neutral message
+6. Do not pretend to be someone specific or impersonate anyone
+7. Do not include private information or make up facts about real people
+
+Respond with ONLY the message text, nothing else."#;
+
+        // Build the user message with optional reply context
+        let user_message = if let Some((sender, text)) = reply_context {
+            format!(
+                "{}\n\nThe user is REPLYING to this message from {}:\n\"{}\"\n\nUser's request for their reply: {}",
+                system_prompt,
+                sender,
+                text.chars().take(500).collect::<String>(), // Limit context length
+                prompt
+            )
+        } else {
+            format!("{}\n\nUser request: {}", system_prompt, prompt)
+        };
+
+        let request = ClaudeRequest {
+            model: TRANSLATION_MODEL.to_string(),
+            max_tokens: 300, // Limit output to keep messages short
+            messages: vec![ClaudeMessage {
+                role: "user".to_string(),
+                content: user_message,
+            }],
+        };
+
+        let response = self
+            .client
+            .post(ANTHROPIC_API_URL)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("content-type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send AI compose request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("AI compose API error: {} - {}", status, body);
+        }
+
+        let claude_response: ClaudeResponse = response
+            .json()
+            .await
+            .context("Failed to parse AI compose response")?;
+
+        let usage_info = UsageInfo {
+            input_tokens: claude_response.usage.input_tokens,
+            output_tokens: claude_response.usage.output_tokens,
+            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
+        };
+
+        let composed = claude_response
+            .content
+            .first()
+            .and_then(|c| c.text.clone())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        // Final safety check - truncate if somehow still too long
+        let composed = if composed.len() > 500 {
+            format!("{}...", &composed[..497])
+        } else {
+            composed
+        };
+
+        info!(
+            "AI compose usage: {} in, {} out, ${:.6}",
+            usage_info.input_tokens, usage_info.output_tokens, usage_info.cost_usd
+        );
+
+        Ok((composed, usage_info))
+    }
 }

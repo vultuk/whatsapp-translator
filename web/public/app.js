@@ -1389,7 +1389,102 @@ class WhatsAppClient {
   updateSendButton() {
     const input = document.getElementById('message-input');
     const sendButton = document.getElementById('send-button');
-    sendButton.disabled = !input.value.trim() || !this.currentContactId;
+    const dropdownToggle = document.getElementById('send-dropdown-toggle');
+    const hasContent = input.value.trim() && this.currentContactId;
+    
+    sendButton.disabled = !hasContent;
+    if (dropdownToggle) {
+      dropdownToggle.disabled = !hasContent;
+    }
+  }
+
+  // Send message composed by AI
+  async sendWithAI() {
+    const input = document.getElementById('message-input');
+    const prompt = input.value.trim();
+    
+    if (!prompt || !this.currentContactId) return;
+    
+    // Show AI composing indicator
+    this.showAIComposing(true);
+    
+    try {
+      // Build request with optional reply context
+      const requestBody = { prompt };
+      
+      if (this.replyingTo) {
+        requestBody.replyToText = this.replyingTo.text;
+        requestBody.replyToSender = this.replyingTo.senderName;
+      }
+      
+      const response = await fetch('/api/ai-compose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+      
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.error || 'AI compose failed');
+      }
+      
+      // Clear the input and set the AI-composed message
+      const aiMessage = `Claude Says: ${result.message}`;
+      input.value = aiMessage;
+      this.autoResizeTextarea(input);
+      this.updateSendButton();
+      
+      // Automatically send the message
+      await this.sendMessage();
+      
+      // Log cost if available
+      if (result.costUsd) {
+        console.log(`AI compose cost: $${result.costUsd.toFixed(6)}`);
+      }
+      
+    } catch (err) {
+      console.error('Failed to compose with AI:', err);
+      alert('Failed to compose message with AI: ' + err.message);
+    } finally {
+      this.showAIComposing(false);
+    }
+  }
+
+  // Show/hide AI composing indicator
+  showAIComposing(show) {
+    let indicator = document.getElementById('ai-composing-indicator');
+    
+    if (show) {
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'ai-composing-indicator';
+        indicator.className = 'ai-composing';
+        indicator.innerHTML = `
+          <div class="ai-composing-spinner"></div>
+          <span>AI is composing your message...</span>
+        `;
+        
+        const inputArea = document.querySelector('.message-input-area');
+        const inputContainer = document.querySelector('.input-container');
+        if (inputArea && inputContainer) {
+          inputArea.insertBefore(indicator, inputContainer);
+        }
+      }
+      indicator.style.display = 'flex';
+      
+      // Disable input while composing
+      document.getElementById('message-input').disabled = true;
+      document.getElementById('send-button').disabled = true;
+      document.getElementById('send-dropdown-toggle').disabled = true;
+    } else {
+      if (indicator) {
+        indicator.style.display = 'none';
+      }
+      // Re-enable input
+      document.getElementById('message-input').disabled = false;
+      this.updateSendButton();
+    }
   }
 
   // Auto-resize textarea (expands up to max-height)
@@ -1491,6 +1586,26 @@ class WhatsAppClient {
       if (!e.target.closest('.reaction-button-container')) {
         document.querySelectorAll('.reaction-picker.show').forEach(el => el.classList.remove('show'));
       }
+      // Close send dropdown when clicking outside
+      if (!e.target.closest('.send-button-group')) {
+        document.getElementById('send-dropdown')?.classList.add('hidden');
+      }
+    });
+
+    // Send dropdown toggle
+    const dropdownToggle = document.getElementById('send-dropdown-toggle');
+    const sendDropdown = document.getElementById('send-dropdown');
+    
+    dropdownToggle?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendDropdown?.classList.toggle('hidden');
+    });
+
+    // Send with AI button
+    const sendAiButton = document.getElementById('send-ai-button');
+    sendAiButton?.addEventListener('click', () => {
+      sendDropdown?.classList.add('hidden');
+      this.sendWithAI();
     });
   }
 

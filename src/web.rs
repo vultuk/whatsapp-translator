@@ -167,6 +167,27 @@ pub struct SendReactionResponse {
     pub success: bool,
 }
 
+/// AI compose request
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiComposeRequest {
+    pub prompt: String,
+    /// Optional: the message being replied to (for context)
+    pub reply_to_text: Option<String>,
+    /// Optional: who sent the message being replied to
+    pub reply_to_sender: Option<String>,
+}
+
+/// AI compose response
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiComposeResponse {
+    pub success: bool,
+    pub message: Option<String>,
+    pub error: Option<String>,
+    pub cost_usd: Option<f64>,
+}
+
 impl AppState {
     pub fn new(
         store: MessageStore,
@@ -351,6 +372,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/send", post(send_message))
         .route("/api/send-image", post(send_image))
         .route("/api/react", post(send_reaction))
+        .route("/api/ai-compose", post(ai_compose))
         .route("/api/stats", get(get_stats))
         .route("/api/usage", get(get_global_usage))
         .route("/api/usage/:contact_id", get(get_conversation_usage))
@@ -766,6 +788,79 @@ async fn send_reaction(
     }
 
     Json(SendReactionResponse { success: true }).into_response()
+}
+
+/// AI compose endpoint - generates a message using Claude
+async fn ai_compose(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AiComposeRequest>,
+) -> impl IntoResponse {
+    // Check if translation service is available (it has the API key)
+    let translator = match &state.translator {
+        Some(t) => t,
+        None => {
+            return Json(AiComposeResponse {
+                success: false,
+                message: None,
+                error: Some("AI service not configured (missing API key)".to_string()),
+                cost_usd: None,
+            })
+            .into_response();
+        }
+    };
+
+    // Build reply context if provided
+    let reply_context = match (&req.reply_to_sender, &req.reply_to_text) {
+        (Some(sender), Some(text)) => Some((sender.as_str(), text.as_str())),
+        (None, Some(text)) => Some(("Someone", text.as_str())),
+        _ => None,
+    };
+
+    // Call the AI compose method
+    match translator
+        .compose_ai_message(&req.prompt, reply_context)
+        .await
+    {
+        Ok((message, usage)) => {
+            info!(
+                "AI composed message ({} chars), cost: ${:.6}",
+                message.len(),
+                usage.cost_usd
+            );
+
+            // Record usage
+            if let Err(e) = state.store.record_usage(
+                None,
+                None,
+                &crate::translation::UsageInfo {
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cost_usd: usage.cost_usd,
+                },
+                "ai_compose",
+            ) {
+                warn!("Failed to record AI compose usage: {}", e);
+            }
+
+            Json(AiComposeResponse {
+                success: true,
+                message: Some(message),
+                error: None,
+                cost_usd: Some(usage.cost_usd),
+            })
+            .into_response()
+        }
+        Err(e) => {
+            error!("AI compose failed: {}", e);
+            Json(AiComposeResponse {
+                success: false,
+                message: None,
+                error: Some(format!("Failed to compose message: {}", e)),
+                cost_usd: None,
+            })
+            .into_response()
+        }
+    }
 }
 
 async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
