@@ -587,6 +587,23 @@ impl MessageStore {
 
         Ok(())
     }
+
+    /// Clear all data from the database (for logout)
+    pub fn clear_all(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute_batch(
+            r#"
+            DELETE FROM messages;
+            DELETE FROM contacts;
+            DELETE FROM translation_usage;
+            DELETE FROM link_previews;
+            "#,
+        )?;
+
+        info!("All data cleared from database");
+        Ok(())
+    }
 }
 
 impl Clone for MessageStore {

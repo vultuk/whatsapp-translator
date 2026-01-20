@@ -154,6 +154,50 @@ class WhatsAppClient {
     return headers;
   }
 
+  // Handle logout
+  async handleLogout() {
+    const confirmed = confirm(
+      'Are you sure you want to logout?\n\n' +
+      'This will:\n' +
+      '- Disconnect from WhatsApp\n' +
+      '- Delete all messages and contacts\n' +
+      '- Clear the session (require new QR scan)\n\n' +
+      'This action cannot be undone.'
+    );
+
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch('/api/logout', {
+        method: 'POST',
+        headers: this.getAuthHeaders()
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        // Clear local storage
+        localStorage.removeItem('wa_auth_token');
+        this.authToken = null;
+
+        // Clear local data
+        this.contacts = [];
+        this.messages.clear();
+        this.avatarCache.clear();
+        this.currentContactId = null;
+
+        // Reload the page to start fresh
+        alert('Logged out successfully. The page will now reload.');
+        window.location.reload();
+      } else {
+        alert('Logout failed: ' + (result.error || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error('Logout failed:', err);
+      alert('Logout failed: ' + err.message);
+    }
+  }
+
   // Update placeholder to show correct keyboard shortcut for OS
   updateInputPlaceholder() {
     const input = document.getElementById('message-input');
@@ -1764,6 +1808,11 @@ class WhatsAppClient {
 
   // Bind UI events
   bindEvents() {
+    // Logout button
+    document.getElementById('logout-button')?.addEventListener('click', () => {
+      this.handleLogout();
+    });
+
     // Contact click
     document.getElementById('contacts-list').addEventListener('click', (e) => {
       const contactItem = e.target.closest('.contact-item');

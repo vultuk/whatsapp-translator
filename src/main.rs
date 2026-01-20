@@ -133,6 +133,7 @@ async fn run_web_mode(
     let state = AppState::new(
         store.clone(),
         web_dir,
+        data_dir.clone(),
         translator.clone(),
         args.password.clone(),
     );

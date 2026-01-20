@@ -45,6 +45,7 @@ pub struct AppState {
     pub qr_code: RwLock<Option<String>>,
     pub broadcast_tx: broadcast::Sender<WebSocketEvent>,
     pub web_dir: PathBuf,
+    pub data_dir: PathBuf,
     pub command_tx: RwLock<Option<mpsc::Sender<BridgeCommand>>>,
     pub translator: Option<Arc<TranslationService>>,
     /// Cache of profile pictures (JID -> ProfilePicture)
@@ -222,6 +223,7 @@ impl AppState {
     pub fn new(
         store: MessageStore,
         web_dir: PathBuf,
+        data_dir: PathBuf,
         translator: Option<Arc<TranslationService>>,
         password: Option<String>,
     ) -> Arc<Self> {
@@ -235,6 +237,7 @@ impl AppState {
             qr_code: RwLock::new(None),
             broadcast_tx,
             web_dir,
+            data_dir,
             command_tx: RwLock::new(None),
             translator,
             avatar_cache: RwLock::new(HashMap::new()),
@@ -399,6 +402,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // Auth routes (no auth required)
         .route("/api/auth/check", get(auth_check))
         .route("/api/auth", post(auth_login))
+        .route("/api/logout", post(logout))
         // API routes
         .route("/api/status", get(get_status))
         .route("/api/contacts", get(get_contacts))
@@ -509,6 +513,59 @@ async fn verify_auth(state: &Arc<AppState>, auth_header: Option<&str>) -> bool {
     }
 
     false
+}
+
+/// Logout - clear all data and session
+async fn logout(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    info!("Logout requested - clearing all data");
+
+    // 1. Clear the message store (contacts, messages, usage)
+    if let Err(e) = state.store.clear_all() {
+        error!("Failed to clear message store: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to clear data: {}", e)
+            })),
+        )
+            .into_response();
+    }
+
+    // 2. Send logout command to bridge (this will clear the WhatsApp session)
+    if let Some(tx) = state.command_tx.read().await.as_ref() {
+        if let Err(e) = tx.send(BridgeCommand::Logout).await {
+            warn!("Failed to send logout command to bridge: {}", e);
+        }
+    }
+
+    // 3. Clear the session database file
+    let session_db = state.data_dir.join("session.db");
+    if session_db.exists() {
+        if let Err(e) = std::fs::remove_file(&session_db) {
+            warn!("Failed to remove session database: {}", e);
+        }
+    }
+
+    // 4. Clear auth tokens
+    state.auth_tokens.write().await.clear();
+
+    // 5. Reset connection state
+    *state.connected.write().await = false;
+    *state.phone.write().await = None;
+    *state.name.write().await = None;
+    *state.qr_code.write().await = None;
+
+    // 6. Clear avatar cache
+    state.avatar_cache.write().await.clear();
+
+    info!("Logout complete - all data cleared");
+
+    Json(serde_json::json!({
+        "success": true,
+        "message": "Logged out successfully. Please refresh the page."
+    }))
+    .into_response()
 }
 
 // API Handlers
