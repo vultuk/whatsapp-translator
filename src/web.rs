@@ -406,9 +406,12 @@ async fn send_message(
                         req.contact_id, conv_lang
                     );
                     match translator.translate_to(&req.text, &conv_lang).await {
-                        Ok(translated) => {
+                        Ok((translated, usage)) => {
                             if translated != req.text {
-                                info!("Translated outgoing message to {}", conv_lang);
+                                info!(
+                                    "Translated outgoing message to {} (cost: ${:.6})",
+                                    conv_lang, usage.cost_usd
+                                );
                                 (translated, Some(req.text.clone()), true, Some(conv_lang))
                             } else {
                                 (req.text.clone(), None, false, None)

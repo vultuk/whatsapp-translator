@@ -13,6 +13,14 @@ const TRANSLATION_MODEL: &str = "claude-sonnet-4-20250514";
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
+/// Pricing per million tokens (as of 2024)
+/// Haiku: $0.25/M input, $1.25/M output
+/// Sonnet 4: $3/M input, $15/M output
+const HAIKU_INPUT_COST_PER_M: f64 = 0.25;
+const HAIKU_OUTPUT_COST_PER_M: f64 = 1.25;
+const SONNET_INPUT_COST_PER_M: f64 = 3.0;
+const SONNET_OUTPUT_COST_PER_M: f64 = 15.0;
+
 /// Translation service for processing messages
 pub struct TranslationService {
     client: Client,
@@ -31,6 +39,8 @@ pub struct TranslationResult {
     pub translated_text: Option<String>,
     /// Detected source language
     pub source_language: String,
+    /// Token usage and cost for this translation
+    pub usage: UsageInfo,
 }
 
 /// Claude API request structure
@@ -51,11 +61,29 @@ struct ClaudeMessage {
 #[derive(Deserialize)]
 struct ClaudeResponse {
     content: Vec<ContentBlock>,
+    usage: ApiUsage,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, Default)]
+struct ApiUsage {
+    input_tokens: u32,
+    output_tokens: u32,
 }
 
 #[derive(Deserialize)]
 struct ContentBlock {
     text: Option<String>,
+}
+
+/// Token usage and cost information
+#[derive(Debug, Clone, Default)]
+pub struct UsageInfo {
+    /// Total input tokens used
+    pub input_tokens: u32,
+    /// Total output tokens used
+    pub output_tokens: u32,
+    /// Total cost in USD
+    pub cost_usd: f64,
 }
 
 /// Language detection result
@@ -80,11 +108,25 @@ impl TranslationService {
         }
     }
 
+    /// Calculate cost for Haiku model usage
+    fn calculate_haiku_cost(usage: &ApiUsage) -> f64 {
+        let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * HAIKU_INPUT_COST_PER_M;
+        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * HAIKU_OUTPUT_COST_PER_M;
+        input_cost + output_cost
+    }
+
+    /// Calculate cost for Sonnet model usage
+    fn calculate_sonnet_cost(usage: &ApiUsage) -> f64 {
+        let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * SONNET_INPUT_COST_PER_M;
+        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * SONNET_OUTPUT_COST_PER_M;
+        input_cost + output_cost
+    }
+
     /// Detect if text is in the default language
-    async fn detect_language(&self, text: &str) -> Result<(bool, String)> {
+    async fn detect_language(&self, text: &str) -> Result<(bool, String, UsageInfo)> {
         // Skip very short messages
         if text.trim().len() < 5 {
-            return Ok((true, self.default_language.clone()));
+            return Ok((true, self.default_language.clone(), UsageInfo::default()));
         }
 
         let prompt = format!(
@@ -118,13 +160,25 @@ Text: "{}""#,
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             warn!("Language detection API error: {} - {}", status, body);
-            return Ok((true, self.default_language.clone()));
+            return Ok((true, self.default_language.clone(), UsageInfo::default()));
         }
 
         let claude_response: ClaudeResponse = response
             .json()
             .await
             .context("Failed to parse language detection response")?;
+
+        // Calculate usage info for Haiku
+        let usage_info = UsageInfo {
+            input_tokens: claude_response.usage.input_tokens,
+            output_tokens: claude_response.usage.output_tokens,
+            cost_usd: Self::calculate_haiku_cost(&claude_response.usage),
+        };
+
+        debug!(
+            "Language detection usage: {} in, {} out, ${:.6}",
+            usage_info.input_tokens, usage_info.output_tokens, usage_info.cost_usd
+        );
 
         let content = claude_response
             .content
@@ -141,17 +195,17 @@ Text: "{}""#,
                         "Detected language: {} (isEnglish: {})",
                         detection.language, detection.is_english
                     );
-                    return Ok((detection.is_english, detection.language));
+                    return Ok((detection.is_english, detection.language, usage_info));
                 }
             }
         }
 
         // Fallback: assume default language
-        Ok((true, self.default_language.clone()))
+        Ok((true, self.default_language.clone(), usage_info))
     }
 
     /// Translate text to the default language
-    async fn translate(&self, text: &str, source_language: &str) -> Result<String> {
+    async fn translate(&self, text: &str, source_language: &str) -> Result<(String, UsageInfo)> {
         let prompt = format!(
             r#"Translate the following text (from {}) to {}.
 Respond with ONLY the translated text, nothing else. Preserve the original formatting, tone, and meaning as closely as possible.
@@ -185,7 +239,7 @@ Text to translate:
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             warn!("Translation API error: {} - {}", status, body);
-            return Ok(text.to_string());
+            return Ok((text.to_string(), UsageInfo::default()));
         }
 
         let claude_response: ClaudeResponse = response
@@ -193,25 +247,45 @@ Text to translate:
             .await
             .context("Failed to parse translation response")?;
 
+        // Calculate usage info for Sonnet
+        let usage_info = UsageInfo {
+            input_tokens: claude_response.usage.input_tokens,
+            output_tokens: claude_response.usage.output_tokens,
+            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
+        };
+
+        debug!(
+            "Translation usage: {} in, {} out, ${:.6}",
+            usage_info.input_tokens, usage_info.output_tokens, usage_info.cost_usd
+        );
+
         let translated = claude_response
             .content
             .first()
             .and_then(|c| c.text.clone())
             .unwrap_or_else(|| text.to_string());
 
-        Ok(translated.trim().to_string())
+        Ok((translated.trim().to_string(), usage_info))
     }
 
     /// Translate text to a specific target language.
     /// Used for translating outgoing messages to match the conversation language.
-    pub async fn translate_to(&self, text: &str, target_language: &str) -> Result<String> {
+    /// Returns (translated_text, usage_info)
+    pub async fn translate_to(
+        &self,
+        text: &str,
+        target_language: &str,
+    ) -> Result<(String, UsageInfo)> {
+        let mut total_usage = UsageInfo::default();
+
         // Skip if target is the default language (likely English)
         if target_language.to_lowercase() == self.default_language.to_lowercase() {
-            return Ok(text.to_string());
+            return Ok((text.to_string(), total_usage));
         }
 
         // First detect if the text is already in the target language
-        let (_is_target_lang, detected_lang) = self.detect_language(text).await?;
+        let (_is_target_lang, detected_lang, detection_usage) = self.detect_language(text).await?;
+        total_usage = Self::combine_usage(&total_usage, &detection_usage);
 
         // If the text appears to be in the target language already, skip translation
         if detected_lang.to_lowercase() == target_language.to_lowercase() {
@@ -219,7 +293,7 @@ Text to translate:
                 "Text already in target language ({}), skipping translation",
                 target_language
             );
-            return Ok(text.to_string());
+            return Ok((text.to_string(), total_usage));
         }
 
         info!(
@@ -260,7 +334,7 @@ Text to translate:
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             warn!("Translation API error: {} - {}", status, body);
-            return Ok(text.to_string());
+            return Ok((text.to_string(), total_usage));
         }
 
         let claude_response: ClaudeResponse = response
@@ -268,34 +342,63 @@ Text to translate:
             .await
             .context("Failed to parse translation response")?;
 
+        // Calculate usage info for Sonnet
+        let translation_usage = UsageInfo {
+            input_tokens: claude_response.usage.input_tokens,
+            output_tokens: claude_response.usage.output_tokens,
+            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
+        };
+        total_usage = Self::combine_usage(&total_usage, &translation_usage);
+
+        debug!(
+            "Outgoing translation usage: {} in, {} out, ${:.6}",
+            translation_usage.input_tokens,
+            translation_usage.output_tokens,
+            translation_usage.cost_usd
+        );
+
         let translated = claude_response
             .content
             .first()
             .and_then(|c| c.text.clone())
             .unwrap_or_else(|| text.to_string());
 
-        Ok(translated.trim().to_string())
+        Ok((translated.trim().to_string(), total_usage))
+    }
+
+    /// Combine two usage infos
+    fn combine_usage(a: &UsageInfo, b: &UsageInfo) -> UsageInfo {
+        UsageInfo {
+            input_tokens: a.input_tokens + b.input_tokens,
+            output_tokens: a.output_tokens + b.output_tokens,
+            cost_usd: a.cost_usd + b.cost_usd,
+        }
     }
 
     /// Process a message - detect language and translate if needed
     pub async fn process_text(&self, text: &str) -> TranslationResult {
+        let mut total_usage = UsageInfo::default();
+
         if text.trim().is_empty() {
             return TranslationResult {
                 needs_translation: false,
                 original_text: text.to_string(),
                 translated_text: None,
                 source_language: self.default_language.clone(),
+                usage: total_usage,
             };
         }
 
         // Step 1: Detect language
-        let (is_default, detected_language) = match self.detect_language(text).await {
-            Ok(result) => result,
-            Err(e) => {
-                warn!("Language detection failed: {}", e);
-                (true, self.default_language.clone())
-            }
-        };
+        let (is_default, detected_language, detection_usage) =
+            match self.detect_language(text).await {
+                Ok(result) => result,
+                Err(e) => {
+                    warn!("Language detection failed: {}", e);
+                    (true, self.default_language.clone(), UsageInfo::default())
+                }
+            };
+        total_usage = Self::combine_usage(&total_usage, &detection_usage);
 
         if is_default {
             return TranslationResult {
@@ -303,24 +406,32 @@ Text to translate:
                 original_text: text.to_string(),
                 translated_text: None,
                 source_language: detected_language,
+                usage: total_usage,
             };
         }
 
         // Step 2: Translate
         info!("Translating message from {}...", detected_language);
-        let translated = match self.translate(text, &detected_language).await {
-            Ok(t) => t,
+        let (translated, translation_usage) = match self.translate(text, &detected_language).await {
+            Ok(result) => result,
             Err(e) => {
                 warn!("Translation failed: {}", e);
-                text.to_string()
+                (text.to_string(), UsageInfo::default())
             }
         };
+        total_usage = Self::combine_usage(&total_usage, &translation_usage);
+
+        info!(
+            "Translation complete - total usage: {} in, {} out, ${:.6}",
+            total_usage.input_tokens, total_usage.output_tokens, total_usage.cost_usd
+        );
 
         TranslationResult {
             needs_translation: true,
             original_text: text.to_string(),
             translated_text: Some(translated),
             source_language: detected_language,
+            usage: total_usage,
         }
     }
 }
