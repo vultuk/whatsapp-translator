@@ -240,11 +240,13 @@ async fn handle_web_event(
             // Process and store the message
             let stored_msg = process_message(msg, translator, Some(store)).await;
 
-            // Update contact
+            // Update contact with contact_name (not sender_name!)
+            // contact_name is the chat name (other person for DMs, group name for groups)
+            // sender_name changes based on who sent the message
             store.upsert_contact(
                 &stored_msg.contact_id,
-                stored_msg.sender_name.as_deref(),
-                stored_msg.sender_phone.as_deref(),
+                stored_msg.contact_name.as_deref(),
+                stored_msg.contact_phone.as_deref(),
                 Some(&stored_msg.chat_type),
                 stored_msg.timestamp,
             )?;

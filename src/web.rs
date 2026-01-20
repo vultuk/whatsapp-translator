@@ -789,11 +789,11 @@ async fn send_message(
         error!("Failed to store sent message: {}", e);
     }
 
-    // Update contact's last message time
+    // Update contact's last message time (preserve contact name/phone)
     if let Err(e) = state.store.upsert_contact(
         &stored_msg.contact_id,
-        None,
-        None,
+        stored_msg.contact_name.as_deref(),
+        stored_msg.contact_phone.as_deref(),
         Some(&stored_msg.chat_type),
         stored_msg.timestamp,
     ) {
@@ -911,11 +911,11 @@ async fn send_image(
         error!("Failed to store sent image: {}", e);
     }
 
-    // Update contact's last message time
+    // Update contact's last message time (preserve contact name/phone)
     if let Err(e) = state.store.upsert_contact(
         &stored_msg.contact_id,
-        None,
-        None,
+        stored_msg.contact_name.as_deref(),
+        stored_msg.contact_phone.as_deref(),
         Some(&stored_msg.chat_type),
         stored_msg.timestamp,
     ) {
