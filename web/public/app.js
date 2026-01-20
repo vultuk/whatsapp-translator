@@ -830,13 +830,18 @@ class WhatsAppClient {
     const isFromMe = message.isFromMe || message.is_from_me;
     
     // Display logic - always show MY language (English) in the bubble:
-    // - Outgoing: show content.body/caption (English - what I typed)
+    // - Outgoing translated: show original_text (English - what I typed)
+    // - Outgoing non-translated: show content.body (English - what I typed)
     // - Incoming translated: show translated_text (English translation of what they sent)
     // - Incoming non-translated: show content.body/caption (already English)
     let displayText;
     let displayCaption;
     
-    if (isTranslated && !isFromMe) {
+    if (isTranslated && isFromMe) {
+      // Outgoing translated: show original_text (English - what I typed)
+      displayText = message.original_text || message.originalText || content.body || content.text || '';
+      displayCaption = content.caption ? (message.original_text || message.originalText || content.caption) : null;
+    } else if (isTranslated && !isFromMe) {
       // Incoming translated: show the English translation
       // translated_text contains the translated body or caption
       const translatedContent = message.translated_text || message.translatedText || '';
@@ -844,7 +849,7 @@ class WhatsAppClient {
       // For media with captions, the translated_text IS the translated caption
       displayCaption = content.caption ? translatedContent : null;
     } else {
-      // Outgoing (translated or not) or incoming non-translated: show content.body/caption
+      // Non-translated: show content.body/caption as-is
       displayText = content.body || content.text || '';
       displayCaption = content.caption || null;
     }
@@ -1860,7 +1865,7 @@ class WhatsAppClient {
     }
   }
 
-  // Convert URLs in text to clickable links (escapes non-URL text for safety)
+  // Convert URLs in text to clickable links and apply WhatsApp markdown formatting
   linkifyText(text) {
     if (!text) return '';
     
@@ -1870,8 +1875,8 @@ class WhatsAppClient {
     return parts.map((part, index) => {
       // Even indices are non-URL text, odd indices are URLs (due to capture group)
       if (index % 2 === 0) {
-        // Non-URL text - escape it
-        return this.escapeHtml(part);
+        // Non-URL text - escape it and apply WhatsApp formatting
+        return this.formatWhatsAppMarkdown(this.escapeHtml(part));
       } else {
         // URL - clean trailing punctuation and create link
         let cleanUrl = part;
@@ -1883,6 +1888,33 @@ class WhatsAppClient {
         return `<a href="${this.escapeHtml(cleanUrl)}" target="_blank" rel="noopener noreferrer" class="message-link">${this.escapeHtml(cleanUrl)}</a>${this.escapeHtml(trailing)}`;
       }
     }).join('');
+  }
+
+  // Apply WhatsApp-style markdown formatting
+  // *bold* _italic_ ~strikethrough~ ```code block``` `inline code`
+  formatWhatsAppMarkdown(text) {
+    if (!text) return '';
+    
+    // Process code blocks first (```text```) - these should not have other formatting inside
+    text = text.replace(/```([\s\S]*?)```/g, '<code class="wa-code-block">$1</code>');
+    
+    // Process inline code (`text`)
+    text = text.replace(/`([^`\n]+)`/g, '<code class="wa-code-inline">$1</code>');
+    
+    // Process bold (*text*) - must not be inside a code block
+    // Match * followed by non-whitespace, any chars, non-whitespace, then *
+    text = text.replace(/\*([^\s*](?:[^*]*[^\s*])?)\*/g, '<strong>$1</strong>');
+    
+    // Process italic (_text_) - must not be inside a code block
+    text = text.replace(/(?<![a-zA-Z0-9])_([^\s_](?:[^_]*[^\s_])?)_(?![a-zA-Z0-9])/g, '<em>$1</em>');
+    
+    // Process strikethrough (~text~)
+    text = text.replace(/~([^\s~](?:[^~]*[^\s~])?)~/g, '<s>$1</s>');
+    
+    // Convert newlines to <br>
+    text = text.replace(/\n/g, '<br>');
+    
+    return text;
   }
 
   // Load link previews for a message element

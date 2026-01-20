@@ -796,6 +796,35 @@ body {
   color: rgba(255, 255, 255, 0.7);
 }
 
+/* WhatsApp-style code formatting */
+.wa-code-block {
+  display: block;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0;
+}
+
+.message.outgoing .wa-code-block {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.wa-code-inline {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.message.outgoing .wa-code-inline {
+  background: rgba(0, 0, 0, 0.15);
+}
+
 /* Translation indicator */
 .translation-indicator {
   display: inline-flex;
