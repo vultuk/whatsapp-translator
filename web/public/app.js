@@ -289,6 +289,30 @@ class WhatsAppClient {
     }
   }
 
+  // Toggle pin status for a contact
+  async togglePin(contactId) {
+    try {
+      const response = await fetch(`/api/contacts/${encodeURIComponent(contactId)}/pin`, {
+        method: 'POST'
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to toggle pin');
+      }
+      
+      const result = await response.json();
+      
+      // Update local contact
+      const contact = this.contacts.find(c => c.id === contactId);
+      if (contact) {
+        contact.pinnedAt = result.pinned ? Date.now() : null;
+        this.renderContacts();
+      }
+    } catch (err) {
+      console.error('Failed to toggle pin:', err);
+    }
+  }
+
   // Handle status update
   handleStatus(data) {
     if (data.connected) {
@@ -714,11 +738,23 @@ class WhatsAppClient {
       return;
     }
     
-    // Sort by last message time
-    const sorted = [...this.contacts].sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+    // Contacts are already sorted by the backend (pinned first, then by last message time)
+    // But we'll sort locally too to ensure proper ordering when updates happen
+    const sorted = [...this.contacts].sort((a, b) => {
+      // Pinned items first
+      const aPinned = a.pinnedAt != null;
+      const bPinned = b.pinnedAt != null;
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+      // Both pinned: sort by pin time (earlier pinned = higher)
+      if (aPinned && bPinned) return a.pinnedAt - b.pinnedAt;
+      // Both unpinned: sort by last message time
+      return b.lastMessageTime - a.lastMessageTime;
+    });
     
     container.innerHTML = sorted.map(contact => {
       const isGroup = contact.type === 'group';
+      const isPinned = contact.pinnedAt != null;
       // Better display name logic
       let displayName = contact.name;
       if (!displayName && contact.phone) {
@@ -759,11 +795,25 @@ class WhatsAppClient {
       // Group indicator (fold mark in corner)
       const groupIndicator = isGroup ? '<div class="group-indicator"></div>' : '';
       
+      // Pin button (shows on hover, filled when pinned)
+      const pinButton = `
+        <button class="pin-button ${isPinned ? 'pinned' : ''}" 
+                onclick="event.stopPropagation(); app.togglePin('${contact.id}')" 
+                title="${isPinned ? 'Unpin' : 'Pin'}">
+          <svg viewBox="0 0 24 24" width="14" height="14">
+            <path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
+          </svg>
+        </button>
+      `;
+      
       return `
-        <div class="contact-item ${isActive ? 'active' : ''} ${isGroup ? 'is-group' : ''}" data-contact-id="${contact.id}">
-          <div class="avatar">
-            ${avatarContent}
-            ${groupIndicator}
+        <div class="contact-item ${isActive ? 'active' : ''} ${isGroup ? 'is-group' : ''} ${isPinned ? 'is-pinned' : ''}" data-contact-id="${contact.id}">
+          <div class="avatar-container">
+            <div class="avatar">
+              ${avatarContent}
+              ${groupIndicator}
+            </div>
+            ${pinButton}
           </div>
           <div class="contact-details">
             <div class="contact-header">

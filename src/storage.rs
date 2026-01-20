@@ -66,6 +66,9 @@ pub struct StoredContact {
     pub last_message_time: i64,
     #[serde(rename = "unreadCount")]
     pub unread_count: i32,
+    /// Timestamp when pinned (None = not pinned)
+    #[serde(rename = "pinnedAt")]
+    pub pinned_at: Option<i64>,
 }
 
 /// Thread-safe message store backed by SQLite
@@ -178,6 +181,30 @@ impl MessageStore {
 
         // Fix contact types based on JID suffix
         self.migrate_fix_contact_types(&conn)?;
+
+        // Add pinned_at column for pinning contacts
+        self.migrate_add_pinned_column(&conn)?;
+
+        Ok(())
+    }
+
+    /// Add pinned_at column to contacts table
+    fn migrate_add_pinned_column(&self, conn: &Connection) -> Result<()> {
+        // Check if column exists
+        let has_pinned_at: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('contacts') WHERE name = 'pinned_at'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        if !has_pinned_at {
+            info!("Migrating database: adding pinned_at column...");
+            conn.execute("ALTER TABLE contacts ADD COLUMN pinned_at INTEGER", [])?;
+            info!("Database migration complete: added pinned_at column");
+        }
 
         Ok(())
     }
@@ -356,13 +383,17 @@ impl MessageStore {
         Ok(())
     }
 
-    /// Get all contacts sorted by last message time
+    /// Get all contacts sorted by pinned status first, then last message time
     pub fn get_contacts(&self) -> Result<Vec<StoredContact>> {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
-            "SELECT id, name, phone, type, last_message_time, unread_count 
-             FROM contacts ORDER BY last_message_time DESC",
+            "SELECT id, name, phone, type, last_message_time, unread_count, pinned_at 
+             FROM contacts 
+             ORDER BY 
+                CASE WHEN pinned_at IS NOT NULL THEN 0 ELSE 1 END,
+                pinned_at ASC,
+                last_message_time DESC",
         )?;
 
         let contacts = stmt
@@ -374,12 +405,45 @@ impl MessageStore {
                     contact_type: row.get(3)?,
                     last_message_time: row.get(4)?,
                     unread_count: row.get(5)?,
+                    pinned_at: row.get(6)?,
                 })
             })?
             .filter_map(|r| r.ok())
             .collect();
 
         Ok(contacts)
+    }
+
+    /// Pin or unpin a contact
+    pub fn toggle_pin(&self, contact_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+
+        // Check if currently pinned
+        let currently_pinned: Option<i64> = conn
+            .query_row(
+                "SELECT pinned_at FROM contacts WHERE id = ?",
+                params![contact_id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+
+        if currently_pinned.is_some() {
+            // Unpin
+            conn.execute(
+                "UPDATE contacts SET pinned_at = NULL WHERE id = ?",
+                params![contact_id],
+            )?;
+            Ok(false) // Now unpinned
+        } else {
+            // Pin with current timestamp
+            let now = chrono::Utc::now().timestamp_millis();
+            conn.execute(
+                "UPDATE contacts SET pinned_at = ? WHERE id = ?",
+                params![now, contact_id],
+            )?;
+            Ok(true) // Now pinned
+        }
     }
 
     /// Get messages for a specific contact
@@ -443,7 +507,7 @@ impl MessageStore {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
-            "SELECT id, name, phone, type, last_message_time, unread_count 
+            "SELECT id, name, phone, type, last_message_time, unread_count, pinned_at 
              FROM contacts WHERE id = ?",
         )?;
 
@@ -456,6 +520,7 @@ impl MessageStore {
                     contact_type: row.get(3)?,
                     last_message_time: row.get(4)?,
                     unread_count: row.get(5)?,
+                    pinned_at: row.get(6)?,
                 })
             })
             .ok();

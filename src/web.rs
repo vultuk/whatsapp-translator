@@ -435,6 +435,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // API routes
         .route("/api/status", get(get_status))
         .route("/api/contacts", get(get_contacts))
+        .route("/api/contacts/:contact_id/pin", post(toggle_pin))
         .route("/api/messages/:contact_id", get(get_messages))
         .route("/api/avatar/:jid", get(get_avatar))
         .route("/api/qr", get(get_qr))
@@ -618,6 +619,28 @@ async fn get_contacts(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         Err(e) => {
             error!("Failed to get contacts: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get contacts").into_response()
+        }
+    }
+}
+
+/// Toggle pin status for a contact
+async fn toggle_pin(
+    State(state): State<Arc<AppState>>,
+    Path(contact_id): Path<String>,
+) -> impl IntoResponse {
+    let contact_id = urlencoding::decode(&contact_id)
+        .map(|s| s.into_owned())
+        .unwrap_or(contact_id);
+
+    match state.store.toggle_pin(&contact_id) {
+        Ok(is_pinned) => Json(serde_json::json!({
+            "success": true,
+            "pinned": is_pinned
+        }))
+        .into_response(),
+        Err(e) => {
+            error!("Failed to toggle pin: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to toggle pin").into_response()
         }
     }
 }

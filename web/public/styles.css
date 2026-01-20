@@ -326,6 +326,68 @@ body {
   flex-shrink: 0;
 }
 
+/* Avatar container with pin button */
+.avatar-container {
+  position: relative;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+.avatar-container .avatar {
+  margin-right: 0;
+}
+
+/* Pin button */
+.pin-button {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  color: var(--text-secondary);
+  padding: 0;
+  z-index: 2;
+}
+
+.contact-item:hover .pin-button {
+  opacity: 1;
+}
+
+.pin-button:hover {
+  background: var(--accent-color);
+  color: white;
+  border-color: var(--accent-color);
+}
+
+/* Pinned state */
+.pin-button.pinned {
+  opacity: 1;
+  color: var(--accent-color);
+}
+
+.pin-button.pinned:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+/* Pinned contact indicator */
+.contact-item.is-pinned {
+  background: rgba(0, 168, 132, 0.05);
+}
+
+.contact-item.is-pinned:hover {
+  background: rgba(0, 168, 132, 0.1);
+}
+
 .contact-details {
   flex: 1;
   min-width: 0;
