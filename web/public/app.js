@@ -616,9 +616,11 @@ class WhatsAppClient {
     
     switch (content.type) {
       case 'text':
+        // Use single quotes for data-urls attribute since JSON contains double quotes
+        const urlsJson = hasUrls ? JSON.stringify(urls).replace(/'/g, '&#39;') : '';
         return `
           <div class="message-text">${this.linkifyText(displayText)}</div>
-          ${hasUrls ? `<div class="link-previews-container" data-urls="${this.escapeHtml(JSON.stringify(urls))}"></div>` : ''}
+          ${hasUrls ? `<div class="link-previews-container" data-urls='${urlsJson}'></div>` : ''}
         `;
       
       case 'image':
