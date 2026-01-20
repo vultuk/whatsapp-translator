@@ -329,14 +329,22 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 				}
 			} else {
 				// Incoming message
+				var senderJID types.JID
 				if webMsg.Key.Participant != nil && *webMsg.Key.Participant != "" {
 					// Group message - participant is sender
-					participantJID, _ := types.ParseJID(*webMsg.Key.Participant)
-					msg.From = c.buildContact(participantJID)
+					senderJID, _ = types.ParseJID(*webMsg.Key.Participant)
 				} else if webMsg.Key.RemoteJID != nil {
 					// Private message - remote JID is sender
-					senderJID, _ := types.ParseJID(*webMsg.Key.RemoteJID)
-					msg.From = c.buildContact(senderJID)
+					senderJID, _ = types.ParseJID(*webMsg.Key.RemoteJID)
+				}
+
+				// Build contact from JID
+				msg.From = c.buildContact(senderJID)
+
+				// If we have a push name from the message, use it as the contact name
+				// This is more reliable for history messages where contact store might not have the info
+				if webMsg.PushName != nil && *webMsg.PushName != "" {
+					msg.From.Name = *webMsg.PushName
 				}
 			}
 
@@ -490,8 +498,13 @@ func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageC
 // buildContact creates a Contact from a JID
 func (c *Client) buildContact(jid types.JID) Contact {
 	contact := Contact{
-		JID:   jid.String(),
-		Phone: jid.User,
+		JID: jid.String(),
+	}
+
+	// Only set phone if it's a real phone number (not a LID)
+	// LIDs have server "lid" and the user part is not a phone number
+	if jid.Server != "lid" && jid.User != "" {
+		contact.Phone = jid.User
 	}
 
 	// Try to get contact name from store
