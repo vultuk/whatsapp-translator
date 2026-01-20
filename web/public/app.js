@@ -15,14 +15,143 @@ class WhatsAppClient {
     this.typingState = new Map(); // chatId -> { userId, state, timestamp }
     this.typingTimeouts = new Map(); // chatId -> timeoutId (auto-clear after 10s)
     this.replyingTo = null; // { messageId, senderJid, senderName, text, isFromMe }
+    this.authToken = localStorage.getItem('wa_auth_token'); // Auth token for API requests
     
     this.init();
   }
 
-  init() {
+  async init() {
+    // Check if authentication is required
+    const authRequired = await this.checkAuth();
+    
+    if (authRequired && !this.authToken) {
+      this.showPasswordOverlay();
+      this.bindPasswordEvents();
+      return;
+    }
+    
+    // If we have a token, verify it's still valid
+    if (authRequired && this.authToken) {
+      const valid = await this.verifyToken();
+      if (!valid) {
+        this.authToken = null;
+        localStorage.removeItem('wa_auth_token');
+        this.showPasswordOverlay();
+        this.bindPasswordEvents();
+        return;
+      }
+    }
+    
+    // Auth passed, continue with normal initialization
+    this.startApp();
+  }
+
+  startApp() {
+    document.getElementById('password-overlay')?.classList.add('hidden');
     this.connectWebSocket();
     this.bindEvents();
     this.updateInputPlaceholder();
+  }
+
+  async checkAuth() {
+    try {
+      const response = await fetch('/api/auth/check');
+      const data = await response.json();
+      return data.required;
+    } catch (err) {
+      console.error('Failed to check auth:', err);
+      return false;
+    }
+  }
+
+  async verifyToken() {
+    try {
+      // Try to make an authenticated request to verify token is valid
+      const response = await fetch('/api/status', {
+        headers: this.getAuthHeaders()
+      });
+      return response.ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  showPasswordOverlay() {
+    document.getElementById('password-overlay')?.classList.remove('hidden');
+    document.getElementById('connecting-overlay')?.classList.add('hidden');
+    document.getElementById('password-input')?.focus();
+  }
+
+  bindPasswordEvents() {
+    const input = document.getElementById('password-input');
+    const submit = document.getElementById('password-submit');
+    const error = document.getElementById('password-error');
+
+    submit?.addEventListener('click', () => this.handleLogin());
+    
+    input?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        this.handleLogin();
+      }
+    });
+
+    input?.addEventListener('input', () => {
+      error?.classList.add('hidden');
+    });
+  }
+
+  async handleLogin() {
+    const input = document.getElementById('password-input');
+    const submit = document.getElementById('password-submit');
+    const error = document.getElementById('password-error');
+    
+    const password = input?.value;
+    if (!password) return;
+
+    submit.disabled = true;
+    error?.classList.add('hidden');
+
+    try {
+      const response = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        // Store token
+        if (result.token) {
+          this.authToken = result.token;
+          localStorage.setItem('wa_auth_token', result.token);
+        }
+        
+        // Clear password input
+        if (input) input.value = '';
+        
+        // Start the app
+        this.startApp();
+      } else {
+        error?.classList.remove('hidden');
+        input?.focus();
+        input?.select();
+      }
+    } catch (err) {
+      console.error('Login failed:', err);
+      error?.classList.remove('hidden');
+    } finally {
+      submit.disabled = false;
+    }
+  }
+
+  // Get auth headers for API requests
+  getAuthHeaders() {
+    const headers = {};
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+    return headers;
   }
 
   // Update placeholder to show correct keyboard shortcut for OS

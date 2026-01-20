@@ -16,6 +16,19 @@
 </head>
 <body>
   <div id="app">
+    <!-- Password Overlay -->
+    <div id="password-overlay" class="overlay hidden">
+      <div class="overlay-content">
+        <h2>Authentication Required</h2>
+        <p>Please enter the password to access WhatsApp Translator</p>
+        <div class="password-form">
+          <input type="password" id="password-input" placeholder="Enter password" autocomplete="current-password">
+          <button id="password-submit" class="password-button">Login</button>
+        </div>
+        <p id="password-error" class="password-error hidden">Invalid password. Please try again.</p>
+      </div>
+    </div>
+
     <!-- QR Code Overlay -->
     <div id="qr-overlay" class="overlay hidden">
       <div class="overlay-content">

@@ -47,6 +47,10 @@ pub struct Args {
     /// Default language for messages (messages in this language won't be translated)
     #[arg(long, default_value = "English", env = "WA_DEFAULT_LANGUAGE")]
     pub default_language: String,
+
+    /// Password to protect the web interface (if not set, no password required)
+    #[arg(long, env = "WA_PASSWORD")]
+    pub password: Option<String>,
 }
 
 impl Args {

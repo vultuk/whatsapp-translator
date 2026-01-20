@@ -53,6 +53,10 @@ pub struct AppState {
     pub pending_avatar_requests: RwLock<HashMap<i32, oneshot::Sender<Option<String>>>>,
     /// Request ID counter
     pub request_id_counter: AtomicI32,
+    /// Password for web interface (None = no password required)
+    pub password: Option<String>,
+    /// Valid auth tokens (simple session management)
+    pub auth_tokens: RwLock<std::collections::HashSet<String>>,
 }
 
 /// Events sent to WebSocket clients
@@ -192,11 +196,34 @@ pub struct AiComposeResponse {
     pub cost_usd: Option<f64>,
 }
 
+/// Auth check response
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthCheckResponse {
+    pub required: bool,
+}
+
+/// Auth request
+#[derive(Deserialize)]
+pub struct AuthRequest {
+    pub password: String,
+}
+
+/// Auth response
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthResponse {
+    pub success: bool,
+    pub token: Option<String>,
+    pub error: Option<String>,
+}
+
 impl AppState {
     pub fn new(
         store: MessageStore,
         web_dir: PathBuf,
         translator: Option<Arc<TranslationService>>,
+        password: Option<String>,
     ) -> Arc<Self> {
         let (broadcast_tx, _) = broadcast::channel(100);
 
@@ -213,6 +240,8 @@ impl AppState {
             avatar_cache: RwLock::new(HashMap::new()),
             pending_avatar_requests: RwLock::new(HashMap::new()),
             request_id_counter: AtomicI32::new(1),
+            password,
+            auth_tokens: RwLock::new(std::collections::HashSet::new()),
         })
     }
 
@@ -367,6 +396,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let serve_dir = ServeDir::new(&state.web_dir);
 
     Router::new()
+        // Auth routes (no auth required)
+        .route("/api/auth/check", get(auth_check))
+        .route("/api/auth", post(auth_login))
         // API routes
         .route("/api/status", get(get_status))
         .route("/api/contacts", get(get_contacts))
@@ -400,6 +432,83 @@ pub async fn start_server(state: Arc<AppState>, host: &str, port: u16) -> anyhow
     axum::serve(listener, router).await?;
 
     Ok(())
+}
+
+// Auth Handlers
+
+/// Check if authentication is required
+async fn auth_check(State(state): State<Arc<AppState>>) -> Json<AuthCheckResponse> {
+    Json(AuthCheckResponse {
+        required: state.password.is_some(),
+    })
+}
+
+/// Handle login attempt
+async fn auth_login(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AuthRequest>,
+) -> impl IntoResponse {
+    // If no password is set, auth is not required
+    let Some(expected_password) = &state.password else {
+        return Json(AuthResponse {
+            success: true,
+            token: None,
+            error: None,
+        })
+        .into_response();
+    };
+
+    // Check password
+    if req.password == *expected_password {
+        // Generate a simple token (hash of password + timestamp for uniqueness)
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        expected_password.hash(&mut hasher);
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .hash(&mut hasher);
+        let token = format!("{:x}", hasher.finish());
+
+        // Store the token
+        state.auth_tokens.write().await.insert(token.clone());
+
+        info!("User authenticated successfully");
+        Json(AuthResponse {
+            success: true,
+            token: Some(token),
+            error: None,
+        })
+        .into_response()
+    } else {
+        warn!("Failed authentication attempt");
+        Json(AuthResponse {
+            success: false,
+            token: None,
+            error: Some("Invalid password".to_string()),
+        })
+        .into_response()
+    }
+}
+
+/// Verify auth token from request header
+async fn verify_auth(state: &Arc<AppState>, auth_header: Option<&str>) -> bool {
+    // If no password is set, no auth required
+    if state.password.is_none() {
+        return true;
+    }
+
+    // Check for valid token in header
+    if let Some(header) = auth_header {
+        if let Some(token) = header.strip_prefix("Bearer ") {
+            return state.auth_tokens.read().await.contains(token);
+        }
+    }
+
+    false
 }
 
 // API Handlers

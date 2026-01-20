@@ -129,8 +129,13 @@ async fn run_web_mode(
     let web_dir = find_web_dir()?;
     info!("Serving web files from: {:?}", web_dir);
 
-    // Create app state with translator
-    let state = AppState::new(store.clone(), web_dir, translator.clone());
+    // Create app state with translator and password
+    let state = AppState::new(
+        store.clone(),
+        web_dir,
+        translator.clone(),
+        args.password.clone(),
+    );
 
     // Channel for receiving events from the bridge
     let (event_tx, mut event_rx) = mpsc::channel::<BridgeEvent>(100);
