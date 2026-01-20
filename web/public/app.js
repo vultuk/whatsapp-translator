@@ -722,10 +722,23 @@ class WhatsAppClient {
       </div>
     `;
     
+    // Quoted message (reply context)
+    let quotedMessage = '';
+    if (message.replyContext) {
+      const ctx = message.replyContext;
+      quotedMessage = `
+        <div class="quoted-message">
+          <div class="quoted-sender">${this.escapeHtml(ctx.senderName || 'Unknown')}</div>
+          <div class="quoted-text">${this.escapeHtml(ctx.text || '')}</div>
+        </div>
+      `;
+    }
+    
     return `
       <div class="message ${isOutgoing ? 'outgoing' : 'incoming'}" data-message-id="${messageId}">
         ${forwarded}
         ${sender}
+        ${quotedMessage}
         ${content}
         <div class="message-footer">
           ${translationIndicator}
@@ -923,6 +936,9 @@ class WhatsAppClient {
         throw new Error(result.error || 'Failed to send message');
       }
       
+      // Save reply context before clearing (for local message display)
+      const replyContext = this.replyingTo ? { ...this.replyingTo } : null;
+      
       // Clear input and reply state on success
       input.value = '';
       this.clearReply();
@@ -941,7 +957,9 @@ class WhatsAppClient {
         isTranslated: result.isTranslated || false,
         originalText: result.isTranslated ? text : null,  // What user typed (English)
         translatedText: result.translatedText || null,     // What was sent (foreign language)
-        sourceLanguage: result.sourceLanguage || null      // Target language
+        sourceLanguage: result.sourceLanguage || null,     // Target language
+        // Include reply context if this was a reply
+        replyContext: replyContext
       };
       
       // Add to local store and display
@@ -1028,6 +1046,9 @@ class WhatsAppClient {
         throw new Error(result.error || 'Failed to send image');
       }
 
+      // Save reply context before clearing (for local message display)
+      const replyContext = this.replyingTo ? { ...this.replyingTo } : null;
+      
       // Clear reply state on success
       this.clearReply();
       
@@ -1042,7 +1063,9 @@ class WhatsAppClient {
           type: 'image', 
           mime_type: file.type,
           media_data: mediaData
-        }
+        },
+        // Include reply context if this was a reply
+        replyContext: replyContext
       };
 
       // Add to local store and display

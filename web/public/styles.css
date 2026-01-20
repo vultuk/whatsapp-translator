@@ -724,6 +724,45 @@ body {
   background: rgba(255, 255, 255, 0.1);
 }
 
+/* Quoted message in replies */
+.quoted-message {
+  background: rgba(0, 0, 0, 0.2);
+  border-left: 3px solid var(--accent-color);
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+
+.message.outgoing .quoted-message {
+  background: rgba(0, 0, 0, 0.15);
+  border-left-color: rgba(255, 255, 255, 0.5);
+}
+
+.quoted-sender {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-color);
+  margin-bottom: 2px;
+}
+
+.message.outgoing .quoted-sender {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.quoted-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 250px;
+}
+
+.message.outgoing .quoted-text {
+  color: rgba(255, 255, 255, 0.7);
+}
+
 /* Translation indicator */
 .translation-indicator {
   display: inline-flex;
