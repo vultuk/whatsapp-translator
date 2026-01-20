@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 /// Models to use for translation
 const DETECTION_MODEL: &str = "claude-3-5-haiku-latest";
 const TRANSLATION_MODEL: &str = "claude-sonnet-4-20250514";
-const AI_COMPOSE_MODEL: &str = "claude-opus-4-5-20250514";
+const AI_COMPOSE_MODEL: &str = "claude-opus-4-5-20250929";
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
