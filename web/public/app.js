@@ -232,6 +232,7 @@ class WhatsAppClient {
   // Handle typing indicator
   handleTyping(data) {
     const { chat_id, user_id, state } = data;
+    console.log('Typing event received:', { chat_id, user_id, state, currentContactId: this.currentContactId });
     
     // Clear existing timeout for this chat
     if (this.typingTimeouts.has(chat_id)) {
@@ -283,16 +284,23 @@ class WhatsAppClient {
   // Update typing indicator in chat header
   updateTypingIndicator() {
     const indicatorEl = document.getElementById('typing-indicator');
-    if (!indicatorEl) return;
+    console.log('updateTypingIndicator called, element:', indicatorEl, 'currentContactId:', this.currentContactId);
+    if (!indicatorEl) {
+      console.warn('typing-indicator element not found!');
+      return;
+    }
     
     const typingInfo = this.typingState.get(this.currentContactId);
+    console.log('typingInfo for current contact:', typingInfo);
     
     if (typingInfo) {
       const text = typingInfo.state === 'recording' ? 'recording audio...' : 'typing...';
       indicatorEl.textContent = text;
       indicatorEl.classList.remove('hidden');
+      console.log('Showing typing indicator:', text);
     } else {
       indicatorEl.classList.add('hidden');
+      console.log('Hiding typing indicator');
     }
   }
 

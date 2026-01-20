@@ -297,7 +297,8 @@ async fn handle_web_event(
                 bridge::ChatPresenceState::Paused => "paused",
                 bridge::ChatPresenceState::Recording => "recording",
             };
-            debug!("Chat presence: {} is {} in {}", user_id, state_str, chat_id);
+            // Log at info level so it's always visible
+            info!("Chat presence: {} is {} in {}", user_id, state_str, chat_id);
             // Broadcast to WebSocket clients
             state.broadcast_typing(chat_id, user_id, state_str.to_string());
         }

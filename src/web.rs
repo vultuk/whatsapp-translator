@@ -195,11 +195,20 @@ impl AppState {
 
     /// Broadcast a typing indicator
     pub fn broadcast_typing(&self, chat_id: String, user_id: String, state: String) {
-        let _ = self.broadcast_tx.send(WebSocketEvent::Typing {
+        tracing::info!(
+            "Broadcasting typing event: chat={}, user={}, state={}",
+            chat_id,
+            user_id,
+            state
+        );
+        let result = self.broadcast_tx.send(WebSocketEvent::Typing {
             chat_id,
             user_id,
             state,
         });
+        if let Err(e) = result {
+            tracing::warn!("Failed to broadcast typing event: {}", e);
+        }
     }
 
     /// Get next request ID

@@ -142,6 +142,11 @@ func (c *Client) IsLoggedIn() bool {
 
 // handleEvent processes events from whatsmeow
 func (c *Client) handleEvent(evt interface{}) {
+	// Log all event types for debugging (enable with verbose mode)
+	if c.verbose {
+		SendEvent(NewLogEvent("debug", fmt.Sprintf("Event received: %T", evt)))
+	}
+
 	switch v := evt.(type) {
 	case *events.Connected:
 		c.sendConnectedEvent()
@@ -188,7 +193,9 @@ func (c *Client) handleEvent(evt interface{}) {
 		case types.ChatPresencePaused:
 			state = "paused"
 		}
-		// Always send chat presence events (they're useful for UX)
+		// Log for debugging (use info level so it always shows)
+		SendEvent(NewLogEvent("info", fmt.Sprintf("ChatPresence: chat=%s sender=%s state=%s media=%s", v.Chat.String(), v.Sender.String(), v.State, v.Media)))
+		// Send chat presence event
 		SendEvent(NewChatPresenceEvent(v.Chat.String(), v.Sender.String(), state))
 
 	case *events.HistorySync:
