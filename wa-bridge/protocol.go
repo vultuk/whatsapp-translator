@@ -197,6 +197,7 @@ func NewMessageEvent(msg Message) map[string]interface{} {
 		"content":      msg.Content,
 		"is_from_me":   msg.IsFromMe,
 		"is_forwarded": msg.IsForwarded,
+		"is_history":   msg.IsHistory,
 		"push_name":    msg.PushName,
 	}
 }
