@@ -288,6 +288,7 @@ impl MessageDisplay {
                 mime_type,
                 file_size,
                 duration_seconds,
+                ..
             } => {
                 self.print_media_info(stdout, "Video", mime_type, *file_size)?;
                 if let Some(duration) = duration_seconds {
@@ -315,6 +316,7 @@ impl MessageDisplay {
                 file_size,
                 duration_seconds,
                 is_voice_note,
+                ..
             } => {
                 let label = if *is_voice_note {
                     "Voice Note"
@@ -337,6 +339,7 @@ impl MessageDisplay {
                 mime_type,
                 file_name,
                 file_size,
+                ..
             } => {
                 let name = file_name.as_deref().unwrap_or("document");
                 execute!(

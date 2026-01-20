@@ -857,6 +857,7 @@ impl serde::Serialize for bridge::MessageContent {
                 mime_type,
                 file_size,
                 duration_seconds,
+                media_data,
             } => {
                 map.serialize_entry("type", "video")?;
                 map.serialize_entry("mime_type", mime_type)?;
@@ -867,12 +868,16 @@ impl serde::Serialize for bridge::MessageContent {
                 if let Some(d) = duration_seconds {
                     map.serialize_entry("duration_seconds", d)?;
                 }
+                if let Some(data) = media_data {
+                    map.serialize_entry("media_data", data)?;
+                }
             }
             bridge::MessageContent::Audio {
                 mime_type,
                 file_size,
                 duration_seconds,
                 is_voice_note,
+                media_data,
             } => {
                 map.serialize_entry("type", "audio")?;
                 map.serialize_entry("mime_type", mime_type)?;
@@ -881,12 +886,16 @@ impl serde::Serialize for bridge::MessageContent {
                 if let Some(d) = duration_seconds {
                     map.serialize_entry("duration_seconds", d)?;
                 }
+                if let Some(data) = media_data {
+                    map.serialize_entry("media_data", data)?;
+                }
             }
             bridge::MessageContent::Document {
                 caption,
                 mime_type,
                 file_name,
                 file_size,
+                media_data,
             } => {
                 map.serialize_entry("type", "document")?;
                 map.serialize_entry("mime_type", mime_type)?;
@@ -897,14 +906,21 @@ impl serde::Serialize for bridge::MessageContent {
                 if let Some(n) = file_name {
                     map.serialize_entry("file_name", n)?;
                 }
+                if let Some(data) = media_data {
+                    map.serialize_entry("media_data", data)?;
+                }
             }
             bridge::MessageContent::Sticker {
                 mime_type,
                 is_animated,
+                media_data,
             } => {
                 map.serialize_entry("type", "sticker")?;
                 map.serialize_entry("mime_type", mime_type)?;
                 map.serialize_entry("is_animated", is_animated)?;
+                if let Some(data) = media_data {
+                    map.serialize_entry("media_data", data)?;
+                }
             }
             bridge::MessageContent::Location {
                 latitude,

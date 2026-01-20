@@ -171,6 +171,8 @@ pub enum MessageContent {
         mime_type: String,
         file_size: u64,
         duration_seconds: Option<u32>,
+        /// Base64 encoded video data
+        media_data: Option<String>,
     },
 
     /// Audio message (including voice notes)
@@ -179,6 +181,8 @@ pub enum MessageContent {
         file_size: u64,
         duration_seconds: Option<u32>,
         is_voice_note: bool,
+        /// Base64 encoded audio data
+        media_data: Option<String>,
     },
 
     /// Document/file message
@@ -187,12 +191,16 @@ pub enum MessageContent {
         mime_type: String,
         file_name: Option<String>,
         file_size: u64,
+        /// Base64 encoded document data
+        media_data: Option<String>,
     },
 
     /// Sticker message
     Sticker {
         mime_type: String,
         is_animated: bool,
+        /// Base64 encoded sticker data
+        media_data: Option<String>,
     },
 
     /// Location message
