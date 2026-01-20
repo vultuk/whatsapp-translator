@@ -610,9 +610,12 @@ body {
   font-size: 14px;
   font-family: inherit;
   resize: none;
-  max-height: 120px;
+  min-height: 24px;
+  max-height: 150px;
   line-height: 1.4;
   padding: 4px 0;
+  overflow-y: auto;
+  transition: height 0.1s ease;
 }
 
 #message-input::placeholder {

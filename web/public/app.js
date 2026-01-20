@@ -14,6 +14,17 @@ class WhatsAppClient {
   init() {
     this.connectWebSocket();
     this.bindEvents();
+    this.updateInputPlaceholder();
+  }
+
+  // Update placeholder to show correct keyboard shortcut for OS
+  updateInputPlaceholder() {
+    const input = document.getElementById('message-input');
+    if (input) {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const shortcut = isMac ? '⌘+Enter' : 'Ctrl+Enter';
+      input.placeholder = `Type a message (${shortcut} to send)`;
+    }
   }
 
   // WebSocket connection
@@ -641,10 +652,10 @@ class WhatsAppClient {
     sendButton.disabled = !input.value.trim() || !this.currentContactId;
   }
 
-  // Auto-resize textarea
+  // Auto-resize textarea (expands up to max-height)
   autoResizeTextarea(textarea) {
     textarea.style.height = 'auto';
-    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
   }
 
   // Bind UI events
@@ -681,10 +692,10 @@ class WhatsAppClient {
       this.autoResizeTextarea(input);
     });
 
-    // Send on Enter (but allow Shift+Enter for newlines)
-    // On mobile, Enter should create newlines by default
+    // Send on Cmd+Enter (Mac) or Ctrl+Enter (Windows/Linux)
+    // Plain Enter creates newlines (like WhatsApp desktop)
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !this.isMobile()) {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         if (!sendButton.disabled) {
           this.sendMessage();
