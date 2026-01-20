@@ -114,25 +114,23 @@ class WhatsAppClient {
     }
   }
 
-  // Simple QR code renderer (using qrcode-generator logic embedded)
+  // Fallback QR code renderer - displays text if library not available
   renderQRCode(container, data) {
-    // Load qrcode library dynamically
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js';
-    script.onload = () => {
-      const canvas = document.createElement('canvas');
-      QRCode.toCanvas(canvas, data, { 
-        width: 264,
-        margin: 2,
-        color: {
-          dark: '#000000',
-          light: '#ffffff'
-        }
-      });
+    // If QRCode library is available, use it
+    if (typeof QRCode !== 'undefined') {
       container.innerHTML = '';
-      container.appendChild(canvas);
-    };
-    document.head.appendChild(script);
+      new QRCode(container, {
+        text: data,
+        width: 264,
+        height: 264,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.L
+      });
+    } else {
+      // Fallback: show the QR data as text for manual entry
+      container.innerHTML = `<div style="word-break: break-all; font-size: 10px; max-width: 264px;">${data}</div>`;
+    }
   }
 
   // Handle connected state
