@@ -175,6 +175,25 @@ pub struct SendReactionResponse {
     pub success: bool,
 }
 
+/// Translate message request
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslateMessageRequest {
+    pub text: String,
+    pub message_id: String,
+    pub contact_id: String,
+}
+
+/// Translate message response
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslateMessageResponse {
+    pub success: bool,
+    pub translated_text: Option<String>,
+    pub source_language: Option<String>,
+    pub error: Option<String>,
+}
+
 /// AI compose request
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -423,6 +442,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/send-image", post(send_image))
         .route("/api/react", post(send_reaction))
         .route("/api/ai-compose", post(ai_compose))
+        .route("/api/translate", post(translate_message))
         .route("/api/stats", get(get_stats))
         .route("/api/usage", get(get_global_usage))
         .route("/api/usage/:contact_id", get(get_conversation_usage))
@@ -994,6 +1014,60 @@ async fn send_reaction(
     }
 
     Json(SendReactionResponse { success: true }).into_response()
+}
+
+/// Translate a message manually
+async fn translate_message(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TranslateMessageRequest>,
+) -> impl IntoResponse {
+    // Check if translation service is available
+    let translator = match &state.translator {
+        Some(t) => t,
+        None => {
+            return Json(TranslateMessageResponse {
+                success: false,
+                translated_text: None,
+                source_language: None,
+                error: Some("Translation service not configured".to_string()),
+            })
+            .into_response();
+        }
+    };
+
+    // Call the translation service
+    let result = translator.process_text(&req.text).await;
+
+    // Record usage if there was API usage
+    if result.usage.input_tokens > 0 {
+        if let Err(e) = state.store.record_usage(
+            Some(&req.contact_id),
+            Some(&req.message_id),
+            &result.usage,
+            "manual_translate",
+        ) {
+            warn!("Failed to record translation usage: {}", e);
+        }
+    }
+
+    // Update the message in the database with the translation
+    if result.needs_translation {
+        if let Err(e) = state.store.update_message_translation(
+            &req.message_id,
+            result.translated_text.as_deref(),
+            Some(&result.source_language),
+        ) {
+            warn!("Failed to update message translation in DB: {}", e);
+        }
+    }
+
+    Json(TranslateMessageResponse {
+        success: true,
+        translated_text: result.translated_text,
+        source_language: Some(result.source_language),
+        error: None,
+    })
+    .into_response()
 }
 
 /// AI compose endpoint - generates a message using Claude

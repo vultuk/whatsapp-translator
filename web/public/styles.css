@@ -790,15 +790,23 @@ body {
 
 .message-footer {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   margin-top: 4px;
 }
 
 .message-time {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.6);
+  order: -1; /* Time goes first (left) */
+}
+
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto; /* Push actions to the right */
 }
 
 .message-forwarded {
@@ -808,34 +816,33 @@ body {
   margin-bottom: 4px;
 }
 
-/* Reaction button and picker */
-.reaction-button-container {
-  position: relative;
-  display: inline-flex;
-  margin-left: 4px;
-}
-
-.reaction-button {
+/* Message action buttons (always visible) */
+.message-action-btn {
   background: transparent;
   border: none;
   cursor: pointer;
-  padding: 2px;
-  color: var(--text-secondary);
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
+  padding: 4px;
+  color: rgba(255, 255, 255, 0.5);
+  transition: color 0.15s, background 0.15s;
   display: flex;
   align-items: center;
   border-radius: 4px;
 }
 
-.message:hover .reaction-button {
-  opacity: 0.6;
+.message-action-btn:hover {
+  color: var(--accent-color);
+  background: rgba(0, 168, 132, 0.15);
 }
 
-.reaction-button:hover {
-  opacity: 1 !important;
-  color: var(--accent-color);
-  background: rgba(0, 168, 132, 0.1);
+.message-action-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Reaction button and picker */
+.reaction-button-container {
+  position: relative;
+  display: inline-flex;
 }
 
 .reaction-picker {
@@ -877,29 +884,22 @@ body {
   left: 0;
 }
 
-/* Reply button */
-.reply-button {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: 2px;
-  color: var(--text-secondary);
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
-  display: flex;
-  align-items: center;
-  border-radius: 4px;
-  margin-left: 4px;
+/* Translate button - highlight untranslated incoming messages */
+.translate-button {
+  color: rgba(255, 255, 255, 0.4);
 }
 
-.message:hover .reply-button {
-  opacity: 0.6;
+.translate-button:hover {
+  color: #4fc3f7;
+  background: rgba(79, 195, 247, 0.15);
 }
 
-.reply-button:hover {
-  opacity: 1 !important;
-  color: var(--accent-color);
-  background: rgba(0, 168, 132, 0.1);
+.translate-button.can-translate {
+  color: rgba(79, 195, 247, 0.7);
+}
+
+.translate-button.can-translate:hover {
+  color: #4fc3f7;
 }
 
 /* Reply Preview Bar */

@@ -335,6 +335,27 @@ impl MessageStore {
         Ok(())
     }
 
+    /// Update the translation for an existing message
+    pub fn update_message_translation(
+        &self,
+        message_id: &str,
+        translated_text: Option<&str>,
+        source_language: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            r#"
+            UPDATE messages 
+            SET translated_text = ?1, source_language = ?2, is_translated = 1
+            WHERE id = ?3
+            "#,
+            params![translated_text, source_language, message_id],
+        )?;
+
+        Ok(())
+    }
+
     /// Get all contacts sorted by last message time
     pub fn get_contacts(&self) -> Result<Vec<StoredContact>> {
         let conn = self.conn.lock().unwrap();

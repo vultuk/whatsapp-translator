@@ -996,18 +996,32 @@ class WhatsAppClient {
     const senderJid = message.senderPhone || message.sender_phone || '';
     const contactId = message.contactId || message.contact_id || this.currentContactId;
     
+    // Check if message can be translated (incoming, has text, not already translated)
+    const isTranslated = message.is_translated || message.isTranslated;
+    const hasText = message.content && (message.content.body || message.content.caption || message.content.text);
+    const canTranslate = !isOutgoing && hasText && !isTranslated;
+    
+    // Translate button (for untranslated incoming messages)
+    const translateButton = `
+      <button class="message-action-btn translate-button ${canTranslate ? 'can-translate' : ''}" 
+              onclick="event.stopPropagation(); app.translateMessage('${messageId}')" 
+              title="${isTranslated ? 'Already translated' : (canTranslate ? 'Translate' : 'No text to translate')}">
+        <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
+      </button>
+    `;
+    
     // Reply button
     const replyButton = `
-      <button class="reply-button" onclick="event.stopPropagation(); app.handleReplyClick('${messageId}')" title="Reply">
-        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
+      <button class="message-action-btn" onclick="event.stopPropagation(); app.handleReplyClick('${messageId}')" title="Reply">
+        <svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
       </button>
     `;
     
     // Reaction button with quick emoji picker
     const reactionButton = `
       <div class="reaction-button-container">
-        <button class="reaction-button" onclick="event.stopPropagation(); this.parentElement.querySelector('.reaction-picker').classList.toggle('show');" title="React">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-6c.78 2.34 2.72 4 5 4s4.22-1.66 5-4H7zm2-3c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm6 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1z"/></svg>
+        <button class="message-action-btn" onclick="event.stopPropagation(); this.parentElement.querySelector('.reaction-picker').classList.toggle('show');" title="React">
+          <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-6c.78 2.34 2.72 4 5 4s4.22-1.66 5-4H7zm2-3c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm6 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1z"/></svg>
         </button>
         <div class="reaction-picker">
           <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '👍')">👍</span>
@@ -1043,10 +1057,13 @@ class WhatsAppClient {
         ${content}
         ${reactionsHtml}
         <div class="message-footer">
-          ${translationIndicator}
           <span class="message-time">${time}</span>
-          ${replyButton}
-          ${reactionButton}
+          ${translationIndicator}
+          <div class="message-actions">
+            ${translateButton}
+            ${replyButton}
+            ${reactionButton}
+          </div>
         </div>
       </div>
     `;
@@ -1570,6 +1587,61 @@ class WhatsAppClient {
     } catch (err) {
       console.error('Failed to send reaction:', err);
       alert('Failed to send reaction: ' + err.message);
+    }
+  }
+
+  // Translate a message manually
+  async translateMessage(messageId) {
+    const messages = this.messages.get(this.currentContactId);
+    if (!messages) return;
+    
+    const message = messages.find(m => m.id === messageId);
+    if (!message) return;
+    
+    // Check if already translated
+    if (message.is_translated || message.isTranslated) {
+      alert('This message has already been translated.');
+      return;
+    }
+    
+    // Get the text to translate
+    const text = message.content?.body || message.content?.caption || message.content?.text;
+    if (!text) {
+      alert('No text to translate in this message.');
+      return;
+    }
+    
+    try {
+      // Call the translation API
+      const response = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          text: text,
+          messageId: messageId,
+          contactId: this.currentContactId
+        })
+      });
+      
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.error || 'Translation failed');
+      }
+      
+      const result = await response.json();
+      
+      // Update the local message with translation
+      message.translated_text = result.translatedText;
+      message.source_language = result.sourceLanguage;
+      message.is_translated = true;
+      message.isTranslated = true;
+      
+      // Re-render messages to show translation
+      this.renderMessages();
+      
+    } catch (err) {
+      console.error('Translation failed:', err);
+      alert('Translation failed: ' + err.message);
     }
   }
 
