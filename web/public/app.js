@@ -997,7 +997,6 @@ class WhatsAppClient {
     const contactId = message.contactId || message.contact_id || this.currentContactId;
     
     // Check if message can be translated (incoming, has text, not already translated)
-    const isTranslated = message.is_translated || message.isTranslated;
     const hasText = message.content && (message.content.body || message.content.caption || message.content.text);
     const canTranslate = !isOutgoing && hasText && !isTranslated;
     
