@@ -237,6 +237,10 @@ async fn handle_web_event(
         },
 
         BridgeEvent::Message(msg) => {
+            // Extract unread count before moving msg
+            let unread_count = msg.unread_count;
+            let is_history = msg.is_history;
+
             // Process and store the message
             let stored_msg = process_message(msg, translator, Some(store)).await;
 
@@ -251,8 +255,12 @@ async fn handle_web_event(
                 stored_msg.timestamp,
             )?;
 
-            // Increment unread for incoming messages
-            if !stored_msg.is_from_me {
+            // Handle unread counts
+            if let Some(unread) = unread_count {
+                // History sync message with unread count from WhatsApp - use it directly
+                store.set_unread_count(&stored_msg.contact_id, unread)?;
+            } else if !stored_msg.is_from_me && !is_history {
+                // Live incoming message - increment unread
                 store.increment_unread(&stored_msg.contact_id)?;
             }
 

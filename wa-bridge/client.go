@@ -301,6 +301,13 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 
 		chatJID := *conv.ID
 
+		// Get unread count from conversation (only set on first message)
+		var convUnreadCount *uint32
+		if conv.UnreadCount != nil {
+			convUnreadCount = conv.UnreadCount
+		}
+		firstMessageInConv := true
+
 		for _, historyMsg := range conv.Messages {
 			if historyMsg == nil || historyMsg.Message == nil {
 				continue
@@ -421,6 +428,12 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 
 			// Mark as history message (no translation)
 			msg.IsHistory = true
+
+			// Set unread count on first message of each conversation
+			if firstMessageInConv && convUnreadCount != nil {
+				msg.UnreadCount = convUnreadCount
+				firstMessageInConv = false
+			}
 
 			SendEvent(NewMessageEvent(msg))
 			totalMessages++

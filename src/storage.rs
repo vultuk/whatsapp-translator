@@ -292,6 +292,16 @@ impl MessageStore {
         Ok(())
     }
 
+    /// Set unread count for a contact (used for history sync)
+    pub fn set_unread_count(&self, contact_id: &str, count: u32) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE contacts SET unread_count = ? WHERE id = ?",
+            params![count as i32, contact_id],
+        )?;
+        Ok(())
+    }
+
     /// Add a message to the store
     pub fn add_message(&self, msg: &StoredMessage) -> Result<()> {
         let conn = self.conn.lock().unwrap();

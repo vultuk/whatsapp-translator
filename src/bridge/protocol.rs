@@ -114,6 +114,9 @@ pub struct Message {
 
     /// Push name (display name set by sender)
     pub push_name: Option<String>,
+
+    /// Unread count from WhatsApp (only set on first message of history sync conversations)
+    pub unread_count: Option<u32>,
 }
 
 /// Contact information

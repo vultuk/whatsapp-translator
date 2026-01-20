@@ -75,6 +75,7 @@ type Message struct {
 	IsForwarded bool           `json:"is_forwarded"`
 	IsHistory   bool           `json:"is_history,omitempty"` // True for history sync messages (no translation)
 	PushName    string         `json:"push_name,omitempty"`
+	UnreadCount *uint32        `json:"unread_count,omitempty"` // Unread count from WhatsApp (history sync only)
 }
 
 // Contact represents a WhatsApp contact
@@ -188,7 +189,7 @@ func NewConnectionStateEvent(state string) ConnectionStateEvent {
 }
 
 func NewMessageEvent(msg Message) map[string]interface{} {
-	return map[string]interface{}{
+	event := map[string]interface{}{
 		"type":         "message",
 		"id":           msg.ID,
 		"timestamp":    msg.Timestamp,
@@ -200,6 +201,10 @@ func NewMessageEvent(msg Message) map[string]interface{} {
 		"is_history":   msg.IsHistory,
 		"push_name":    msg.PushName,
 	}
+	if msg.UnreadCount != nil {
+		event["unread_count"] = *msg.UnreadCount
+	}
+	return event
 }
 
 func NewErrorEvent(code, message string) ErrorEvent {
