@@ -250,6 +250,19 @@ func NewChatPresenceEvent(chatID, userID, state string) ChatPresenceEvent {
 	}
 }
 
+// MarkAsReadEvent is sent when a chat is marked as read from another device
+type MarkAsReadEvent struct {
+	Type   string `json:"type"`
+	ChatID string `json:"chat_id"`
+}
+
+func NewMarkAsReadEvent(chatID string) MarkAsReadEvent {
+	return MarkAsReadEvent{
+		Type:   "mark_as_read",
+		ChatID: chatID,
+	}
+}
+
 // SendEvent marshals an event to JSON and prints it to stdout
 func SendEvent(event interface{}) {
 	data, err := json.Marshal(event)

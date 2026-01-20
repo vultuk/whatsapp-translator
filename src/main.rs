@@ -337,6 +337,14 @@ async fn handle_web_event(
             // Broadcast to WebSocket clients
             state.broadcast_typing(chat_id, user_id, state_str.to_string());
         }
+
+        BridgeEvent::MarkAsRead { chat_id } => {
+            // Chat was marked as read from another device (e.g., user's phone)
+            info!("Chat marked as read from another device: {}", chat_id);
+            store.mark_as_read(&chat_id)?;
+            // Broadcast to WebSocket clients so UI updates
+            state.broadcast_mark_as_read(chat_id);
+        }
     }
 
     Ok(())
@@ -676,6 +684,11 @@ async fn handle_terminal_event(
             // Typing indicators are only used in web mode
             debug!("Ignoring chat presence event in terminal mode");
         }
+
+        BridgeEvent::MarkAsRead { .. } => {
+            // Mark-as-read events are only used in web mode
+            debug!("Ignoring mark-as-read event in terminal mode");
+        }
     }
 
     Ok(())
@@ -784,6 +797,10 @@ impl serde::Serialize for BridgeEvent {
                     bridge::ChatPresenceState::Recording => "recording",
                 };
                 map.serialize_entry("state", state_str)?;
+            }
+            BridgeEvent::MarkAsRead { chat_id } => {
+                map.serialize_entry("type", "mark_as_read")?;
+                map.serialize_entry("chat_id", chat_id)?;
             }
         }
 

@@ -216,6 +216,13 @@ func (c *Client) handleEvent(evt interface{}) {
 			SendEvent(NewLogEvent("debug", fmt.Sprintf("PushName update: %s = %s", v.JID, v.NewPushName)))
 		}
 
+	case *events.MarkChatAsRead:
+		// Chat marked as read from another device (e.g., phone)
+		if v.Action != nil && v.Action.GetRead() {
+			SendEvent(NewMarkAsReadEvent(v.JID.String()))
+			SendEvent(NewLogEvent("debug", fmt.Sprintf("Chat marked as read: %s", v.JID.String())))
+		}
+
 	case *events.OfflineSyncCompleted:
 		// Offline sync completed - all pending messages delivered
 		SendEvent(NewLogEvent("info", "Offline sync completed"))

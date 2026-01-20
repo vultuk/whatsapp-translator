@@ -270,9 +270,22 @@ class WhatsAppClient {
         this.handleTyping(data);
         break;
       
+      case 'mark_as_read':
+        this.handleMarkAsRead(data.chat_id);
+        break;
+      
       case 'error':
         console.error('Error:', data.error);
         break;
+    }
+  }
+
+  // Handle mark-as-read event from another device
+  handleMarkAsRead(chatId) {
+    const contact = this.contacts.find(c => c.id === chatId);
+    if (contact) {
+      contact.unreadCount = 0;
+      this.renderContacts();
     }
   }
 

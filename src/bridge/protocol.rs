@@ -50,6 +50,9 @@ pub enum BridgeEvent {
         state: ChatPresenceState,
     },
 
+    /// Chat marked as read from another device
+    MarkAsRead { chat_id: String },
+
     /// Error occurred
     Error { code: String, message: String },
 

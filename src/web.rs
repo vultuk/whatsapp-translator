@@ -85,6 +85,9 @@ pub enum WebSocketEvent {
         user_id: String,
         state: String, // "typing", "paused", or "recording"
     },
+    MarkAsRead {
+        chat_id: String,
+    },
     Error {
         error: String,
     },
@@ -312,6 +315,13 @@ impl AppState {
         if let Err(e) = result {
             tracing::warn!("Failed to broadcast typing event: {}", e);
         }
+    }
+
+    /// Broadcast a mark-as-read event (chat was read from another device)
+    pub fn broadcast_mark_as_read(&self, chat_id: String) {
+        let _ = self
+            .broadcast_tx
+            .send(WebSocketEvent::MarkAsRead { chat_id });
     }
 
     /// Get next request ID
