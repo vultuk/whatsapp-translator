@@ -532,14 +532,18 @@ async fn logout(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             .into_response();
     }
 
-    // 2. Send logout command to bridge (this will clear the WhatsApp session)
+    // 2. Send logout command to bridge (this will notify WhatsApp and clear the session)
     if let Some(tx) = state.command_tx.read().await.as_ref() {
         if let Err(e) = tx.send(BridgeCommand::Logout).await {
             warn!("Failed to send logout command to bridge: {}", e);
+        } else {
+            // Give the bridge time to send logout signal to WhatsApp
+            // before we delete the session file
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         }
     }
 
-    // 3. Clear the session database file
+    // 3. Clear the session database file (cleanup after WhatsApp logout)
     let session_db = state.data_dir.join("session.db");
     if session_db.exists() {
         if let Err(e) = std::fs::remove_file(&session_db) {
