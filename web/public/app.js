@@ -689,14 +689,37 @@ class WhatsAppClient {
       `;
     }
     
+    // Get message metadata for reactions
+    const messageId = message.id;
+    const senderJid = message.senderPhone || message.sender_phone || '';
+    const contactId = message.contactId || message.contact_id || this.currentContactId;
+    
+    // Reaction button with quick emoji picker
+    const reactionButton = `
+      <div class="reaction-button-container">
+        <button class="reaction-button" onclick="event.stopPropagation(); this.parentElement.querySelector('.reaction-picker').classList.toggle('show');" title="React">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-6c.78 2.34 2.72 4 5 4s4.22-1.66 5-4H7zm2-3c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm6 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1z"/></svg>
+        </button>
+        <div class="reaction-picker">
+          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '👍')">👍</span>
+          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '❤️')">❤️</span>
+          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '😂')">😂</span>
+          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '😮')">😮</span>
+          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '😢')">😢</span>
+          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '🙏')">🙏</span>
+        </div>
+      </div>
+    `;
+    
     return `
-      <div class="message ${isOutgoing ? 'outgoing' : 'incoming'}">
+      <div class="message ${isOutgoing ? 'outgoing' : 'incoming'}" data-message-id="${messageId}">
         ${forwarded}
         ${sender}
         ${content}
         <div class="message-footer">
           ${translationIndicator}
           <span class="message-time">${time}</span>
+          ${reactionButton}
         </div>
       </div>
     `;
@@ -1008,6 +1031,41 @@ class WhatsAppClient {
     });
   }
 
+  // Send a reaction to a message
+  async sendReaction(messageId, contactId, senderJid, emoji) {
+    // Close any open reaction pickers
+    document.querySelectorAll('.reaction-picker.show').forEach(el => el.classList.remove('show'));
+    
+    if (!messageId || !contactId) {
+      console.error('Missing messageId or contactId for reaction');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/react', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contactId: contactId,
+          messageId: messageId,
+          senderJid: senderJid || null,
+          emoji: emoji
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to send reaction');
+      }
+
+      console.log('Reaction sent successfully');
+    } catch (err) {
+      console.error('Failed to send reaction:', err);
+      alert('Failed to send reaction: ' + err.message);
+    }
+  }
+
   // Update send button state
   updateSendButton() {
     const input = document.getElementById('message-input');
@@ -1108,6 +1166,13 @@ class WhatsAppClient {
         messagesList.scrollTop = 1;
       }
     }, { passive: true });
+
+    // Close reaction pickers when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.reaction-button-container')) {
+        document.querySelectorAll('.reaction-picker.show').forEach(el => el.classList.remove('show'));
+      }
+    });
   }
 
   // Check if on mobile device

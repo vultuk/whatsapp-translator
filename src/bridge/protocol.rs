@@ -250,6 +250,21 @@ pub enum BridgeCommand {
         caption: Option<String>,
     },
 
+    /// Send a reaction to a message
+    SendReaction {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<i32>,
+        /// Chat JID
+        to: String,
+        /// Target message ID to react to
+        message_id: String,
+        /// Sender JID of the target message (for groups)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sender_jid: Option<String>,
+        /// Reaction emoji (empty string to remove reaction)
+        emoji: String,
+    },
+
     /// Get profile picture for a JID
     GetProfilePicture { request_id: i32, to: String },
 

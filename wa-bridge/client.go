@@ -636,6 +636,37 @@ func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB
 	return resp.ID, resp.Timestamp.Unix(), nil
 }
 
+// SendReaction sends a reaction to a message
+func (c *Client) SendReaction(ctx context.Context, chatJIDStr string, targetMessageID string, senderJIDStr string, emoji string) (string, int64, error) {
+	// Parse the chat JID
+	chatJID, err := types.ParseJID(chatJIDStr)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid chat JID: %w", err)
+	}
+
+	// Parse the sender JID (who sent the message we're reacting to)
+	var senderJID types.JID
+	if senderJIDStr != "" {
+		senderJID, err = types.ParseJID(senderJIDStr)
+		if err != nil {
+			return "", 0, fmt.Errorf("invalid sender JID: %w", err)
+		}
+	} else {
+		// If no sender JID provided, assume it's the chat JID (for private chats)
+		senderJID = chatJID
+	}
+
+	// Build and send the reaction message
+	reactionMsg := c.client.BuildReaction(chatJID, senderJID, targetMessageID, emoji)
+
+	resp, err := c.client.SendMessage(ctx, chatJID, reactionMsg)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to send reaction: %w", err)
+	}
+
+	return resp.ID, resp.Timestamp.Unix(), nil
+}
+
 // GetProfilePicture fetches the profile picture URL for a JID
 func (c *Client) GetProfilePicture(ctx context.Context, jidStr string) (string, string, error) {
 	// Parse the JID

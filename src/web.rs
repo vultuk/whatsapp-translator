@@ -140,6 +140,23 @@ pub struct SendImageResponse {
     pub timestamp: i64,
 }
 
+/// Send reaction request
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendReactionRequest {
+    pub contact_id: String,
+    pub message_id: String,
+    pub sender_jid: Option<String>,
+    pub emoji: String,
+}
+
+/// Send reaction response
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendReactionResponse {
+    pub success: bool,
+}
+
 impl AppState {
     pub fn new(
         store: MessageStore,
@@ -323,6 +340,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/qr", get(get_qr))
         .route("/api/send", post(send_message))
         .route("/api/send-image", post(send_image))
+        .route("/api/react", post(send_reaction))
         .route("/api/stats", get(get_stats))
         .route("/api/usage", get(get_global_usage))
         .route("/api/usage/:contact_id", get(get_conversation_usage))
@@ -685,6 +703,55 @@ async fn send_image(
         timestamp,
     })
     .into_response()
+}
+
+async fn send_reaction(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SendReactionRequest>,
+) -> impl IntoResponse {
+    // Validate input
+    if req.contact_id.is_empty() || req.message_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "contact_id and message_id are required"
+            })),
+        )
+            .into_response();
+    }
+
+    // Check if connected
+    if !*state.connected.read().await {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Not connected to WhatsApp"
+            })),
+        )
+            .into_response();
+    }
+
+    // Send the reaction via bridge
+    let cmd = BridgeCommand::SendReaction {
+        request_id: None,
+        to: req.contact_id.clone(),
+        message_id: req.message_id.clone(),
+        sender_jid: req.sender_jid.clone(),
+        emoji: req.emoji.clone(),
+    };
+
+    if let Err(e) = state.send_bridge_command(cmd).await {
+        error!("Failed to send reaction: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to send reaction: {}", e)
+            })),
+        )
+            .into_response();
+    }
+
+    Json(SendReactionResponse { success: true }).into_response()
 }
 
 async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {

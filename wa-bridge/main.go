@@ -171,6 +171,19 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			SendEvent(NewSendResultEvent(cmd.RequestID, true, messageID, timestamp, ""))
 		}
 
+	case "send_reaction":
+		if cmd.To == "" || cmd.MessageID == "" {
+			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, "missing 'to' or 'message_id' field"))
+			return
+		}
+
+		messageID, timestamp, err := client.SendReaction(ctx, cmd.To, cmd.MessageID, cmd.SenderJID, cmd.Emoji)
+		if err != nil {
+			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, err.Error()))
+		} else {
+			SendEvent(NewSendResultEvent(cmd.RequestID, true, messageID, timestamp, ""))
+		}
+
 	default:
 		SendEvent(NewLogEvent("warn", fmt.Sprintf("Unknown command type: %s", cmd.Type)))
 	}

@@ -157,6 +157,10 @@ type Command struct {
 	MediaData string `json:"media_data,omitempty"` // Base64 encoded image
 	MimeType  string `json:"mime_type,omitempty"`
 	Caption   string `json:"caption,omitempty"`
+	// For send_reaction command
+	MessageID string `json:"message_id,omitempty"` // Target message ID to react to
+	Emoji     string `json:"emoji,omitempty"`      // Reaction emoji (empty to remove)
+	SenderJID string `json:"sender_jid,omitempty"` // Sender of the target message
 }
 
 // Helper functions to create events

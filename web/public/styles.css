@@ -572,6 +572,75 @@ body {
   margin-bottom: 4px;
 }
 
+/* Reaction button and picker */
+.reaction-button-container {
+  position: relative;
+  display: inline-flex;
+  margin-left: 4px;
+}
+
+.reaction-button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+}
+
+.message:hover .reaction-button {
+  opacity: 0.6;
+}
+
+.reaction-button:hover {
+  opacity: 1 !important;
+  color: var(--accent-color);
+  background: rgba(0, 168, 132, 0.1);
+}
+
+.reaction-picker {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 50;
+  white-space: nowrap;
+}
+
+.reaction-picker.show {
+  display: flex;
+  gap: 2px;
+}
+
+.reaction-emoji {
+  cursor: pointer;
+  font-size: 20px;
+  padding: 4px;
+  border-radius: 4px;
+  transition: transform 0.1s, background 0.15s;
+}
+
+.reaction-emoji:hover {
+  transform: scale(1.2);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Position picker on left for outgoing messages */
+.message.outgoing .reaction-picker {
+  right: auto;
+  left: 0;
+}
+
 /* Translation indicator */
 .translation-indicator {
   display: inline-flex;
