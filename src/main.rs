@@ -373,6 +373,28 @@ async fn process_message(
     let content: Option<serde_json::Value> = serde_json::from_str(&content_json).ok();
     let content_type = msg.content.type_name().to_string();
 
+    // Get contact name and phone from chat info
+    // For private chats: this is the other person
+    // For groups: this is the group name
+    let (contact_name, contact_phone) = match &msg.chat {
+        bridge::Chat::Private { name, jid } => {
+            let phone = jid.split('@').next().map(|s| s.to_string());
+            (name.clone(), phone)
+        }
+        bridge::Chat::Group { name, .. } => (name.clone(), None),
+        bridge::Chat::Broadcast { jid } => {
+            let phone = jid.split('@').next().map(|s| s.to_string());
+            (
+                Some(format!(
+                    "Broadcast: {}",
+                    phone.as_deref().unwrap_or("Unknown")
+                )),
+                phone,
+            )
+        }
+        bridge::Chat::Status { .. } => (Some("Status".to_string()), None),
+    };
+
     StoredMessage {
         id: msg.id,
         contact_id,
@@ -381,6 +403,8 @@ async fn process_message(
         is_forwarded: msg.is_forwarded,
         sender_name: msg.push_name.or_else(|| msg.from.name.clone()),
         sender_phone: Some(msg.from.phone),
+        contact_name,
+        contact_phone,
         chat_type: chat_type.to_string(),
         content_type,
         content_json,
@@ -785,9 +809,12 @@ impl serde::Serialize for bridge::Chat {
         let mut map = serializer.serialize_map(None)?;
 
         match self {
-            bridge::Chat::Private { jid } => {
+            bridge::Chat::Private { jid, name } => {
                 map.serialize_entry("type", "private")?;
                 map.serialize_entry("jid", jid)?;
+                if let Some(n) = name {
+                    map.serialize_entry("name", n)?;
+                }
             }
             bridge::Chat::Group {
                 jid,

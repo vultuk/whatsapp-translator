@@ -130,7 +130,7 @@ pub struct Contact {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Chat {
     /// Private one-on-one chat
-    Private { jid: String },
+    Private { jid: String, name: Option<String> },
 
     /// Group chat
     Group {
@@ -299,7 +299,7 @@ impl Chat {
     /// Get the JID of the chat
     pub fn jid(&self) -> &str {
         match self {
-            Chat::Private { jid } => jid,
+            Chat::Private { jid, .. } => jid,
             Chat::Group { jid, .. } => jid,
             Chat::Broadcast { jid } => jid,
             Chat::Status { jid } => jid,
@@ -314,7 +314,7 @@ impl Chat {
     /// Get the display name of the chat
     pub fn display_name(&self) -> String {
         match self {
-            Chat::Private { jid } => extract_phone(jid),
+            Chat::Private { name, jid } => name.clone().unwrap_or_else(|| extract_phone(jid)),
             Chat::Group { name, jid, .. } => name.clone().unwrap_or_else(|| extract_phone(jid)),
             Chat::Broadcast { jid } => format!("Broadcast: {}", extract_phone(jid)),
             Chat::Status { .. } => "Status".to_string(),

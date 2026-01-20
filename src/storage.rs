@@ -26,6 +26,12 @@ pub struct StoredMessage {
     pub sender_name: Option<String>,
     #[serde(rename = "senderPhone")]
     pub sender_phone: Option<String>,
+    /// Contact name (other person for private chats, group name for groups)
+    #[serde(rename = "contactName")]
+    pub contact_name: Option<String>,
+    /// Contact phone (for private chats)
+    #[serde(rename = "contactPhone")]
+    pub contact_phone: Option<String>,
     #[serde(rename = "chatType")]
     pub chat_type: String,
     #[serde(rename = "contentType")]
@@ -315,6 +321,17 @@ impl MessageStore {
     pub fn get_messages(&self, contact_id: &str) -> Result<Vec<StoredMessage>> {
         let conn = self.conn.lock().unwrap();
 
+        // First get the contact info to populate contact_name and contact_phone
+        let contact_info: Option<(Option<String>, Option<String>)> = conn
+            .query_row(
+                "SELECT name, phone FROM contacts WHERE id = ?",
+                params![contact_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+
+        let (contact_name, contact_phone) = contact_info.unwrap_or((None, None));
+
         let mut stmt = conn.prepare(
             r#"
             SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, 
@@ -338,6 +355,8 @@ impl MessageStore {
                     is_forwarded: row.get(4)?,
                     sender_name: row.get(5)?,
                     sender_phone: row.get(6)?,
+                    contact_name: contact_name.clone(),
+                    contact_phone: contact_phone.clone(),
                     chat_type: row.get(7)?,
                     content_type: row.get(8)?,
                     content_json,

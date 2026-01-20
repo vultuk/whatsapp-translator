@@ -406,6 +406,17 @@ func (c *Client) buildChat(info types.MessageInfo) Chat {
 		chat.Type = "status"
 	} else {
 		chat.Type = "private"
+		// For private chats, get the contact name from the chat JID (the other person)
+		contactInfo, err := c.client.Store.Contacts.GetContact(c.ctx, info.Chat)
+		if err == nil && contactInfo.Found {
+			if contactInfo.FullName != "" {
+				chat.Name = contactInfo.FullName
+			} else if contactInfo.PushName != "" {
+				chat.Name = contactInfo.PushName
+			} else if contactInfo.BusinessName != "" {
+				chat.Name = contactInfo.BusinessName
+			}
+		}
 	}
 
 	return chat

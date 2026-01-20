@@ -534,9 +534,10 @@ class WhatsAppClient {
     let contact = this.contacts.find(c => c.id === message.contactId);
     
     if (!contact) {
+      // Use contactName (the chat/contact name) not senderName
       contact = {
         id: message.contactId,
-        name: message.contactName,
+        name: message.contactName || message.contactPhone,
         phone: message.contactPhone,
         type: message.chatType,
         lastMessageTime: message.timestamp,
@@ -545,7 +546,9 @@ class WhatsAppClient {
       this.contacts.push(contact);
     } else {
       contact.lastMessageTime = Math.max(contact.lastMessageTime, message.timestamp);
-      if (message.contactName && message.contactName !== message.contactPhone) {
+      // Only update name if we have a better one from contactName (not senderName!)
+      // contactName is the stable chat name (other person for DMs, group name for groups)
+      if (message.contactName && message.contactName !== message.contactPhone && !contact.name) {
         contact.name = message.contactName;
       }
     }

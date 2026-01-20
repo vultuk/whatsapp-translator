@@ -688,6 +688,11 @@ async fn send_message(
     // - original_text = what user typed (English) - same as content for consistency
     // - translated_text = what was actually sent (foreign language) - SHOWN IN TOOLTIP
     // - source_language = the language we translated TO (e.g., "French")
+    // Get contact info for the recipient
+    let contact_info = state.store.get_contact(&req.contact_id).ok().flatten();
+    let contact_name = contact_info.as_ref().and_then(|c| c.name.clone());
+    let contact_phone = contact_info.as_ref().and_then(|c| c.phone.clone());
+
     let stored_msg = StoredMessage {
         id: temp_message_id.clone(),
         contact_id: req.contact_id.clone(),
@@ -696,6 +701,8 @@ async fn send_message(
         is_forwarded: false,
         sender_name: state.name.read().await.clone(),
         sender_phone: state.phone.read().await.clone(),
+        contact_name,
+        contact_phone,
         chat_type: "private".to_string(), // Default to private, could be improved
         content_type: "Text".to_string(),
         // Store English (what user typed) as the content for display
@@ -801,6 +808,11 @@ async fn send_image(
     let timestamp = chrono::Utc::now().timestamp_millis();
     let temp_message_id = format!("pending_img_{}", timestamp);
 
+    // Get contact info for the recipient
+    let contact_info = state.store.get_contact(&req.contact_id).ok().flatten();
+    let contact_name = contact_info.as_ref().and_then(|c| c.name.clone());
+    let contact_phone = contact_info.as_ref().and_then(|c| c.phone.clone());
+
     // Store the sent image message locally
     let stored_msg = crate::storage::StoredMessage {
         id: temp_message_id.clone(),
@@ -810,6 +822,8 @@ async fn send_image(
         is_forwarded: false,
         sender_name: state.name.read().await.clone(),
         sender_phone: state.phone.read().await.clone(),
+        contact_name,
+        contact_phone,
         chat_type: "private".to_string(),
         content_type: "Image".to_string(),
         content_json: serde_json::json!({
