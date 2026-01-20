@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::bridge::BridgeCommand;
 use crate::storage::{MessageStore, StoredMessage};
@@ -281,6 +281,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/qr", get(get_qr))
         .route("/api/send", post(send_message))
         .route("/api/stats", get(get_stats))
+        .route("/api/usage", get(get_global_usage))
+        .route("/api/usage/:contact_id", get(get_conversation_usage))
         // WebSocket
         .route("/ws", get(websocket_handler))
         // Serve static files
@@ -407,6 +409,18 @@ async fn send_message(
                     );
                     match translator.translate_to(&req.text, &conv_lang).await {
                         Ok((translated, usage)) => {
+                            // Record usage if there was actual API usage
+                            if usage.input_tokens > 0 {
+                                if let Err(e) = state.store.record_usage(
+                                    Some(&req.contact_id),
+                                    None, // No message ID for outgoing yet
+                                    &usage,
+                                    "translate_outgoing",
+                                ) {
+                                    warn!("Failed to record usage: {}", e);
+                                }
+                            }
+
                             if translated != req.text {
                                 info!(
                                     "Translated outgoing message to {} (cost: ${:.6})",
@@ -536,6 +550,45 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         Err(e) => {
             error!("Failed to get stats: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get stats").into_response()
+        }
+    }
+}
+
+/// Get global translation usage/cost
+async fn get_global_usage(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.store.get_global_usage() {
+        Ok(usage) => Json(serde_json::json!({
+            "inputTokens": usage.input_tokens,
+            "outputTokens": usage.output_tokens,
+            "costUsd": usage.cost_usd,
+        }))
+        .into_response(),
+        Err(e) => {
+            error!("Failed to get global usage: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get usage").into_response()
+        }
+    }
+}
+
+/// Get translation usage/cost for a specific conversation
+async fn get_conversation_usage(
+    State(state): State<Arc<AppState>>,
+    Path(contact_id): Path<String>,
+) -> impl IntoResponse {
+    let contact_id = urlencoding::decode(&contact_id)
+        .map(|s| s.into_owned())
+        .unwrap_or(contact_id);
+
+    match state.store.get_conversation_usage(&contact_id) {
+        Ok(usage) => Json(serde_json::json!({
+            "inputTokens": usage.input_tokens,
+            "outputTokens": usage.output_tokens,
+            "costUsd": usage.cost_usd,
+        }))
+        .into_response(),
+        Err(e) => {
+            error!("Failed to get conversation usage: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get usage").into_response()
         }
     }
 }

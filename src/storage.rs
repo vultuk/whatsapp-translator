@@ -7,6 +7,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
+use crate::translation::UsageInfo;
+
 /// Stored message with translation info
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -133,6 +135,21 @@ impl MessageStore {
             CREATE INDEX IF NOT EXISTS idx_messages_contact_id ON messages(contact_id);
             CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
             CREATE INDEX IF NOT EXISTS idx_contacts_last_message ON contacts(last_message_time DESC);
+
+            -- Translation usage tracking
+            CREATE TABLE IF NOT EXISTS translation_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contact_id TEXT,
+                message_id TEXT,
+                timestamp INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                cost_usd REAL NOT NULL,
+                operation TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_usage_contact_id ON translation_usage(contact_id);
+            CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON translation_usage(timestamp);
             "#,
         )?;
 
@@ -388,6 +405,89 @@ impl MessageStore {
         let language: Option<String> = stmt.query_row(params![contact_id], |row| row.get(0)).ok();
 
         Ok(language)
+    }
+
+    /// Record translation usage for a message
+    pub fn record_usage(
+        &self,
+        contact_id: Option<&str>,
+        message_id: Option<&str>,
+        usage: &UsageInfo,
+        operation: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        conn.execute(
+            r#"
+            INSERT INTO translation_usage 
+            (contact_id, message_id, timestamp, input_tokens, output_tokens, cost_usd, operation)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                contact_id,
+                message_id,
+                timestamp,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cost_usd,
+                operation,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Get total usage across all conversations
+    pub fn get_global_usage(&self) -> Result<UsageInfo> {
+        let conn = self.conn.lock().unwrap();
+
+        let result = conn.query_row(
+            r#"
+            SELECT COALESCE(SUM(input_tokens), 0), 
+                   COALESCE(SUM(output_tokens), 0), 
+                   COALESCE(SUM(cost_usd), 0.0)
+            FROM translation_usage
+            "#,
+            [],
+            |row| {
+                Ok(UsageInfo {
+                    input_tokens: row.get::<_, i64>(0)? as u32,
+                    output_tokens: row.get::<_, i64>(1)? as u32,
+                    cost_usd: row.get(2)?,
+                })
+            },
+        )?;
+
+        Ok(result)
+    }
+
+    /// Get usage for a specific conversation
+    pub fn get_conversation_usage(&self, contact_id: &str) -> Result<UsageInfo> {
+        let conn = self.conn.lock().unwrap();
+
+        let result = conn.query_row(
+            r#"
+            SELECT COALESCE(SUM(input_tokens), 0), 
+                   COALESCE(SUM(output_tokens), 0), 
+                   COALESCE(SUM(cost_usd), 0.0)
+            FROM translation_usage
+            WHERE contact_id = ?
+            "#,
+            params![contact_id],
+            |row| {
+                Ok(UsageInfo {
+                    input_tokens: row.get::<_, i64>(0)? as u32,
+                    output_tokens: row.get::<_, i64>(1)? as u32,
+                    cost_usd: row.get(2)?,
+                })
+            },
+        )?;
+
+        Ok(result)
     }
 }
 

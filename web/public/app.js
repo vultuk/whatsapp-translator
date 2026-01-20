@@ -9,6 +9,7 @@ class WhatsAppClient {
     this.messages = new Map();
     this.avatarCache = new Map(); // JID -> URL
     this.avatarFetching = new Set(); // JIDs currently being fetched
+    this.globalUsage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
     
     this.init();
   }
@@ -169,6 +170,9 @@ class WhatsAppClient {
     
     // Load contacts
     this.loadContacts();
+    
+    // Load global usage
+    this.fetchGlobalUsage();
   }
 
   // Handle disconnected state
@@ -201,6 +205,14 @@ class WhatsAppClient {
     if (this.currentContactId === message.contactId) {
       this.appendMessage(message);
       this.scrollToBottom();
+    }
+    
+    // Refresh usage stats if this was a translated message
+    if (message.isTranslated || message.is_translated) {
+      this.fetchGlobalUsage();
+      if (this.currentContactId === message.contactId) {
+        this.fetchConversationUsage(message.contactId);
+      }
     }
   }
 
@@ -429,6 +441,9 @@ class WhatsAppClient {
     
     // Load messages
     await this.loadMessages(contactId);
+    
+    // Load conversation usage
+    this.fetchConversationUsage(contactId);
     
     // Re-render contacts to update active state and unread
     this.renderContacts();
@@ -707,6 +722,12 @@ class WhatsAppClient {
       // Update contact list
       this.updateContactInList(localMessage);
       
+      // Refresh usage stats if translation occurred
+      if (result.isTranslated) {
+        this.fetchGlobalUsage();
+        this.fetchConversationUsage(this.currentContactId);
+      }
+      
     } catch (err) {
       console.error('Failed to send message:', err);
       alert('Failed to send message: ' + err.message);
@@ -891,6 +912,53 @@ class WhatsAppClient {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  // Format cost for display
+  formatCost(costUsd) {
+    if (costUsd < 0.01) {
+      return '$' + costUsd.toFixed(4);
+    }
+    return '$' + costUsd.toFixed(2);
+  }
+
+  // Fetch and display global usage
+  async fetchGlobalUsage() {
+    try {
+      const response = await fetch('/api/usage');
+      const usage = await response.json();
+      this.globalUsage = usage;
+      this.updateGlobalUsageDisplay();
+    } catch (err) {
+      console.error('Failed to fetch global usage:', err);
+    }
+  }
+
+  // Update global usage display in sidebar
+  updateGlobalUsageDisplay() {
+    const costEl = document.getElementById('global-cost');
+    if (costEl) {
+      costEl.textContent = this.formatCost(this.globalUsage.costUsd || 0);
+    }
+  }
+
+  // Fetch and display conversation usage
+  async fetchConversationUsage(contactId) {
+    try {
+      const response = await fetch(`/api/usage/${encodeURIComponent(contactId)}`);
+      const usage = await response.json();
+      this.updateConversationUsageDisplay(usage);
+    } catch (err) {
+      console.error('Failed to fetch conversation usage:', err);
+    }
+  }
+
+  // Update conversation usage display in chat header
+  updateConversationUsageDisplay(usage) {
+    const costEl = document.getElementById('chat-cost');
+    if (costEl) {
+      costEl.textContent = this.formatCost(usage.costUsd || 0);
+    }
   }
 }
 

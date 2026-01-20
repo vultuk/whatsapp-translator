@@ -194,6 +194,34 @@ body {
   background: var(--accent-color);
 }
 
+/* Sidebar Footer - Global Cost */
+.sidebar-footer {
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.usage-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.usage-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.usage-cost {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--accent-color);
+}
+
 /* Contacts List */
 .contacts-list {
   flex: 1;
@@ -353,6 +381,21 @@ body {
 .chat-phone {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+/* Chat Cost Badge */
+.chat-cost {
+  margin-left: auto;
+  padding-left: 12px;
+}
+
+.cost-badge {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-color);
+  background: rgba(0, 168, 132, 0.15);
+  padding: 4px 10px;
+  border-radius: 12px;
 }
 
 /* Messages List */

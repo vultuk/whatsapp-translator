@@ -212,7 +212,7 @@ async fn handle_web_event(
 
         BridgeEvent::Message(msg) => {
             // Process and store the message
-            let stored_msg = process_message(msg, translator).await;
+            let stored_msg = process_message(msg, translator, Some(store)).await;
 
             // Update contact
             store.upsert_contact(
@@ -294,6 +294,7 @@ async fn handle_web_event(
 async fn process_message(
     msg: Message,
     translator: Option<&Arc<TranslationService>>,
+    store: Option<&storage::MessageStore>,
 ) -> StoredMessage {
     let contact_id = msg.chat.jid().to_string();
     let chat_type = match &msg.chat {
@@ -310,6 +311,25 @@ async fn process_message(
                 if !msg.is_from_me {
                     // Only translate incoming messages
                     let result = translator.process_text(&text).await;
+
+                    // Record usage if we have a store and there was actual API usage
+                    if let Some(store) = store {
+                        if result.usage.input_tokens > 0 {
+                            if let Err(e) = store.record_usage(
+                                Some(&contact_id),
+                                Some(&msg.id),
+                                &result.usage,
+                                if result.needs_translation {
+                                    "translate_incoming"
+                                } else {
+                                    "detect_language"
+                                },
+                            ) {
+                                tracing::warn!("Failed to record usage: {}", e);
+                            }
+                        }
+                    }
+
                     (
                         Some(result.original_text),
                         result.translated_text,
