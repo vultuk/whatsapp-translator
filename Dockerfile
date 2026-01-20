@@ -1,5 +1,5 @@
 # Build stage for Go bridge
-FROM golang:1.21-bookworm AS go-builder
+FROM golang:1.24-bookworm AS go-builder
 
 WORKDIR /build
 COPY wa-bridge/ ./
