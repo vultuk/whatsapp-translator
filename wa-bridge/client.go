@@ -580,8 +580,14 @@ func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string
 		}
 
 		// Set the participant (sender of the quoted message)
+		// Convert phone number to full JID if needed
 		if replyToSender != "" {
-			contextInfo.Participant = &replyToSender
+			participant := replyToSender
+			// If it's just a phone number, convert to JID format
+			if !strings.Contains(replyToSender, "@") {
+				participant = replyToSender + "@s.whatsapp.net"
+			}
+			contextInfo.Participant = &participant
 		}
 
 		// Use ExtendedTextMessage for replies (required for ContextInfo)
@@ -653,8 +659,13 @@ func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB
 		contextInfo := &waE2E.ContextInfo{
 			StanzaID: &replyToID,
 		}
+		// Convert phone number to full JID if needed
 		if replyToSender != "" {
-			contextInfo.Participant = &replyToSender
+			participant := replyToSender
+			if !strings.Contains(replyToSender, "@") {
+				participant = replyToSender + "@s.whatsapp.net"
+			}
+			contextInfo.Participant = &participant
 		}
 		imageMsg.ContextInfo = contextInfo
 	}
