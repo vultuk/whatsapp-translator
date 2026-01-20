@@ -196,6 +196,12 @@ class WhatsAppClient {
 
   // Handle new message
   handleNewMessage(message) {
+    // Check if this is a reaction message
+    if (message.content && message.content.type === 'reaction') {
+      this.handleReactionMessage(message);
+      return;
+    }
+    
     // Add to local cache
     if (!this.messages.has(message.contactId)) {
       this.messages.set(message.contactId, []);
@@ -228,6 +234,63 @@ class WhatsAppClient {
     if (!message.isFromMe && !message.is_from_me) {
       this.clearTypingState(message.contactId);
     }
+  }
+
+  // Handle incoming reaction message
+  handleReactionMessage(reactionMsg) {
+    const contactId = reactionMsg.contactId;
+    const targetMessageId = reactionMsg.content.target_message_id || reactionMsg.content.targetMessageId;
+    const emoji = reactionMsg.content.emoji || '';
+    const senderPhone = reactionMsg.senderPhone || reactionMsg.sender_phone || 'unknown';
+    const isFromMe = reactionMsg.isFromMe || reactionMsg.is_from_me;
+    
+    if (!targetMessageId) {
+      console.warn('Reaction message missing target_message_id');
+      return;
+    }
+    
+    // Find the target message in our cache
+    const messages = this.messages.get(contactId);
+    if (!messages) return;
+    
+    const targetMessage = messages.find(m => m.id === targetMessageId);
+    if (!targetMessage) {
+      console.log('Target message not found for reaction:', targetMessageId);
+      return;
+    }
+    
+    // Initialize reactions if needed
+    if (!targetMessage.reactions) {
+      targetMessage.reactions = {};
+    }
+    
+    // Determine reactor identifier
+    const reactor = isFromMe ? (document.getElementById('user-phone')?.textContent?.replace('+', '') || 'me') : senderPhone;
+    
+    // Remove previous reaction from this sender
+    for (const [existingEmoji, reactors] of Object.entries(targetMessage.reactions)) {
+      targetMessage.reactions[existingEmoji] = reactors.filter(r => r !== reactor);
+      if (targetMessage.reactions[existingEmoji].length === 0) {
+        delete targetMessage.reactions[existingEmoji];
+      }
+    }
+    
+    // Add new reaction (empty emoji means removal)
+    if (emoji) {
+      if (!targetMessage.reactions[emoji]) {
+        targetMessage.reactions[emoji] = [];
+      }
+      if (!targetMessage.reactions[emoji].includes(reactor)) {
+        targetMessage.reactions[emoji].push(reactor);
+      }
+    }
+    
+    // Update display if viewing this chat
+    if (this.currentContactId === contactId) {
+      this.updateMessageReactions(targetMessageId);
+    }
+    
+    console.log('Reaction updated:', { targetMessageId, emoji, reactor });
   }
 
   // Handle typing indicator
