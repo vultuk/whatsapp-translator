@@ -1,10 +1,16 @@
 # Build stage for Go bridge
 FROM golang:1.24-bookworm AS go-builder
 
+# Install C compiler for CGO (required by go-sqlite3)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 COPY wa-bridge/ ./
 RUN go mod download && \
-    CGO_ENABLED=0 go build -ldflags="-s -w" -o wa-bridge .
+    CGO_ENABLED=1 go build -ldflags="-s -w" -o wa-bridge .
 
 # Build stage for Rust application
 FROM rust:1.87-bookworm AS rust-builder
