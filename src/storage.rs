@@ -443,13 +443,18 @@ impl MessageStore {
         let conn = self.conn.lock().unwrap();
 
         // Use a subquery to get the last message for each contact
+        // The inner subquery ensures we only get one message per contact (the latest by rowid)
         let mut stmt = conn.prepare(
             r#"
             SELECT 
                 c.id, c.name, c.phone, c.type, c.last_message_time, c.unread_count, c.pinned_at,
                 m.content_json, m.content_type, m.is_from_me
             FROM contacts c
-            LEFT JOIN messages m ON m.contact_id = c.id AND m.timestamp = c.last_message_time
+            LEFT JOIN (
+                SELECT contact_id, content_json, content_type, is_from_me, timestamp,
+                       ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY timestamp DESC, rowid DESC) as rn
+                FROM messages
+            ) m ON m.contact_id = c.id AND m.rn = 1
             ORDER BY 
                 CASE WHEN c.pinned_at IS NOT NULL THEN 0 ELSE 1 END,
                 c.pinned_at ASC,
@@ -828,7 +833,11 @@ impl MessageStore {
                 c.id, c.name, c.phone, c.type, c.last_message_time, c.unread_count, c.pinned_at,
                 m.content_json, m.content_type, m.is_from_me
             FROM contacts c
-            LEFT JOIN messages m ON m.contact_id = c.id AND m.timestamp = c.last_message_time
+            LEFT JOIN (
+                SELECT contact_id, content_json, content_type, is_from_me,
+                       ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY timestamp DESC, rowid DESC) as rn
+                FROM messages
+            ) m ON m.contact_id = c.id AND m.rn = 1
             WHERE c.id = ?
             "#,
         )?;
