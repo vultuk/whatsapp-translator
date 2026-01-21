@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 /// Models to use for translation
 const DETECTION_MODEL: &str = "claude-haiku-4-5";
 const TRANSLATION_MODEL: &str = "claude-sonnet-4-5";
-const AI_COMPOSE_MODEL: &str = "claude-opus-4-5";
+const AI_COMPOSE_MODEL: &str = "claude-sonnet-4-5";
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
@@ -768,7 +768,7 @@ Write my reply (keep it short and casual like my examples):"#,
         let usage_info = UsageInfo {
             input_tokens: claude_response.usage.input_tokens,
             output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_opus_cost(&claude_response.usage),
+            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
         };
 
         let reply = claude_response
