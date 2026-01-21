@@ -695,46 +695,48 @@ Respond with ONLY the message text, nothing else."#;
             "## MY STYLE WITH THIS SPECIFIC CONTACT:\nNo specific style data for this contact yet. Use my general style.\n".to_string()
         };
 
-        // Build the full prompt
+        // Build the full prompt - prioritize examples, be aggressive about casual tone
         let prompt = format!(
-            r#"You are writing a WhatsApp reply for me. Match my writing style EXACTLY.
+            r#"Write a WhatsApp reply AS ME. You must sound EXACTLY like my example messages below.
 
-## MY WRITING STYLE (GENERAL):
+## MY ACTUAL MESSAGES (COPY THIS STYLE EXACTLY):
 {}
 
-{}
-## RECENT CONVERSATION:
-{}
-
-## EXAMPLES OF HOW I REPLY TO THIS PERSON:
-These show the pattern of what they say and how I typically respond:
-
+## RECENT CHAT FOR CONTEXT:
 {}
 
-## MESSAGE I'M REPLYING TO NOW:
-From: {}
-"{}"
+## REPLYING TO:
+{}: "{}"
 
-## CRITICAL RULES:
-1. Study my example replies above carefully - match my exact tone, emoji usage, punctuation, and phrasing
-2. Keep it natural WhatsApp length - I don't over-explain or write essays
-3. Respond appropriately to what was asked/said
-4. Output ONLY the reply text - no quotes, no "Reply:", no explanations
-5. If I use lowercase, keep it lowercase. If I use emojis, use similar ones. Match my vibe exactly.
+## STYLE NOTES:
+{}
+{}
 
-Generate my reply:"#,
-            global_style.profile_text,
-            contact_style_section,
-            conversation_context,
+## ABSOLUTE RULES - FOLLOW THESE OR FAIL:
+1. BE SHORT. Real WhatsApp messages are 1-2 sentences max, not paragraphs
+2. DO NOT start with "Oh" or "Ah" or any filler words - that's AI speak
+3. DO NOT over-explain feelings ("I love that", "That's really interesting") - just react naturally  
+4. DO NOT write in complete formal sentences if my examples don't
+5. DO NOT be more enthusiastic or wordy than my examples show
+6. COPY my emoji patterns exactly - if I use "😂" use that, if I don't use emojis, DON'T add them
+7. COPY my punctuation - if I skip full stops, skip them. If I use "haha" vs "lol", match it
+8. COPY my greeting/sign-off style (xxxxxx, etc) if I use them
+9. Sound like a REAL HUMAN texting a friend, not an AI assistant being helpful
+10. Output ONLY the message text, nothing else
+
+Write my reply (keep it short and casual like my examples):"#,
             exchange_examples,
+            conversation_context,
             sender_name,
-            reply_to_text
+            reply_to_text,
+            global_style.profile_text,
+            contact_style_section
         );
 
-        // Call Claude Opus for high-quality reply generation
+        // Call Claude - use lower max_tokens to encourage shorter replies
         let request = ClaudeRequest {
             model: AI_COMPOSE_MODEL.to_string(),
-            max_tokens: 300,
+            max_tokens: 150,
             messages: vec![ClaudeMessage {
                 role: "user".to_string(),
                 content: prompt,
