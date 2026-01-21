@@ -141,6 +141,11 @@ impl TranslationService {
         }
     }
 
+    /// Get the API key (for creating other services like StyleAnalyzer)
+    pub fn get_api_key(&self) -> String {
+        self.api_key.clone()
+    }
+
     /// Calculate cost for Haiku model usage
     fn calculate_haiku_cost(usage: &ApiUsage) -> f64 {
         let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * HAIKU_INPUT_COST_PER_M;
@@ -625,5 +630,242 @@ Respond with ONLY the message text, nothing else."#;
         );
 
         Ok((composed, usage_info))
+    }
+
+    /// Generate a styled reply to a received message
+    ///
+    /// Uses the user's style profile and conversation context to generate
+    /// a reply that sounds like them.
+    ///
+    /// Parameters:
+    /// - message_to_reply: The incoming message to reply to
+    /// - recent_conversation: Recent messages for context (last ~20)
+    /// - global_style: User's overall writing style profile
+    /// - contact_style: Optional style specific to this contact
+    /// - my_reply_examples: Examples of user's outgoing messages to this contact
+    pub async fn compose_styled_reply(
+        &self,
+        message_to_reply: &crate::storage::StoredMessage,
+        recent_conversation: &[crate::storage::StoredMessage],
+        global_style: &crate::storage::StyleProfile,
+        contact_style: Option<&crate::storage::StyleProfile>,
+        my_reply_examples: &[crate::storage::StoredMessage],
+    ) -> Result<(String, UsageInfo)> {
+        // Extract text from the message being replied to
+        let reply_to_text = message_to_reply
+            .original_text
+            .clone()
+            .or_else(|| message_to_reply.translated_text.clone())
+            .or_else(|| {
+                message_to_reply.content.as_ref().and_then(|c| {
+                    c.get("body")
+                        .and_then(|v| v.as_str().map(String::from))
+                        .or_else(|| c.get("caption").and_then(|v| v.as_str().map(String::from)))
+                })
+            })
+            .unwrap_or_else(|| "[No text content]".to_string());
+
+        // Truncate if too long
+        let reply_to_text = if reply_to_text.len() > 500 {
+            format!("{}...", &reply_to_text[..497])
+        } else {
+            reply_to_text
+        };
+
+        // Get sender name
+        let sender_name = message_to_reply
+            .sender_name
+            .clone()
+            .or_else(|| message_to_reply.contact_name.clone())
+            .unwrap_or_else(|| "Someone".to_string());
+
+        // Format recent conversation
+        let conversation_context = Self::format_conversation(recent_conversation);
+
+        // Format my reply examples
+        let my_examples = Self::format_my_examples(my_reply_examples);
+
+        // Build the contact-specific style section
+        let contact_style_section = if let Some(cs) = contact_style {
+            format!(
+                "## MY STYLE WITH THIS SPECIFIC CONTACT:\n{}\n",
+                cs.profile_text
+            )
+        } else {
+            "## MY STYLE WITH THIS SPECIFIC CONTACT:\nNo specific style data for this contact yet. Use my general style.\n".to_string()
+        };
+
+        // Build the full prompt
+        let prompt = format!(
+            r#"You are writing a WhatsApp reply for me. Match my writing style EXACTLY.
+
+## MY WRITING STYLE (GENERAL):
+{}
+
+{}
+## RECENT CONVERSATION:
+{}
+
+## EXAMPLES OF MY MESSAGES TO THIS CONTACT:
+{}
+
+## MESSAGE I'M REPLYING TO:
+From: {}
+"{}"
+
+## RULES:
+1. Match my tone, emoji usage, and phrasing exactly
+2. Keep it natural WhatsApp length (don't over-explain)
+3. Respond appropriately to what was asked/said
+4. Output ONLY the reply text - no quotes, no "Reply:", no explanations
+5. If I typically use certain greetings/phrases/emojis, use them naturally
+
+Generate my reply:"#,
+            global_style.profile_text,
+            contact_style_section,
+            conversation_context,
+            my_examples,
+            sender_name,
+            reply_to_text
+        );
+
+        // Call Claude Opus for high-quality reply generation
+        let request = ClaudeRequest {
+            model: AI_COMPOSE_MODEL.to_string(),
+            max_tokens: 300,
+            messages: vec![ClaudeMessage {
+                role: "user".to_string(),
+                content: prompt,
+            }],
+        };
+
+        let response = self
+            .client
+            .post(ANTHROPIC_API_URL)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("content-type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send styled reply request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Styled reply API error: {} - {}", status, body);
+        }
+
+        let claude_response: ClaudeResponse = response
+            .json()
+            .await
+            .context("Failed to parse styled reply response")?;
+
+        let usage_info = UsageInfo {
+            input_tokens: claude_response.usage.input_tokens,
+            output_tokens: claude_response.usage.output_tokens,
+            cost_usd: Self::calculate_opus_cost(&claude_response.usage),
+        };
+
+        let reply = claude_response
+            .content
+            .first()
+            .and_then(|c| c.text.clone())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        // Safety check - truncate if too long
+        let reply = if reply.len() > 500 {
+            format!("{}...", &reply[..497])
+        } else {
+            reply
+        };
+
+        info!(
+            "Styled reply generated: {} chars, {} in, {} out, ${:.6}",
+            reply.len(),
+            usage_info.input_tokens,
+            usage_info.output_tokens,
+            usage_info.cost_usd
+        );
+
+        Ok((reply, usage_info))
+    }
+
+    /// Format conversation messages for the prompt
+    fn format_conversation(messages: &[crate::storage::StoredMessage]) -> String {
+        if messages.is_empty() {
+            return "No recent messages.".to_string();
+        }
+
+        messages
+            .iter()
+            .map(|m| {
+                let sender = if m.is_from_me {
+                    "Me".to_string()
+                } else {
+                    m.sender_name
+                        .clone()
+                        .or_else(|| m.contact_name.clone())
+                        .unwrap_or_else(|| "Them".to_string())
+                };
+
+                let text = m
+                    .original_text
+                    .clone()
+                    .or_else(|| m.translated_text.clone())
+                    .or_else(|| {
+                        m.content.as_ref().and_then(|c| {
+                            c.get("body")
+                                .and_then(|v| v.as_str().map(String::from))
+                                .or_else(|| {
+                                    c.get("caption").and_then(|v| v.as_str().map(String::from))
+                                })
+                        })
+                    })
+                    .unwrap_or_else(|| format!("[{}]", m.content_type));
+
+                // Truncate long messages
+                let text = if text.len() > 200 {
+                    format!("{}...", &text[..197])
+                } else {
+                    text
+                };
+
+                format!("{}: {}", sender, text)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Format user's example messages for the prompt
+    fn format_my_examples(messages: &[crate::storage::StoredMessage]) -> String {
+        if messages.is_empty() {
+            return "No previous messages to this contact yet.".to_string();
+        }
+
+        messages
+            .iter()
+            .filter_map(|m| {
+                m.original_text.clone().or_else(|| {
+                    m.content.as_ref().and_then(|c| {
+                        c.get("body")
+                            .and_then(|v| v.as_str().map(String::from))
+                            .or_else(|| c.get("caption").and_then(|v| v.as_str().map(String::from)))
+                    })
+                })
+            })
+            .enumerate()
+            .map(|(i, text)| {
+                let text = if text.len() > 150 {
+                    format!("{}...", &text[..147])
+                } else {
+                    text
+                };
+                format!("{}. {}", i + 1, text)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }

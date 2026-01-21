@@ -225,6 +225,24 @@ pub struct AiComposeResponse {
     pub cost_usd: Option<f64>,
 }
 
+/// AI styled reply request - generates a reply that sounds like the user
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiReplyRequest {
+    pub contact_id: String,
+    pub message_id: String,
+}
+
+/// AI styled reply response
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiReplyResponse {
+    pub success: bool,
+    pub reply_text: Option<String>,
+    pub error: Option<String>,
+    pub cost_usd: Option<f64>,
+}
+
 /// Auth check response
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -464,6 +482,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/send-image", post(send_image))
         .route("/api/react", post(send_reaction))
         .route("/api/ai-compose", post(ai_compose))
+        .route("/api/ai-reply", post(ai_reply))
         .route("/api/translate", post(translate_message))
         .route("/api/stats", get(get_stats))
         .route("/api/usage", get(get_global_usage))
@@ -1247,6 +1266,176 @@ async fn ai_compose(
                 success: false,
                 message: None,
                 error: Some(format!("Failed to compose message: {}", e)),
+                cost_usd: None,
+            })
+            .into_response()
+        }
+    }
+}
+
+/// AI styled reply endpoint - generates a reply that sounds like the user
+async fn ai_reply(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AiReplyRequest>,
+) -> impl IntoResponse {
+    // Check if translation service is available (it has the API key)
+    let translator = match &state.translator {
+        Some(t) => t,
+        None => {
+            return Json(AiReplyResponse {
+                success: false,
+                reply_text: None,
+                error: Some("AI service not configured (missing API key)".to_string()),
+                cost_usd: None,
+            })
+            .into_response();
+        }
+    };
+
+    // Get the message being replied to
+    let message = match state.store.get_message_by_id(&req.message_id) {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            return Json(AiReplyResponse {
+                success: false,
+                reply_text: None,
+                error: Some("Message not found".to_string()),
+                cost_usd: None,
+            })
+            .into_response();
+        }
+        Err(e) => {
+            error!("Failed to get message: {}", e);
+            return Json(AiReplyResponse {
+                success: false,
+                reply_text: None,
+                error: Some(format!("Failed to get message: {}", e)),
+                cost_usd: None,
+            })
+            .into_response();
+        }
+    };
+
+    // Get recent conversation for context (last 20 messages)
+    let recent_conversation = match state.store.get_recent_messages(&req.contact_id, 20) {
+        Ok(msgs) => msgs,
+        Err(e) => {
+            warn!("Failed to get recent messages: {}", e);
+            vec![]
+        }
+    };
+
+    // Create style analyzer
+    let api_key = translator.get_api_key();
+    let style_analyzer = crate::style_analyzer::StyleAnalyzer::new(api_key);
+
+    // Get or create global style profile
+    let (global_style, global_usage) = match style_analyzer
+        .get_or_create_profile(&state.store, None)
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            error!("Failed to get global style profile: {}", e);
+            return Json(AiReplyResponse {
+                success: false,
+                reply_text: None,
+                error: Some(format!("Failed to analyze writing style: {}", e)),
+                cost_usd: None,
+            })
+            .into_response();
+        }
+    };
+
+    // Get or create per-contact style profile
+    let (contact_style, contact_usage) = match style_analyzer
+        .get_or_create_profile(&state.store, Some(&req.contact_id))
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            warn!("Failed to get contact style profile: {}", e);
+            // Continue without contact-specific style
+            (
+                crate::storage::StyleProfile {
+                    contact_id: req.contact_id.clone(),
+                    profile_text: "No contact-specific style data available.".to_string(),
+                    sample_messages: vec![],
+                    message_count: 0,
+                    updated_at: 0,
+                },
+                None,
+            )
+        }
+    };
+
+    // Get examples of user's replies to this contact
+    let my_examples = match state
+        .store
+        .get_outgoing_messages_for_style(Some(&req.contact_id), 5)
+    {
+        Ok(msgs) => msgs,
+        Err(e) => {
+            warn!("Failed to get example messages: {}", e);
+            vec![]
+        }
+    };
+
+    // Generate the styled reply
+    match translator
+        .compose_styled_reply(
+            &message,
+            &recent_conversation,
+            &global_style,
+            Some(&contact_style),
+            &my_examples,
+        )
+        .await
+    {
+        Ok((reply_text, usage)) => {
+            // Calculate total cost (including any style analysis)
+            let mut total_cost = usage.cost_usd;
+            if let Some(gu) = &global_usage {
+                total_cost += gu.cost_usd;
+            }
+            if let Some(cu) = &contact_usage {
+                total_cost += cu.cost_usd;
+            }
+
+            info!(
+                "AI reply generated ({} chars), cost: ${:.6}",
+                reply_text.len(),
+                total_cost
+            );
+
+            // Record usage
+            if let Err(e) = state.store.record_usage(
+                Some(&req.contact_id),
+                Some(&req.message_id),
+                &crate::translation::UsageInfo {
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cost_usd: total_cost,
+                },
+                "ai_styled_reply",
+            ) {
+                warn!("Failed to record AI reply usage: {}", e);
+            }
+
+            Json(AiReplyResponse {
+                success: true,
+                reply_text: Some(reply_text),
+                error: None,
+                cost_usd: Some(total_cost),
+            })
+            .into_response()
+        }
+        Err(e) => {
+            error!("AI reply generation failed: {}", e);
+            Json(AiReplyResponse {
+                success: false,
+                reply_text: None,
+                error: Some(format!("Failed to generate reply: {}", e)),
                 cost_usd: None,
             })
             .into_response()

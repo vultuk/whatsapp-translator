@@ -964,6 +964,39 @@ body {
   color: #4fc3f7;
 }
 
+/* AI Reply Button */
+.ai-reply-btn {
+  position: relative;
+  color: rgba(255, 215, 0, 0.7);
+}
+
+.ai-reply-btn:hover {
+  color: #ffd700;
+  background: rgba(255, 215, 0, 0.15);
+}
+
+.ai-reply-btn .ai-sparkle {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.ai-reply-btn.loading {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.ai-reply-btn.loading svg {
+  animation: ai-spin 1s linear infinite;
+}
+
+@keyframes ai-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Reply Preview Bar */
 .reply-preview {
   display: flex;

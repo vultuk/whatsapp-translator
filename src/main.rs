@@ -10,6 +10,7 @@ mod link_preview;
 mod mcp;
 mod oauth;
 mod storage;
+mod style_analyzer;
 mod translation;
 mod web;
 

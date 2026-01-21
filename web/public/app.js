@@ -1228,6 +1228,19 @@ class WhatsAppClient {
       </button>
     `;
     
+    // AI Reply button (only for incoming messages with text content)
+    const canAIReply = !isOutgoing && hasText;
+    const aiReplyButton = canAIReply ? `
+      <button class="message-action-btn ai-reply-btn" 
+              onclick="event.stopPropagation(); app.generateAIReply('${messageId}')" 
+              title="Generate AI reply that sounds like you">
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path fill="currentColor" d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+        </svg>
+        <span class="ai-sparkle">✨</span>
+      </button>
+    ` : '';
+    
     // Reaction button with quick emoji picker
     const reactionButton = `
       <div class="reaction-button-container">
@@ -1273,6 +1286,7 @@ class WhatsAppClient {
           <div class="message-actions">
             ${translateButton}
             ${replyButton}
+            ${aiReplyButton}
             ${reactionButton}
           </div>
         </div>
@@ -2172,6 +2186,71 @@ class WhatsAppClient {
       alert('Failed to compose message with AI: ' + err.message);
     } finally {
       this.showAIComposing(false);
+    }
+  }
+
+  // Generate AI reply for a received message (styled to sound like the user)
+  async generateAIReply(messageId) {
+    if (!this.currentContactId) return;
+    
+    // Find the message in cache
+    const messages = this.messages.get(this.currentContactId);
+    const message = messages?.find(m => m.id === messageId);
+    if (!message) {
+      console.error('Message not found:', messageId);
+      return;
+    }
+    
+    // Show loading state on the button
+    const msgEl = document.querySelector(`[data-message-id="${messageId}"]`);
+    const btn = msgEl?.querySelector('.ai-reply-btn');
+    if (btn) {
+      btn.classList.add('loading');
+      btn.disabled = true;
+    }
+    
+    try {
+      const response = await fetch('/api/ai-reply', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders()
+        },
+        body: JSON.stringify({
+          contactId: this.currentContactId,
+          messageId: messageId
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.error || 'AI reply generation failed');
+      }
+      
+      // Set reply context to this message (reuses existing setReplyTo)
+      this.setReplyTo(message);
+      
+      // Populate input with AI-generated reply (user can edit before sending)
+      const input = document.getElementById('message-input');
+      input.value = result.replyText;
+      this.autoResizeTextarea(input);
+      this.updateSendButton();
+      input.focus();
+      
+      // Log cost for debugging
+      if (result.costUsd) {
+        console.log(`AI reply generated, cost: $${result.costUsd.toFixed(6)}`);
+      }
+      
+    } catch (err) {
+      console.error('Failed to generate AI reply:', err);
+      alert('Failed to generate AI reply: ' + err.message);
+    } finally {
+      if (btn) {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+      }
     }
   }
 

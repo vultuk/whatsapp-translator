@@ -75,6 +75,32 @@ pub struct StoredContact {
     pub last_message_preview: Option<String>,
 }
 
+/// Style profile for AI reply generation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleProfile {
+    /// Contact ID or "__global__" for overall style
+    pub contact_id: String,
+    /// Claude-generated style description
+    pub profile_text: String,
+    /// Example messages used for analysis (JSON array)
+    pub sample_messages: Vec<String>,
+    /// Number of messages analyzed
+    pub message_count: i32,
+    /// Timestamp of last update
+    pub updated_at: i64,
+}
+
+impl StyleProfile {
+    /// The special contact ID used for the global style profile
+    pub const GLOBAL_ID: &'static str = "__global__";
+
+    /// Check if this is the global profile
+    pub fn is_global(&self) -> bool {
+        self.contact_id == Self::GLOBAL_ID
+    }
+}
+
 /// Thread-safe message store backed by SQLite
 pub struct MessageStore {
     conn: Arc<Mutex<Connection>>,
@@ -239,6 +265,42 @@ impl MessageStore {
 
         // Add pinned_at column for pinning contacts
         self.migrate_add_pinned_column(&conn)?;
+
+        // Add style_profiles table for AI reply generation
+        self.migrate_add_style_profiles_table(&conn)?;
+
+        Ok(())
+    }
+
+    /// Add style_profiles table for AI reply generation
+    fn migrate_add_style_profiles_table(&self, conn: &Connection) -> Result<()> {
+        // Check if table exists
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='style_profiles'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        if !table_exists {
+            info!("Migrating database: creating style_profiles table...");
+            conn.execute_batch(
+                r#"
+                CREATE TABLE style_profiles (
+                    contact_id TEXT PRIMARY KEY,
+                    profile_text TEXT NOT NULL,
+                    sample_messages TEXT NOT NULL,
+                    message_count INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+
+                CREATE INDEX idx_style_profiles_updated ON style_profiles(updated_at);
+                "#,
+            )?;
+            info!("Database migration complete: created style_profiles table");
+        }
 
         Ok(())
     }
@@ -1432,6 +1494,250 @@ impl MessageStore {
 
         info!("All OAuth tokens cleared from database");
         Ok(())
+    }
+
+    // ========== Style Profile Methods ==========
+
+    /// Get a style profile by contact ID (or "__global__" for global profile)
+    pub fn get_style_profile(&self, contact_id: &str) -> Result<Option<StyleProfile>> {
+        let conn = self.conn.lock().unwrap();
+
+        let result = conn.query_row(
+            "SELECT contact_id, profile_text, sample_messages, message_count, updated_at 
+             FROM style_profiles WHERE contact_id = ?",
+            params![contact_id],
+            |row| {
+                let sample_messages_json: String = row.get(2)?;
+                let sample_messages: Vec<String> =
+                    serde_json::from_str(&sample_messages_json).unwrap_or_default();
+
+                Ok(StyleProfile {
+                    contact_id: row.get(0)?,
+                    profile_text: row.get(1)?,
+                    sample_messages,
+                    message_count: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(profile) => Ok(Some(profile)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Save or update a style profile
+    pub fn save_style_profile(&self, profile: &StyleProfile) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        let sample_messages_json = serde_json::to_string(&profile.sample_messages)?;
+
+        conn.execute(
+            r#"
+            INSERT INTO style_profiles (contact_id, profile_text, sample_messages, message_count, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(contact_id) DO UPDATE SET
+                profile_text = excluded.profile_text,
+                sample_messages = excluded.sample_messages,
+                message_count = excluded.message_count,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                profile.contact_id,
+                profile.profile_text,
+                sample_messages_json,
+                profile.message_count,
+                profile.updated_at,
+            ],
+        )?;
+
+        info!(
+            "Saved style profile for {} ({} messages analyzed)",
+            profile.contact_id, profile.message_count
+        );
+
+        Ok(())
+    }
+
+    /// Get count of outgoing messages (for determining if style profile needs refresh)
+    pub fn get_outgoing_message_count(&self, contact_id: Option<&str>) -> Result<i32> {
+        let conn = self.conn.lock().unwrap();
+
+        let count: i32 = if let Some(cid) = contact_id {
+            conn.query_row(
+                "SELECT COUNT(*) FROM messages WHERE is_from_me = 1 AND contact_id = ?",
+                params![cid],
+                |row| row.get(0),
+            )?
+        } else {
+            conn.query_row(
+                "SELECT COUNT(*) FROM messages WHERE is_from_me = 1",
+                [],
+                |row| row.get(0),
+            )?
+        };
+
+        Ok(count)
+    }
+
+    /// Get outgoing messages for style analysis
+    /// If contact_id is None, gets messages across all contacts (for global profile)
+    /// Returns messages with text content, ordered by timestamp descending
+    pub fn get_outgoing_messages_for_style(
+        &self,
+        contact_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>> {
+        let conn = self.conn.lock().unwrap();
+
+        let query = if contact_id.is_some() {
+            r#"
+            SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
+                   sender_phone, chat_type, content_type, content_json, original_text,
+                   translated_text, source_language, is_translated
+            FROM messages
+            WHERE is_from_me = 1 
+              AND contact_id = ?
+              AND content_type = 'Text'
+              AND (original_text IS NOT NULL OR content_json LIKE '%"body"%')
+            ORDER BY timestamp DESC
+            LIMIT ?
+            "#
+        } else {
+            r#"
+            SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
+                   sender_phone, chat_type, content_type, content_json, original_text,
+                   translated_text, source_language, is_translated
+            FROM messages
+            WHERE is_from_me = 1 
+              AND content_type = 'Text'
+              AND (original_text IS NOT NULL OR content_json LIKE '%"body"%')
+            ORDER BY timestamp DESC
+            LIMIT ?
+            "#
+        };
+
+        let mut stmt = conn.prepare(query)?;
+
+        let messages: Vec<StoredMessage> = if let Some(cid) = contact_id {
+            stmt.query_map(params![cid, limit as i64], |row| {
+                Self::row_to_stored_message(row, None, None)
+            })?
+            .filter_map(|r| r.ok())
+            .collect()
+        } else {
+            stmt.query_map(params![limit as i64], |row| {
+                Self::row_to_stored_message(row, None, None)
+            })?
+            .filter_map(|r| r.ok())
+            .collect()
+        };
+
+        Ok(messages)
+    }
+
+    /// Helper to convert a row to StoredMessage (used by multiple methods)
+    fn row_to_stored_message(
+        row: &rusqlite::Row,
+        contact_name: Option<String>,
+        contact_phone: Option<String>,
+    ) -> rusqlite::Result<StoredMessage> {
+        let content_json: String = row.get(9)?;
+        let content = serde_json::from_str(&content_json).ok();
+
+        Ok(StoredMessage {
+            id: row.get(0)?,
+            contact_id: row.get(1)?,
+            timestamp: row.get(2)?,
+            is_from_me: row.get::<_, i32>(3)? != 0,
+            is_forwarded: row.get::<_, i32>(4).unwrap_or(0) != 0,
+            sender_name: row.get(5)?,
+            sender_phone: row.get(6)?,
+            contact_name,
+            contact_phone,
+            chat_type: row
+                .get::<_, Option<String>>(7)?
+                .unwrap_or_else(|| "private".to_string()),
+            content_type: row.get(8)?,
+            content_json,
+            content,
+            original_text: row.get(10)?,
+            translated_text: row.get(11)?,
+            source_language: row.get(12)?,
+            is_translated: row.get::<_, i32>(13).unwrap_or(0) != 0,
+        })
+    }
+
+    /// Get a specific message by ID
+    pub fn get_message_by_id(&self, message_id: &str) -> Result<Option<StoredMessage>> {
+        let conn = self.conn.lock().unwrap();
+
+        let result = conn.query_row(
+            r#"
+            SELECT m.id, m.contact_id, m.timestamp, m.is_from_me, m.is_forwarded, m.sender_name,
+                   m.sender_phone, m.chat_type, m.content_type, m.content_json, m.original_text,
+                   m.translated_text, m.source_language, m.is_translated,
+                   c.name as contact_name, c.phone as contact_phone
+            FROM messages m
+            LEFT JOIN contacts c ON m.contact_id = c.id
+            WHERE m.id = ?
+            "#,
+            params![message_id],
+            |row| {
+                let contact_name: Option<String> = row.get(14)?;
+                let contact_phone: Option<String> = row.get(15)?;
+                Self::row_to_stored_message(row, contact_name, contact_phone)
+            },
+        );
+
+        match result {
+            Ok(msg) => Ok(Some(msg)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get recent messages for a contact (for conversation context)
+    pub fn get_recent_messages(
+        &self,
+        contact_id: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>> {
+        let conn = self.conn.lock().unwrap();
+
+        // Get contact info
+        let contact_info: Option<(Option<String>, Option<String>)> = conn
+            .query_row(
+                "SELECT name, phone FROM contacts WHERE id = ?",
+                params![contact_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+
+        let (contact_name, contact_phone) = contact_info.unwrap_or((None, None));
+
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
+                   sender_phone, chat_type, content_type, content_json, original_text,
+                   translated_text, source_language, is_translated
+            FROM messages
+            WHERE contact_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![contact_id, limit as i64], |row| {
+            Self::row_to_stored_message(row, contact_name.clone(), contact_phone.clone())
+        })?;
+
+        // Collect and reverse to get chronological order
+        let mut messages: Vec<StoredMessage> = rows.filter_map(|r| r.ok()).collect();
+        messages.reverse();
+        Ok(messages)
     }
 }
 
