@@ -1349,7 +1349,8 @@ use rmcp::transport::streamable_http_server::{
 };
 
 fn create_mcp_service(
-    state: Arc<AppState>,
+    store: Arc<MessageStore>,
+    command_tx: Option<mpsc::Sender<BridgeCommand>>,
 ) -> StreamableHttpService<WhatsAppMcpServer, LocalSessionManager> {
     let session_manager = Arc::new(LocalSessionManager::default());
     let config = StreamableHttpServerConfig {
@@ -1357,17 +1358,10 @@ fn create_mcp_service(
         ..Default::default()
     };
 
-    // Clone state for the closure
-    let state_clone = state.clone();
-
     StreamableHttpService::new(
         move || {
             // Create a new MCP server instance for each request
-            let command_tx = state_clone.command_tx.blocking_read().clone();
-            Ok(WhatsAppMcpServer::new(
-                Arc::new(state_clone.store.clone()),
-                command_tx,
-            ))
+            Ok(WhatsAppMcpServer::new(store.clone(), command_tx.clone()))
         },
         session_manager,
         config,
@@ -1378,7 +1372,11 @@ async fn mcp_handler(
     State(state): State<Arc<AppState>>,
     request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
-    let service = create_mcp_service(state);
+    // Read the command_tx asynchronously before creating the service
+    let command_tx = state.command_tx.read().await.clone();
+    let store = Arc::new(state.store.clone());
+
+    let service = create_mcp_service(store, command_tx);
     // StreamableHttpService has an async handle method we can call directly
     service.handle(request).await
 }
