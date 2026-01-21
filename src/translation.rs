@@ -642,14 +642,14 @@ Respond with ONLY the message text, nothing else."#;
     /// - recent_conversation: Recent messages for context (last ~20)
     /// - global_style: User's overall writing style profile
     /// - contact_style: Optional style specific to this contact
-    /// - my_reply_examples: Examples of user's outgoing messages to this contact
+    /// - exchange_pairs: Pairs of (their message, my reply) showing conversation patterns
     pub async fn compose_styled_reply(
         &self,
         message_to_reply: &crate::storage::StoredMessage,
         recent_conversation: &[crate::storage::StoredMessage],
         global_style: &crate::storage::StyleProfile,
         contact_style: Option<&crate::storage::StyleProfile>,
-        my_reply_examples: &[crate::storage::StoredMessage],
+        exchange_pairs: &[(crate::storage::StoredMessage, crate::storage::StoredMessage)],
     ) -> Result<(String, UsageInfo)> {
         // Extract text from the message being replied to
         let reply_to_text = message_to_reply
@@ -682,8 +682,8 @@ Respond with ONLY the message text, nothing else."#;
         // Format recent conversation
         let conversation_context = Self::format_conversation(recent_conversation);
 
-        // Format my reply examples
-        let my_examples = Self::format_my_examples(my_reply_examples);
+        // Format exchange pairs (their message -> my reply)
+        let exchange_examples = Self::format_exchange_pairs(exchange_pairs);
 
         // Build the contact-specific style section
         let contact_style_section = if let Some(cs) = contact_style {
@@ -706,25 +706,27 @@ Respond with ONLY the message text, nothing else."#;
 ## RECENT CONVERSATION:
 {}
 
-## EXAMPLES OF MY MESSAGES TO THIS CONTACT:
+## EXAMPLES OF HOW I REPLY TO THIS PERSON:
+These show the pattern of what they say and how I typically respond:
+
 {}
 
-## MESSAGE I'M REPLYING TO:
+## MESSAGE I'M REPLYING TO NOW:
 From: {}
 "{}"
 
-## RULES:
-1. Match my tone, emoji usage, and phrasing exactly
-2. Keep it natural WhatsApp length (don't over-explain)
+## CRITICAL RULES:
+1. Study my example replies above carefully - match my exact tone, emoji usage, punctuation, and phrasing
+2. Keep it natural WhatsApp length - I don't over-explain or write essays
 3. Respond appropriately to what was asked/said
 4. Output ONLY the reply text - no quotes, no "Reply:", no explanations
-5. If I typically use certain greetings/phrases/emojis, use them naturally
+5. If I use lowercase, keep it lowercase. If I use emojis, use similar ones. Match my vibe exactly.
 
 Generate my reply:"#,
             global_style.profile_text,
             contact_style_section,
             conversation_context,
-            my_examples,
+            exchange_examples,
             sender_name,
             reply_to_text
         );
@@ -839,33 +841,69 @@ Generate my reply:"#,
             .join("\n")
     }
 
-    /// Format user's example messages for the prompt
-    fn format_my_examples(messages: &[crate::storage::StoredMessage]) -> String {
-        if messages.is_empty() {
-            return "No previous messages to this contact yet.".to_string();
+    /// Format message exchange pairs for the prompt
+    /// Shows "They said X" -> "I replied Y" patterns
+    fn format_exchange_pairs(
+        pairs: &[(crate::storage::StoredMessage, crate::storage::StoredMessage)],
+    ) -> String {
+        if pairs.is_empty() {
+            return "No previous conversation exchanges with this contact yet.".to_string();
         }
 
-        messages
+        pairs
             .iter()
-            .filter_map(|m| {
-                m.original_text.clone().or_else(|| {
-                    m.content.as_ref().and_then(|c| {
-                        c.get("body")
-                            .and_then(|v| v.as_str().map(String::from))
-                            .or_else(|| c.get("caption").and_then(|v| v.as_str().map(String::from)))
-                    })
-                })
-            })
             .enumerate()
-            .map(|(i, text)| {
-                let text = if text.len() > 150 {
-                    format!("{}...", &text[..147])
+            .map(|(i, (their_msg, my_reply))| {
+                let their_text = their_msg
+                    .original_text
+                    .clone()
+                    .or_else(|| their_msg.translated_text.clone())
+                    .or_else(|| {
+                        their_msg.content.as_ref().and_then(|c| {
+                            c.get("body")
+                                .and_then(|v| v.as_str().map(String::from))
+                                .or_else(|| {
+                                    c.get("caption").and_then(|v| v.as_str().map(String::from))
+                                })
+                        })
+                    })
+                    .unwrap_or_else(|| "[message]".to_string());
+
+                let my_text = my_reply
+                    .original_text
+                    .clone()
+                    .or_else(|| {
+                        my_reply.content.as_ref().and_then(|c| {
+                            c.get("body")
+                                .and_then(|v| v.as_str().map(String::from))
+                                .or_else(|| {
+                                    c.get("caption").and_then(|v| v.as_str().map(String::from))
+                                })
+                        })
+                    })
+                    .unwrap_or_else(|| "[reply]".to_string());
+
+                // Truncate long messages but keep enough context
+                let their_text = if their_text.len() > 200 {
+                    format!("{}...", &their_text[..197])
                 } else {
-                    text
+                    their_text
                 };
-                format!("{}. {}", i + 1, text)
+
+                let my_text = if my_text.len() > 200 {
+                    format!("{}...", &my_text[..197])
+                } else {
+                    my_text
+                };
+
+                format!(
+                    "---\nExchange {}:\nThem: \"{}\"\nMe: \"{}\"",
+                    i + 1,
+                    their_text,
+                    my_text
+                )
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n\n")
     }
 }

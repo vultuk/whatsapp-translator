@@ -1369,14 +1369,11 @@ async fn ai_reply(
         }
     };
 
-    // Get examples of user's replies to this contact
-    let my_examples = match state
-        .store
-        .get_outgoing_messages_for_style(Some(&req.contact_id), 5)
-    {
-        Ok(msgs) => msgs,
+    // Get message exchange pairs (their message -> my reply) for better style learning
+    let exchange_pairs = match state.store.get_message_exchange_pairs(&req.contact_id, 15) {
+        Ok(pairs) => pairs,
         Err(e) => {
-            warn!("Failed to get example messages: {}", e);
+            warn!("Failed to get exchange pairs: {}", e);
             vec![]
         }
     };
@@ -1388,7 +1385,7 @@ async fn ai_reply(
             &recent_conversation,
             &global_style,
             Some(&contact_style),
-            &my_examples,
+            &exchange_pairs,
         )
         .await
     {

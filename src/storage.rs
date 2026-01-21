@@ -1638,6 +1638,57 @@ impl MessageStore {
         Ok(messages)
     }
 
+    /// Get message exchange pairs for style learning
+    /// Returns pairs of (incoming message, my reply) to show conversation patterns
+    /// This helps AI learn not just what you say, but how you respond to different inputs
+    pub fn get_message_exchange_pairs(
+        &self,
+        contact_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(StoredMessage, StoredMessage)>> {
+        let conn = self.conn.lock().unwrap();
+
+        // Get recent messages for this contact, ordered by timestamp
+        let query = r#"
+            SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
+                   sender_phone, chat_type, content_type, content_json, original_text,
+                   translated_text, source_language, is_translated
+            FROM messages
+            WHERE contact_id = ?
+              AND content_type = 'Text'
+              AND (original_text IS NOT NULL OR content_json LIKE '%"body"%')
+            ORDER BY timestamp DESC
+            LIMIT ?
+        "#;
+
+        let mut stmt = conn.prepare(query)?;
+        let messages: Vec<StoredMessage> = stmt
+            .query_map(params![contact_id, (limit * 3) as i64], |row| {
+                Self::row_to_stored_message(row, None, None)
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Find pairs: look for my messages that follow their messages
+        let mut pairs = Vec::new();
+        let messages_sorted: Vec<_> = messages.into_iter().rev().collect(); // chronological order
+
+        for i in 1..messages_sorted.len() {
+            let prev = &messages_sorted[i - 1];
+            let curr = &messages_sorted[i];
+
+            // If previous message is from them and current is from me, it's an exchange
+            if !prev.is_from_me && curr.is_from_me {
+                pairs.push((prev.clone(), curr.clone()));
+                if pairs.len() >= limit {
+                    break;
+                }
+            }
+        }
+
+        Ok(pairs)
+    }
+
     /// Helper to convert a row to StoredMessage (used by multiple methods)
     fn row_to_stored_message(
         row: &rusqlite::Row,
