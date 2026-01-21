@@ -74,22 +74,28 @@ class WhatsAppClient {
   setupVisualViewport() {
     if (!window.visualViewport) return;
     
+    // Store the initial viewport height (without keyboard)
+    const initialHeight = window.visualViewport.height;
+    
     const updateViewportHeight = () => {
-      // Get the actual visible viewport height (excludes keyboard + suggestion bar)
       const vh = window.visualViewport.height;
-      document.documentElement.style.setProperty('--viewport-height', `${vh}px`);
+      const heightDiff = initialHeight - vh;
       
-      // On iOS, also adjust for the offset when keyboard pushes content up
-      const offset = window.innerHeight - vh;
-      document.documentElement.style.setProperty('--keyboard-offset', `${offset}px`);
+      // Only apply the fix when keyboard is likely open (height reduced by more than 100px)
+      // This prevents the fix from affecting normal layout
+      if (heightDiff > 100) {
+        document.documentElement.style.setProperty('--viewport-height', `${vh}px`);
+        document.documentElement.style.setProperty('--keyboard-offset', `${heightDiff}px`);
+      } else {
+        // Reset to default when keyboard is closed
+        document.documentElement.style.setProperty('--viewport-height', '100dvh');
+        document.documentElement.style.setProperty('--keyboard-offset', '0px');
+      }
     };
     
     // Update on viewport resize (keyboard open/close)
     window.visualViewport.addEventListener('resize', updateViewportHeight);
     window.visualViewport.addEventListener('scroll', updateViewportHeight);
-    
-    // Initial call
-    updateViewportHeight();
   }
 
   async checkAuth() {
