@@ -1856,3 +1856,23 @@ body {
     -webkit-line-clamp: 2;
   }
 }
+
+/* Loading indicator for infinite scroll */
+.loading-more-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.loading-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--bg-tertiary);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}

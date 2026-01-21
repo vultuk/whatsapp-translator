@@ -7,6 +7,8 @@ class WhatsAppClient {
     this.contacts = [];
     this.currentContactId = null;
     this.messages = new Map();
+    this.messagesHasMore = new Map(); // contactId -> boolean (whether more messages exist)
+    this.messagesLoading = new Map(); // contactId -> boolean (whether currently loading)
     this.avatarCache = new Map(); // JID -> URL
     this.avatarFetching = new Set(); // JIDs currently being fetched
     this.globalUsage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
@@ -929,16 +931,156 @@ class WhatsAppClient {
     }
   }
 
-  // Load messages for a contact
+  // Load messages for a contact (initial load - most recent 50)
   async loadMessages(contactId) {
     try {
+      this.messagesLoading.set(contactId, true);
       const response = await fetch(`/api/messages/${encodeURIComponent(contactId)}`);
-      const messages = await response.json();
+      const data = await response.json();
+      
+      // Handle both old format (array) and new format (object with messages/hasMore)
+      const messages = Array.isArray(data) ? data : data.messages;
+      const hasMore = Array.isArray(data) ? false : data.hasMore;
+      
       this.messages.set(contactId, messages);
+      this.messagesHasMore.set(contactId, hasMore);
       this.renderMessages(messages);
+      
+      // Set up scroll handler for infinite scroll
+      this.setupScrollHandler();
     } catch (err) {
       console.error('Failed to load messages:', err);
+    } finally {
+      this.messagesLoading.set(contactId, false);
     }
+  }
+
+  // Load older messages (for infinite scroll)
+  async loadOlderMessages(contactId) {
+    // Don't load if already loading or no more messages
+    if (this.messagesLoading.get(contactId)) return;
+    if (!this.messagesHasMore.get(contactId)) return;
+    
+    const existingMessages = this.messages.get(contactId) || [];
+    if (existingMessages.length === 0) return;
+    
+    // Get the oldest message's timestamp
+    const oldestTimestamp = existingMessages[0].timestamp;
+    
+    try {
+      this.messagesLoading.set(contactId, true);
+      this.showLoadingIndicator();
+      
+      const response = await fetch(
+        `/api/messages/${encodeURIComponent(contactId)}?before=${oldestTimestamp}&limit=50`
+      );
+      const data = await response.json();
+      
+      const olderMessages = Array.isArray(data) ? data : data.messages;
+      const hasMore = Array.isArray(data) ? false : data.hasMore;
+      
+      if (olderMessages.length > 0) {
+        // Prepend older messages
+        const allMessages = [...olderMessages, ...existingMessages];
+        this.messages.set(contactId, allMessages);
+        this.messagesHasMore.set(contactId, hasMore);
+        
+        // Re-render and maintain scroll position
+        this.prependMessages(olderMessages);
+      } else {
+        this.messagesHasMore.set(contactId, false);
+      }
+    } catch (err) {
+      console.error('Failed to load older messages:', err);
+    } finally {
+      this.messagesLoading.set(contactId, false);
+      this.hideLoadingIndicator();
+    }
+  }
+
+  // Set up scroll handler for infinite scroll
+  setupScrollHandler() {
+    const container = document.getElementById('messages-list');
+    if (!container) return;
+    
+    // Remove existing handler if any
+    container.removeEventListener('scroll', this.handleMessagesScroll);
+    
+    // Add scroll handler
+    this.handleMessagesScroll = () => {
+      // Load more when scrolled near the top (within 200px)
+      if (container.scrollTop < 200 && this.currentContactId) {
+        this.loadOlderMessages(this.currentContactId);
+      }
+    };
+    
+    container.addEventListener('scroll', this.handleMessagesScroll);
+  }
+
+  // Show loading indicator at top of messages
+  showLoadingIndicator() {
+    const container = document.getElementById('messages-list');
+    if (!container) return;
+    
+    // Remove existing indicator
+    const existing = container.querySelector('.loading-more-indicator');
+    if (existing) existing.remove();
+    
+    // Add new indicator at top
+    const indicator = document.createElement('div');
+    indicator.className = 'loading-more-indicator';
+    indicator.innerHTML = '<div class="loading-spinner"></div><span>Loading older messages...</span>';
+    container.insertBefore(indicator, container.firstChild);
+  }
+
+  // Hide loading indicator
+  hideLoadingIndicator() {
+    const indicator = document.querySelector('.loading-more-indicator');
+    if (indicator) indicator.remove();
+  }
+
+  // Prepend older messages to the list (maintaining scroll position)
+  prependMessages(olderMessages) {
+    const container = document.getElementById('messages-list');
+    if (!container || olderMessages.length === 0) return;
+    
+    // Remember scroll position from bottom
+    const scrollHeightBefore = container.scrollHeight;
+    const scrollTopBefore = container.scrollTop;
+    
+    // Build HTML for older messages
+    let html = '';
+    let lastDate = null;
+    
+    for (const message of olderMessages) {
+      const messageDate = new Date(message.timestamp).toDateString();
+      if (messageDate !== lastDate) {
+        html += `<div class="date-separator"><span>${this.formatDate(message.timestamp)}</span></div>`;
+        lastDate = messageDate;
+      }
+      html += this.renderMessage(message);
+    }
+    
+    // Remove loading indicator and first date separator if it will be duplicated
+    const firstDateSep = container.querySelector('.date-separator');
+    if (firstDateSep && olderMessages.length > 0) {
+      const lastOlderDate = new Date(olderMessages[olderMessages.length - 1].timestamp).toDateString();
+      const firstExistingDate = firstDateSep.textContent;
+      // Check if dates match (approximately)
+      if (firstDateSep.textContent.includes(this.formatDate(olderMessages[olderMessages.length - 1].timestamp).split(',')[0])) {
+        firstDateSep.remove();
+      }
+    }
+    
+    // Insert at the beginning
+    container.insertAdjacentHTML('afterbegin', html);
+    
+    // Restore scroll position (keep viewing the same messages)
+    const scrollHeightAfter = container.scrollHeight;
+    container.scrollTop = scrollTopBefore + (scrollHeightAfter - scrollHeightBefore);
+    
+    // Load link previews for prepended messages
+    this.loadAllLinkPreviews();
   }
 
   // Render messages

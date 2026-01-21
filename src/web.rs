@@ -667,16 +667,48 @@ async fn toggle_pin(
     }
 }
 
+/// Query parameters for messages pagination
+#[derive(Debug, Deserialize)]
+struct MessagesQuery {
+    /// Maximum number of messages to return (default: 50 for initial load)
+    limit: Option<u32>,
+    /// Only get messages before this timestamp (for loading older messages)
+    before: Option<i64>,
+}
+
+/// Response for paginated messages
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MessagesResponse {
+    messages: Vec<StoredMessage>,
+    has_more: bool,
+}
+
 async fn get_messages(
     State(state): State<Arc<AppState>>,
     Path(contact_id): Path<String>,
+    Query(params): Query<MessagesQuery>,
 ) -> impl IntoResponse {
     let contact_id = urlencoding::decode(&contact_id)
         .map(|s| s.into_owned())
         .unwrap_or(contact_id);
 
-    match state.store.get_messages(&contact_id) {
-        Ok(messages) => Json(messages).into_response(),
+    // Default to 50 messages for initial load, unless explicitly requesting all (limit=0)
+    let limit = match params.limit {
+        Some(0) => None, // 0 means all messages (for backwards compatibility / MCP)
+        Some(n) => Some(n),
+        None => Some(50), // Default to 50 for lazy loading
+    };
+
+    match state
+        .store
+        .get_messages_paginated(&contact_id, limit, params.before)
+    {
+        Ok(messages) => {
+            // Check if there are more messages (we got a full page)
+            let has_more = limit.map(|l| messages.len() >= l as usize).unwrap_or(false);
+            Json(MessagesResponse { messages, has_more }).into_response()
+        }
         Err(e) => {
             error!("Failed to get messages: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get messages").into_response()

@@ -498,8 +498,21 @@ impl MessageStore {
         }
     }
 
-    /// Get messages for a specific contact
+    /// Get messages for a specific contact (all messages - for MCP/internal use)
     pub fn get_messages(&self, contact_id: &str) -> Result<Vec<StoredMessage>> {
+        self.get_messages_paginated(contact_id, None, None)
+    }
+
+    /// Get messages for a specific contact with pagination
+    /// - limit: max number of messages to return (default: all)
+    /// - before_timestamp: only get messages before this timestamp (for loading older messages)
+    /// Returns messages in ascending order by timestamp (oldest first)
+    pub fn get_messages_paginated(
+        &self,
+        contact_id: &str,
+        limit: Option<u32>,
+        before_timestamp: Option<i64>,
+    ) -> Result<Vec<StoredMessage>> {
         let conn = self.conn.lock().unwrap();
 
         // First get the contact info to populate contact_name and contact_phone
@@ -513,19 +526,61 @@ impl MessageStore {
 
         let (contact_name, contact_phone) = contact_info.unwrap_or((None, None));
 
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, 
-                   sender_phone, chat_type, content_type, content_json, original_text,
-                   translated_text, source_language, is_translated
-            FROM messages 
-            WHERE contact_id = ?
-            ORDER BY timestamp ASC
-            "#,
-        )?;
+        // Build query based on parameters
+        // We select in DESC order to get the most recent N messages, then reverse
+        let query = match (limit, before_timestamp) {
+            (Some(lim), Some(before)) => {
+                format!(
+                    r#"
+                    SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, 
+                           sender_phone, chat_type, content_type, content_json, original_text,
+                           translated_text, source_language, is_translated
+                    FROM messages 
+                    WHERE contact_id = ? AND timestamp < ?
+                    ORDER BY timestamp DESC
+                    LIMIT {}
+                    "#,
+                    lim
+                )
+            }
+            (Some(lim), None) => {
+                format!(
+                    r#"
+                    SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, 
+                           sender_phone, chat_type, content_type, content_json, original_text,
+                           translated_text, source_language, is_translated
+                    FROM messages 
+                    WHERE contact_id = ?
+                    ORDER BY timestamp DESC
+                    LIMIT {}
+                    "#,
+                    lim
+                )
+            }
+            (None, Some(before)) => r#"
+                SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, 
+                       sender_phone, chat_type, content_type, content_json, original_text,
+                       translated_text, source_language, is_translated
+                FROM messages 
+                WHERE contact_id = ? AND timestamp < ?
+                ORDER BY timestamp ASC
+                "#
+            .to_string(),
+            (None, None) => r#"
+                SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, 
+                       sender_phone, chat_type, content_type, content_json, original_text,
+                       translated_text, source_language, is_translated
+                FROM messages 
+                WHERE contact_id = ?
+                ORDER BY timestamp ASC
+                "#
+            .to_string(),
+        };
 
-        let messages = stmt
-            .query_map(params![contact_id], |row| {
+        let mut stmt = conn.prepare(&query)?;
+
+        let messages: Vec<StoredMessage> = if before_timestamp.is_some() {
+            stmt.query_map(params![contact_id, before_timestamp], |row| {
                 let content_json: String = row.get(9)?;
                 let content = serde_json::from_str(&content_json).ok();
                 Ok(StoredMessage {
@@ -549,9 +604,43 @@ impl MessageStore {
                 })
             })?
             .filter_map(|r| r.ok())
-            .collect();
+            .collect()
+        } else {
+            stmt.query_map(params![contact_id], |row| {
+                let content_json: String = row.get(9)?;
+                let content = serde_json::from_str(&content_json).ok();
+                Ok(StoredMessage {
+                    id: row.get(0)?,
+                    contact_id: row.get(1)?,
+                    timestamp: row.get(2)?,
+                    is_from_me: row.get(3)?,
+                    is_forwarded: row.get(4)?,
+                    sender_name: row.get(5)?,
+                    sender_phone: row.get(6)?,
+                    contact_name: contact_name.clone(),
+                    contact_phone: contact_phone.clone(),
+                    chat_type: row.get(7)?,
+                    content_type: row.get(8)?,
+                    content_json,
+                    content,
+                    original_text: row.get(10)?,
+                    translated_text: row.get(11)?,
+                    source_language: row.get(12)?,
+                    is_translated: row.get(13)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect()
+        };
 
-        Ok(messages)
+        // If we used DESC order with limit, reverse to get chronological order
+        if limit.is_some() {
+            let mut messages = messages;
+            messages.reverse();
+            Ok(messages)
+        } else {
+            Ok(messages)
+        }
     }
 
     /// Get a contact by ID
