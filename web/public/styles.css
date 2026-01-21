@@ -2009,21 +2009,22 @@ body {
 }
 
 .emoji-button {
-  background: none;
+  background: transparent;
   border: none;
-  padding: 8px;
+  padding: 4px;
   cursor: pointer;
   color: var(--text-secondary);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.2s, color 0.2s;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
 }
 
 .emoji-button:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  color: var(--accent-color);
+  background: rgba(0, 168, 132, 0.1);
 }
 
 .emoji-picker {
