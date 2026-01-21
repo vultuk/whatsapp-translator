@@ -774,18 +774,24 @@ class WhatsAppClient {
       const unread = contact.unreadCount > 0 ? 
         `<span class="unread-badge">${contact.unreadCount}</span>` : '';
       
-      // Get last message preview - for groups, show sender name
+      // Get last message preview - prefer cached messages, fall back to contact.lastMessagePreview
       const messages = this.messages.get(contact.id) || [];
       const lastMessage = messages[messages.length - 1];
-      let preview = lastMessage ? this.getMessagePreview(lastMessage) : '';
+      let preview = '';
       
-      // For groups, prefix with sender name if not from me
-      if (isGroup && lastMessage && !lastMessage.isFromMe && lastMessage.senderName) {
-        const senderFirst = lastMessage.senderName.split(' ')[0];
-        // Remove "You: " prefix if present (shouldn't be for incoming)
-        if (!preview.startsWith('You: ')) {
-          preview = `${senderFirst}: ${preview}`;
+      if (lastMessage) {
+        // Use locally cached message for preview
+        preview = this.getMessagePreview(lastMessage);
+        // For groups, prefix with sender name if not from me
+        if (isGroup && !lastMessage.isFromMe && lastMessage.senderName) {
+          const senderFirst = lastMessage.senderName.split(' ')[0];
+          if (!preview.startsWith('You: ')) {
+            preview = `${senderFirst}: ${preview}`;
+          }
         }
+      } else if (contact.lastMessagePreview) {
+        // Fall back to server-provided preview (used before messages are loaded)
+        preview = contact.lastMessagePreview;
       }
       
       // Check for cached avatar

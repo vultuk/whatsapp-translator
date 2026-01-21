@@ -70,6 +70,9 @@ pub struct StoredContact {
     /// Timestamp when pinned (None = not pinned)
     #[serde(rename = "pinnedAt")]
     pub pinned_at: Option<i64>,
+    /// Preview of the last message (truncated)
+    #[serde(rename = "lastMessagePreview")]
+    pub last_message_preview: Option<String>,
 }
 
 /// Thread-safe message store backed by SQLite
@@ -439,17 +442,33 @@ impl MessageStore {
     pub fn get_contacts(&self) -> Result<Vec<StoredContact>> {
         let conn = self.conn.lock().unwrap();
 
+        // Use a subquery to get the last message for each contact
         let mut stmt = conn.prepare(
-            "SELECT id, name, phone, type, last_message_time, unread_count, pinned_at 
-             FROM contacts 
-             ORDER BY 
-                CASE WHEN pinned_at IS NOT NULL THEN 0 ELSE 1 END,
-                pinned_at ASC,
-                last_message_time DESC",
+            r#"
+            SELECT 
+                c.id, c.name, c.phone, c.type, c.last_message_time, c.unread_count, c.pinned_at,
+                m.content_json, m.content_type, m.is_from_me
+            FROM contacts c
+            LEFT JOIN messages m ON m.contact_id = c.id AND m.timestamp = c.last_message_time
+            ORDER BY 
+                CASE WHEN c.pinned_at IS NOT NULL THEN 0 ELSE 1 END,
+                c.pinned_at ASC,
+                c.last_message_time DESC
+            "#,
         )?;
 
         let contacts = stmt
             .query_map([], |row| {
+                let content_json: Option<String> = row.get(7)?;
+                let content_type: Option<String> = row.get(8)?;
+                let is_from_me: Option<bool> = row.get(9)?;
+
+                let preview = Self::generate_message_preview(
+                    content_json.as_deref(),
+                    content_type.as_deref(),
+                    is_from_me.unwrap_or(false),
+                );
+
                 Ok(StoredContact {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -458,12 +477,102 @@ impl MessageStore {
                     last_message_time: row.get(4)?,
                     unread_count: row.get(5)?,
                     pinned_at: row.get(6)?,
+                    last_message_preview: preview,
                 })
             })?
             .filter_map(|r| r.ok())
             .collect();
 
         Ok(contacts)
+    }
+
+    /// Generate a preview string for a message (matching frontend logic)
+    fn generate_message_preview(
+        content_json: Option<&str>,
+        content_type: Option<&str>,
+        is_from_me: bool,
+    ) -> Option<String> {
+        let prefix = if is_from_me { "You: " } else { "" };
+
+        let content_type = content_type?;
+        let content_json = content_json?;
+
+        let content: serde_json::Value = serde_json::from_str(content_json).ok()?;
+
+        let preview = match content_type {
+            "text" => {
+                let body = content
+                    .get("body")
+                    .or_else(|| content.get("text"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let truncated: String = body.chars().take(50).collect();
+                format!("{}{}", prefix, truncated)
+            }
+            "image" => {
+                let caption = content
+                    .get("caption")
+                    .and_then(|v| v.as_str())
+                    .map(|c| {
+                        let truncated: String = c.chars().take(30).collect();
+                        format!(" {}", truncated)
+                    })
+                    .unwrap_or_default();
+                format!("{}[ Image ]{}", prefix, caption)
+            }
+            "video" => {
+                let caption = content
+                    .get("caption")
+                    .and_then(|v| v.as_str())
+                    .map(|c| {
+                        let truncated: String = c.chars().take(30).collect();
+                        format!(" {}", truncated)
+                    })
+                    .unwrap_or_default();
+                format!("{}[ Video ]{}", prefix, caption)
+            }
+            "audio" => {
+                let is_voice = content
+                    .get("is_voice_note")
+                    .or_else(|| content.get("isVoiceNote"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if is_voice {
+                    format!("{}[ Voice Note ]", prefix)
+                } else {
+                    format!("{}[ Audio ]", prefix)
+                }
+            }
+            "document" => {
+                let file_name = content
+                    .get("file_name")
+                    .or_else(|| content.get("fileName"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("file");
+                format!("{}[ Document: {} ]", prefix, file_name)
+            }
+            "sticker" => format!("{}[ Sticker ]", prefix),
+            "location" => format!("{}[ Location ]", prefix),
+            "contact" => {
+                let name = content.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                format!("{}[ Contact: {} ]", prefix, name)
+            }
+            "reaction" => {
+                let emoji = content.get("emoji").and_then(|v| v.as_str()).unwrap_or("");
+                format!("{}{}", prefix, emoji)
+            }
+            "revoked" => "[ Message deleted ]".to_string(),
+            "poll" => {
+                let question = content
+                    .get("question")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                format!("{}[ Poll: {} ]", prefix, question)
+            }
+            _ => format!("{}[ Message ]", prefix),
+        };
+
+        Some(preview)
     }
 
     /// Pin or unpin a contact
@@ -711,12 +820,28 @@ impl MessageStore {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
-            "SELECT id, name, phone, type, last_message_time, unread_count, pinned_at 
-             FROM contacts WHERE id = ?",
+            r#"
+            SELECT 
+                c.id, c.name, c.phone, c.type, c.last_message_time, c.unread_count, c.pinned_at,
+                m.content_json, m.content_type, m.is_from_me
+            FROM contacts c
+            LEFT JOIN messages m ON m.contact_id = c.id AND m.timestamp = c.last_message_time
+            WHERE c.id = ?
+            "#,
         )?;
 
         let contact = stmt
             .query_row(params![contact_id], |row| {
+                let content_json: Option<String> = row.get(7)?;
+                let content_type: Option<String> = row.get(8)?;
+                let is_from_me: Option<bool> = row.get(9)?;
+
+                let preview = Self::generate_message_preview(
+                    content_json.as_deref(),
+                    content_type.as_deref(),
+                    is_from_me.unwrap_or(false),
+                );
+
                 Ok(StoredContact {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -725,6 +850,7 @@ impl MessageStore {
                     last_message_time: row.get(4)?,
                     unread_count: row.get(5)?,
                     pinned_at: row.get(6)?,
+                    last_message_preview: preview,
                 })
             })
             .ok();
