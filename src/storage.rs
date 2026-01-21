@@ -499,7 +499,9 @@ impl MessageStore {
 
         let content: serde_json::Value = serde_json::from_str(content_json).ok()?;
 
-        let preview = match content_type {
+        // Normalize content_type to lowercase for matching
+        let content_type_lower = content_type.to_lowercase();
+        let preview = match content_type_lower.as_str() {
             "text" => {
                 let body = content
                     .get("body")
@@ -543,6 +545,7 @@ impl MessageStore {
                     format!("{}[ Audio ]", prefix)
                 }
             }
+            "voice note" => format!("{}[ Voice Note ]", prefix),
             "document" => {
                 let file_name = content
                     .get("file_name")
