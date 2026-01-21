@@ -39,7 +39,7 @@ futures = "0.3"
 
 # HTTP server for web frontend
 axum = { version = "0.7", features = ["ws"] }
-tower = "0.4"
+tower = "0.5"
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 
 # HTTP client for Claude API
@@ -58,10 +58,8 @@ urlencoding = "2"
 regex = "1"
 
 # MCP (Model Context Protocol) server
-rmcp = { version = "0.13", features = ["server", "macros", "schemars"] }
+rmcp = { version = "0.13", features = ["server", "macros", "schemars", "transport-streamable-http-server"] }
 schemars = "1"
-pin-project-lite = "0.2"
-tokio-tungstenite = "0.26"
 async-trait = "0.1"
 
 [build-dependencies]
