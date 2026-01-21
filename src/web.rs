@@ -5,12 +5,12 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, State,
+        Host, Path, Query, State,
     },
-    http::StatusCode,
-    response::{IntoResponse, Json},
+    http::{header, StatusCode},
+    response::{Html, IntoResponse, Json, Redirect},
     routing::{get, post},
-    Router,
+    Form, Router,
 };
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,11 @@ use tracing::{error, info, warn};
 
 use crate::bridge::BridgeCommand;
 use crate::mcp::WhatsAppMcpServer;
+use crate::oauth::{
+    generate_token, AccessToken, AuthorizationCode, AuthorizeRequest, OAuthError,
+    OAuthErrorResponse, OAuthMetadata, PendingAuthorization, RefreshToken, RevokeRequest,
+    TokenRequest, TokenResponse,
+};
 use crate::storage::{MessageStore, StoredMessage};
 use crate::translation::TranslationService;
 use tokio::sync::mpsc;
@@ -429,6 +434,15 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let serve_dir = ServeDir::new(&state.web_dir);
 
     Router::new()
+        // OAuth 2.0 routes for MCP authentication
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth_metadata),
+        )
+        .route("/oauth/authorize", get(oauth_authorize))
+        .route("/oauth/approve", post(oauth_approve))
+        .route("/oauth/token", post(oauth_token))
+        .route("/oauth/revoke", post(oauth_revoke))
         // Auth routes (no auth required)
         .route("/api/auth/check", get(auth_check))
         .route("/api/auth", post(auth_login))
@@ -1281,6 +1295,493 @@ async fn get_link_preview(
     }
 }
 
+// ==================== OAuth 2.0 Handlers ====================
+
+/// Get base URL from request (for OAuth metadata)
+fn get_base_url(host: &str, is_https: bool) -> String {
+    let scheme = if is_https { "https" } else { "http" };
+    format!("{}://{}", scheme, host)
+}
+
+/// OAuth 2.0 Authorization Server Metadata (RFC 8414)
+async fn oauth_metadata(Host(host): Host) -> impl IntoResponse {
+    // Assume HTTPS in production (Railway sets this)
+    let is_https = !host.contains("localhost") && !host.contains("127.0.0.1");
+    let base_url = get_base_url(&host, is_https);
+    let metadata = OAuthMetadata::new(&base_url);
+    Json(metadata)
+}
+
+/// OAuth Authorization endpoint - shows approval page
+async fn oauth_authorize(
+    State(state): State<Arc<AppState>>,
+    Host(host): Host,
+    Query(params): Query<AuthorizeRequest>,
+) -> impl IntoResponse {
+    // Validate request
+    if params.response_type != "code" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html(format!(
+                r#"<html><body><h1>Error</h1><p>Unsupported response_type: {}</p></body></html>"#,
+                params.response_type
+            )),
+        )
+            .into_response();
+    }
+
+    if params.code_challenge_method != "S256" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html(r#"<html><body><h1>Error</h1><p>Only S256 code_challenge_method is supported (PKCE required)</p></body></html>"#.to_string()),
+        )
+            .into_response();
+    }
+
+    // Generate a session key for this authorization request
+    let session_key = generate_token();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let pending = PendingAuthorization {
+        session_key: session_key.clone(),
+        client_id: params.client_id.clone(),
+        redirect_uri: params.redirect_uri.clone(),
+        code_challenge: params.code_challenge.clone(),
+        code_challenge_method: params.code_challenge_method.clone(),
+        scope: params.scope.clone().unwrap_or_else(|| "mcp".to_string()),
+        state: params.state.clone(),
+        created_at: now,
+        expires_at: now + 600, // 10 minutes
+    };
+
+    // Store pending authorization
+    if let Err(e) = state.store.oauth_store_pending_auth(&pending) {
+        error!("Failed to store pending auth: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(
+                "<html><body><h1>Error</h1><p>Internal server error</p></body></html>".to_string(),
+            ),
+        )
+            .into_response();
+    }
+
+    // Check if password auth is required
+    let requires_password = state.password.is_some();
+
+    // Show approval page
+    let is_https = !host.contains("localhost") && !host.contains("127.0.0.1");
+    let base_url = get_base_url(&host, is_https);
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>Authorize MCP Client</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+               max-width: 500px; margin: 50px auto; padding: 20px; background: #f5f5f5; }}
+        .card {{ background: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+        h1 {{ color: #333; margin-top: 0; }}
+        .client-info {{ background: #f0f0f0; padding: 15px; border-radius: 8px; margin: 20px 0; }}
+        .scope {{ color: #666; font-size: 0.9em; }}
+        .warning {{ color: #e67e22; font-size: 0.9em; margin: 15px 0; }}
+        .buttons {{ display: flex; gap: 10px; margin-top: 20px; }}
+        button {{ flex: 1; padding: 12px 24px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }}
+        .approve {{ background: #25D366; color: white; }}
+        .approve:hover {{ background: #1da851; }}
+        .deny {{ background: #e74c3c; color: white; }}
+        .deny:hover {{ background: #c0392b; }}
+        input {{ width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; }}
+        label {{ display: block; margin-top: 15px; color: #666; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🔐 Authorize MCP Client</h1>
+        <p>An application is requesting access to your WhatsApp Translator:</p>
+        
+        <div class="client-info">
+            <strong>Client ID:</strong> {client_id}<br>
+            <strong>Redirect URI:</strong> {redirect_uri}
+        </div>
+        
+        <div class="scope">
+            <strong>Requested permissions:</strong> {scope}<br>
+            This will allow the application to read your contacts, messages, and send messages on your behalf.
+        </div>
+        
+        <p class="warning">⚠️ Only authorize applications you trust!</p>
+        
+        <form method="POST" action="{base_url}/oauth/approve">
+            <input type="hidden" name="session_key" value="{session_key}">
+            {password_field}
+            <div class="buttons">
+                <button type="submit" name="approved" value="true" class="approve">✓ Authorize</button>
+                <button type="submit" name="approved" value="false" class="deny">✗ Deny</button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>"#,
+        client_id = html_escape(&params.client_id),
+        redirect_uri = html_escape(&params.redirect_uri),
+        scope = html_escape(&params.scope.clone().unwrap_or_else(|| "mcp".to_string())),
+        base_url = base_url,
+        session_key = session_key,
+        password_field = if requires_password {
+            r#"<label for="password">Enter your password to authorize:</label>
+            <input type="password" name="password" id="password" placeholder="Password" required>"#
+        } else {
+            ""
+        }
+    );
+
+    Html(html).into_response()
+}
+
+/// Simple HTML escaping
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
+/// OAuth approval form data
+#[derive(Debug, Deserialize)]
+struct OAuthApprovalForm {
+    session_key: String,
+    approved: String,
+    password: Option<String>,
+}
+
+/// Handle OAuth approval form submission
+async fn oauth_approve(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<OAuthApprovalForm>,
+) -> impl IntoResponse {
+    // Get the pending authorization
+    let pending = match state.store.oauth_take_pending_auth(&form.session_key) {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Html("<html><body><h1>Error</h1><p>Invalid or expired authorization request</p></body></html>".to_string()),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to get pending auth: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(
+                    "<html><body><h1>Error</h1><p>Internal server error</p></body></html>"
+                        .to_string(),
+                ),
+            )
+                .into_response();
+        }
+    };
+
+    // Check if user denied
+    if form.approved != "true" {
+        let redirect_url = build_error_redirect(
+            &pending.redirect_uri,
+            OAuthError::AccessDenied,
+            pending.state.as_deref(),
+        );
+        return Redirect::to(&redirect_url).into_response();
+    }
+
+    // Verify password if required
+    if let Some(expected_password) = &state.password {
+        match &form.password {
+            Some(password) if password == expected_password => {}
+            _ => {
+                let redirect_url = build_error_redirect(
+                    &pending.redirect_uri,
+                    OAuthError::AccessDenied,
+                    pending.state.as_deref(),
+                );
+                return Redirect::to(&redirect_url).into_response();
+            }
+        }
+    }
+
+    // Generate authorization code
+    let code = generate_token();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let auth_code = AuthorizationCode {
+        code: code.clone(),
+        client_id: pending.client_id,
+        redirect_uri: pending.redirect_uri.clone(),
+        code_challenge: pending.code_challenge,
+        code_challenge_method: pending.code_challenge_method,
+        scope: pending.scope,
+        created_at: now,
+        expires_at: now + 300, // 5 minutes
+        used: false,
+    };
+
+    // Store the authorization code
+    if let Err(e) = state.store.oauth_store_authorization_code(&auth_code) {
+        error!("Failed to store authorization code: {}", e);
+        let redirect_url = build_error_redirect(
+            &pending.redirect_uri,
+            OAuthError::ServerError,
+            pending.state.as_deref(),
+        );
+        return Redirect::to(&redirect_url).into_response();
+    }
+
+    info!(
+        "OAuth authorization granted for client: {}",
+        auth_code.client_id
+    );
+
+    // Redirect back to client with authorization code
+    let mut redirect_url = format!("{}?code={}", pending.redirect_uri, code);
+    if let Some(state_param) = pending.state {
+        redirect_url.push_str(&format!("&state={}", urlencoding::encode(&state_param)));
+    }
+
+    Redirect::to(&redirect_url).into_response()
+}
+
+/// Build error redirect URL
+fn build_error_redirect(redirect_uri: &str, error: OAuthError, state: Option<&str>) -> String {
+    let mut url = format!(
+        "{}?error={}&error_description={}",
+        redirect_uri,
+        error.as_str(),
+        urlencoding::encode(error.description())
+    );
+    if let Some(s) = state {
+        url.push_str(&format!("&state={}", urlencoding::encode(s)));
+    }
+    url
+}
+
+/// OAuth Token endpoint - exchange code for tokens or refresh tokens
+async fn oauth_token(
+    State(state): State<Arc<AppState>>,
+    Form(req): Form<TokenRequest>,
+) -> impl IntoResponse {
+    match req.grant_type.as_str() {
+        "authorization_code" => handle_authorization_code_grant(state, req).await,
+        "refresh_token" => handle_refresh_token_grant(state, req).await,
+        _ => {
+            let error = OAuthErrorResponse::from(OAuthError::UnsupportedGrantType);
+            (StatusCode::BAD_REQUEST, Json(error)).into_response()
+        }
+    }
+}
+
+async fn handle_authorization_code_grant(
+    state: Arc<AppState>,
+    req: TokenRequest,
+) -> axum::response::Response {
+    // Validate required parameters
+    let code = match &req.code {
+        Some(c) => c,
+        None => {
+            let error = OAuthErrorResponse::from(OAuthError::InvalidRequest);
+            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        }
+    };
+
+    let code_verifier = match &req.code_verifier {
+        Some(v) => v,
+        None => {
+            let error = OAuthErrorResponse::from(OAuthError::InvalidRequest);
+            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        }
+    };
+
+    let redirect_uri = match &req.redirect_uri {
+        Some(r) => r,
+        None => {
+            let error = OAuthErrorResponse::from(OAuthError::InvalidRequest);
+            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        }
+    };
+
+    // Get and validate the authorization code
+    let auth_code = match state.store.oauth_use_authorization_code(code) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            let error = OAuthErrorResponse::from(OAuthError::InvalidGrant);
+            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        }
+        Err(e) => {
+            error!("Failed to get authorization code: {}", e);
+            let error = OAuthErrorResponse::from(OAuthError::ServerError);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response();
+        }
+    };
+
+    // Verify redirect_uri matches
+    if auth_code.redirect_uri != *redirect_uri {
+        let error = OAuthErrorResponse::from(OAuthError::InvalidGrant);
+        return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+    }
+
+    // Verify PKCE
+    if !auth_code.verify_pkce(code_verifier) {
+        let error = OAuthErrorResponse::from(OAuthError::InvalidGrant);
+        return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+    }
+
+    // Generate tokens
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let access_token_str = generate_token();
+    let refresh_token_str = generate_token();
+
+    let access_token = AccessToken {
+        token: access_token_str.clone(),
+        client_id: auth_code.client_id.clone(),
+        scope: auth_code.scope.clone(),
+        created_at: now,
+        expires_at: now + 3600, // 1 hour
+    };
+
+    let refresh_token = RefreshToken {
+        token: refresh_token_str.clone(),
+        client_id: auth_code.client_id.clone(),
+        scope: auth_code.scope.clone(),
+        created_at: now,
+        expires_at: now + 30 * 24 * 3600, // 30 days
+    };
+
+    // Store tokens
+    if let Err(e) = state.store.oauth_store_access_token(&access_token) {
+        error!("Failed to store access token: {}", e);
+        let error = OAuthErrorResponse::from(OAuthError::ServerError);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response();
+    }
+
+    if let Err(e) = state.store.oauth_store_refresh_token(&refresh_token) {
+        error!("Failed to store refresh token: {}", e);
+        let error = OAuthErrorResponse::from(OAuthError::ServerError);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response();
+    }
+
+    info!("OAuth tokens issued for client: {}", auth_code.client_id);
+
+    let response = TokenResponse {
+        access_token: access_token_str,
+        token_type: "Bearer".to_string(),
+        expires_in: 3600,
+        refresh_token: refresh_token_str,
+        scope: auth_code.scope,
+    };
+
+    (
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(response),
+    )
+        .into_response()
+}
+
+async fn handle_refresh_token_grant(
+    state: Arc<AppState>,
+    req: TokenRequest,
+) -> axum::response::Response {
+    let refresh_token_str = match &req.refresh_token {
+        Some(r) => r,
+        None => {
+            let error = OAuthErrorResponse::from(OAuthError::InvalidRequest);
+            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        }
+    };
+
+    // Validate refresh token
+    let refresh_token = match state.store.oauth_get_refresh_token(refresh_token_str) {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            let error = OAuthErrorResponse::from(OAuthError::InvalidGrant);
+            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        }
+        Err(e) => {
+            error!("Failed to get refresh token: {}", e);
+            let error = OAuthErrorResponse::from(OAuthError::ServerError);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response();
+        }
+    };
+
+    // Generate new access token
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let access_token_str = generate_token();
+
+    let access_token = AccessToken {
+        token: access_token_str.clone(),
+        client_id: refresh_token.client_id.clone(),
+        scope: refresh_token.scope.clone(),
+        created_at: now,
+        expires_at: now + 3600, // 1 hour
+    };
+
+    // Store new access token
+    if let Err(e) = state.store.oauth_store_access_token(&access_token) {
+        error!("Failed to store access token: {}", e);
+        let error = OAuthErrorResponse::from(OAuthError::ServerError);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response();
+    }
+
+    info!(
+        "OAuth access token refreshed for client: {}",
+        refresh_token.client_id
+    );
+
+    let response = TokenResponse {
+        access_token: access_token_str,
+        token_type: "Bearer".to_string(),
+        expires_in: 3600,
+        refresh_token: refresh_token_str.clone(),
+        scope: refresh_token.scope,
+    };
+
+    (
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(response),
+    )
+        .into_response()
+}
+
+/// OAuth Token revocation endpoint
+async fn oauth_revoke(
+    State(state): State<Arc<AppState>>,
+    Form(req): Form<RevokeRequest>,
+) -> impl IntoResponse {
+    // Revoke the token (we don't care if it exists or not per RFC 7009)
+    if let Err(e) = state.store.oauth_revoke_token(&req.token) {
+        error!("Failed to revoke token: {}", e);
+        // Still return 200 per RFC 7009
+    }
+
+    StatusCode::OK
+}
+
 // WebSocket handler
 
 async fn websocket_handler(
@@ -1372,11 +1873,54 @@ async fn mcp_handler(
     State(state): State<Arc<AppState>>,
     request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
+    // Check OAuth Bearer token authentication
+    let auth_header = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok());
+
+    let is_authenticated = if let Some(header) = auth_header {
+        if let Some(token) = header.strip_prefix("Bearer ") {
+            // Validate the OAuth access token
+            match state.store.oauth_validate_access_token(token) {
+                Ok(Some(_)) => true,
+                Ok(None) => {
+                    info!("MCP request with invalid/expired OAuth token");
+                    false
+                }
+                Err(e) => {
+                    error!("Failed to validate OAuth token: {}", e);
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if !is_authenticated {
+        // Return 401 with WWW-Authenticate header per OAuth 2.0 Bearer Token spec (RFC 6750)
+        return (
+            StatusCode::UNAUTHORIZED,
+            [
+                (header::WWW_AUTHENTICATE, "Bearer realm=\"mcp\", error=\"invalid_token\""),
+                (header::CONTENT_TYPE, "application/json"),
+            ],
+            Json(serde_json::json!({
+                "error": "unauthorized",
+                "error_description": "Valid OAuth Bearer token required. Get one from /oauth/authorize"
+            })),
+        )
+            .into_response();
+    }
+
     // Read the command_tx asynchronously before creating the service
     let command_tx = state.command_tx.read().await.clone();
     let store = Arc::new(state.store.clone());
 
     let service = create_mcp_service(store, command_tx);
     // StreamableHttpService has an async handle method we can call directly
-    service.handle(request).await
+    service.handle(request).await.into_response()
 }

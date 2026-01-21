@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 
 use crate::link_preview::LinkPreview;
+use crate::oauth::{AccessToken, AuthorizationCode, PendingAuthorization, RefreshToken};
 use crate::translation::UsageInfo;
 
 /// Stored message with translation info
@@ -173,6 +174,57 @@ impl MessageStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_link_previews_fetched ON link_previews(fetched_at);
+
+            -- OAuth 2.0 tables for MCP authentication
+            
+            -- Pending authorization requests (before user approves)
+            CREATE TABLE IF NOT EXISTS oauth_pending_auth (
+                session_key TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                redirect_uri TEXT NOT NULL,
+                code_challenge TEXT NOT NULL,
+                code_challenge_method TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                state TEXT,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+
+            -- Authorization codes (after user approves, before token exchange)
+            CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+                code TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                redirect_uri TEXT NOT NULL,
+                code_challenge TEXT NOT NULL,
+                code_challenge_method TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                used INTEGER DEFAULT 0
+            );
+
+            -- Access tokens
+            CREATE TABLE IF NOT EXISTS oauth_access_tokens (
+                token TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+
+            -- Refresh tokens
+            CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+                token TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_oauth_pending_expires ON oauth_pending_auth(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_oauth_codes_expires ON oauth_authorization_codes(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_oauth_access_expires ON oauth_access_tokens(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_oauth_refresh_expires ON oauth_refresh_tokens(expires_at);
             "#,
         )?;
 
@@ -732,6 +784,363 @@ impl MessageStore {
         )?;
 
         info!("All data cleared from database");
+        Ok(())
+    }
+
+    // ==================== OAuth 2.0 Methods ====================
+
+    /// Clean up expired OAuth entries (call periodically)
+    pub fn oauth_cleanup_expired(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        conn.execute(
+            "DELETE FROM oauth_pending_auth WHERE expires_at < ?",
+            params![now],
+        )?;
+        conn.execute(
+            "DELETE FROM oauth_authorization_codes WHERE expires_at < ? OR used = 1",
+            params![now],
+        )?;
+        conn.execute(
+            "DELETE FROM oauth_access_tokens WHERE expires_at < ?",
+            params![now],
+        )?;
+        conn.execute(
+            "DELETE FROM oauth_refresh_tokens WHERE expires_at < ?",
+            params![now],
+        )?;
+
+        Ok(())
+    }
+
+    /// Store a pending authorization request
+    pub fn oauth_store_pending_auth(&self, pending: &PendingAuthorization) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            r#"
+            INSERT OR REPLACE INTO oauth_pending_auth 
+            (session_key, client_id, redirect_uri, code_challenge, code_challenge_method, scope, state, created_at, expires_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                pending.session_key,
+                pending.client_id,
+                pending.redirect_uri,
+                pending.code_challenge,
+                pending.code_challenge_method,
+                pending.scope,
+                pending.state,
+                pending.created_at,
+                pending.expires_at,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Get and remove a pending authorization
+    pub fn oauth_take_pending_auth(
+        &self,
+        session_key: &str,
+    ) -> Result<Option<PendingAuthorization>> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let result = conn.query_row(
+            r#"
+            SELECT session_key, client_id, redirect_uri, code_challenge, code_challenge_method, 
+                   scope, state, created_at, expires_at
+            FROM oauth_pending_auth 
+            WHERE session_key = ? AND expires_at > ?
+            "#,
+            params![session_key, now],
+            |row| {
+                Ok(PendingAuthorization {
+                    session_key: row.get(0)?,
+                    client_id: row.get(1)?,
+                    redirect_uri: row.get(2)?,
+                    code_challenge: row.get(3)?,
+                    code_challenge_method: row.get(4)?,
+                    scope: row.get(5)?,
+                    state: row.get(6)?,
+                    created_at: row.get(7)?,
+                    expires_at: row.get(8)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(pending) => {
+                // Delete the pending auth after retrieval
+                conn.execute(
+                    "DELETE FROM oauth_pending_auth WHERE session_key = ?",
+                    params![session_key],
+                )?;
+                Ok(Some(pending))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get a pending authorization (without removing it)
+    pub fn oauth_get_pending_auth(
+        &self,
+        session_key: &str,
+    ) -> Result<Option<PendingAuthorization>> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let result = conn.query_row(
+            r#"
+            SELECT session_key, client_id, redirect_uri, code_challenge, code_challenge_method, 
+                   scope, state, created_at, expires_at
+            FROM oauth_pending_auth 
+            WHERE session_key = ? AND expires_at > ?
+            "#,
+            params![session_key, now],
+            |row| {
+                Ok(PendingAuthorization {
+                    session_key: row.get(0)?,
+                    client_id: row.get(1)?,
+                    redirect_uri: row.get(2)?,
+                    code_challenge: row.get(3)?,
+                    code_challenge_method: row.get(4)?,
+                    scope: row.get(5)?,
+                    state: row.get(6)?,
+                    created_at: row.get(7)?,
+                    expires_at: row.get(8)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(pending) => Ok(Some(pending)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Store an authorization code
+    pub fn oauth_store_authorization_code(&self, code: &AuthorizationCode) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            r#"
+            INSERT INTO oauth_authorization_codes 
+            (code, client_id, redirect_uri, code_challenge, code_challenge_method, scope, created_at, expires_at, used)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                code.code,
+                code.client_id,
+                code.redirect_uri,
+                code.code_challenge,
+                code.code_challenge_method,
+                code.scope,
+                code.created_at,
+                code.expires_at,
+                code.used,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Get an authorization code (and mark it as used)
+    pub fn oauth_use_authorization_code(&self, code: &str) -> Result<Option<AuthorizationCode>> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let result = conn.query_row(
+            r#"
+            SELECT code, client_id, redirect_uri, code_challenge, code_challenge_method, 
+                   scope, created_at, expires_at, used
+            FROM oauth_authorization_codes 
+            WHERE code = ? AND expires_at > ? AND used = 0
+            "#,
+            params![code, now],
+            |row| {
+                Ok(AuthorizationCode {
+                    code: row.get(0)?,
+                    client_id: row.get(1)?,
+                    redirect_uri: row.get(2)?,
+                    code_challenge: row.get(3)?,
+                    code_challenge_method: row.get(4)?,
+                    scope: row.get(5)?,
+                    created_at: row.get(6)?,
+                    expires_at: row.get(7)?,
+                    used: row.get::<_, i32>(8)? != 0,
+                })
+            },
+        );
+
+        match result {
+            Ok(auth_code) => {
+                // Mark as used
+                conn.execute(
+                    "UPDATE oauth_authorization_codes SET used = 1 WHERE code = ?",
+                    params![code],
+                )?;
+                Ok(Some(auth_code))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Store an access token
+    pub fn oauth_store_access_token(&self, token: &AccessToken) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            r#"
+            INSERT INTO oauth_access_tokens (token, client_id, scope, created_at, expires_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![
+                token.token,
+                token.client_id,
+                token.scope,
+                token.created_at,
+                token.expires_at,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Validate an access token
+    pub fn oauth_validate_access_token(&self, token: &str) -> Result<Option<AccessToken>> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let result = conn.query_row(
+            r#"
+            SELECT token, client_id, scope, created_at, expires_at
+            FROM oauth_access_tokens 
+            WHERE token = ? AND expires_at > ?
+            "#,
+            params![token, now],
+            |row| {
+                Ok(AccessToken {
+                    token: row.get(0)?,
+                    client_id: row.get(1)?,
+                    scope: row.get(2)?,
+                    created_at: row.get(3)?,
+                    expires_at: row.get(4)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(t) => Ok(Some(t)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Store a refresh token
+    pub fn oauth_store_refresh_token(&self, token: &RefreshToken) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            r#"
+            INSERT INTO oauth_refresh_tokens (token, client_id, scope, created_at, expires_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![
+                token.token,
+                token.client_id,
+                token.scope,
+                token.created_at,
+                token.expires_at,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Validate and get a refresh token
+    pub fn oauth_get_refresh_token(&self, token: &str) -> Result<Option<RefreshToken>> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let result = conn.query_row(
+            r#"
+            SELECT token, client_id, scope, created_at, expires_at
+            FROM oauth_refresh_tokens 
+            WHERE token = ? AND expires_at > ?
+            "#,
+            params![token, now],
+            |row| {
+                Ok(RefreshToken {
+                    token: row.get(0)?,
+                    client_id: row.get(1)?,
+                    scope: row.get(2)?,
+                    created_at: row.get(3)?,
+                    expires_at: row.get(4)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(t) => Ok(Some(t)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Revoke a token (access or refresh)
+    pub fn oauth_revoke_token(&self, token: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            "DELETE FROM oauth_access_tokens WHERE token = ?",
+            params![token],
+        )?;
+        conn.execute(
+            "DELETE FROM oauth_refresh_tokens WHERE token = ?",
+            params![token],
+        )?;
+
+        Ok(())
+    }
+
+    /// Clear all OAuth tokens (for complete logout)
+    pub fn oauth_clear_all(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute_batch(
+            r#"
+            DELETE FROM oauth_pending_auth;
+            DELETE FROM oauth_authorization_codes;
+            DELETE FROM oauth_access_tokens;
+            DELETE FROM oauth_refresh_tokens;
+            "#,
+        )?;
+
+        info!("All OAuth tokens cleared from database");
         Ok(())
     }
 }

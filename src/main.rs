@@ -8,6 +8,7 @@ mod cli;
 mod display;
 mod link_preview;
 mod mcp;
+mod oauth;
 mod storage;
 mod translation;
 mod web;
