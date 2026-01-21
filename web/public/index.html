@@ -148,6 +148,31 @@
             </div>
             <div class="input-container">
               <input type="file" id="image-input" accept="image/*" style="display: none;">
+              <div class="emoji-button-container">
+                <button id="emoji-button" class="emoji-button" title="Insert emoji">
+                  <svg viewBox="0 0 24 24" width="24" height="24">
+                    <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-6c.78 2.34 2.72 4 5 4s4.22-1.66 5-4H7zm2-3c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm6 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1z"/>
+                  </svg>
+                </button>
+                <div id="emoji-picker" class="emoji-picker hidden">
+                  <div class="emoji-picker-header">
+                    <div class="emoji-tabs">
+                      <button class="emoji-tab active" data-category="recent" title="Recent">🕐</button>
+                      <button class="emoji-tab" data-category="smileys" title="Smileys">😀</button>
+                      <button class="emoji-tab" data-category="gestures" title="Gestures">👋</button>
+                      <button class="emoji-tab" data-category="hearts" title="Hearts">❤️</button>
+                      <button class="emoji-tab" data-category="animals" title="Animals">🐶</button>
+                      <button class="emoji-tab" data-category="food" title="Food">🍕</button>
+                      <button class="emoji-tab" data-category="travel" title="Travel">✈️</button>
+                      <button class="emoji-tab" data-category="objects" title="Objects">💡</button>
+                      <button class="emoji-tab" data-category="symbols" title="Symbols">✨</button>
+                    </div>
+                  </div>
+                  <div class="emoji-picker-content" id="emoji-picker-content">
+                    <!-- Emojis loaded by JavaScript -->
+                  </div>
+                </div>
+              </div>
               <button id="attach-button" class="attach-button" title="Send image">
                 <svg viewBox="0 0 24 24" width="24" height="24">
                   <path fill="currentColor" d="M19.5 4.5l-7.5 7.5-7.5-7.5-1.5 1.5 9 9 9-9z" transform="rotate(-90 12 12)"/>

@@ -18,6 +18,20 @@ class WhatsAppClient {
     this.typingTimeouts = new Map(); // chatId -> timeoutId (auto-clear after 10s)
     this.replyingTo = null; // { messageId, senderJid, senderName, text, isFromMe }
     this.authToken = localStorage.getItem('wa_auth_token'); // Auth token for API requests
+    this.recentEmojis = JSON.parse(localStorage.getItem('wa_recent_emojis') || '[]');
+    this.currentEmojiCategory = 'recent';
+    
+    // Emoji data organized by category
+    this.emojiData = {
+      smileys: ['😀', '😃', '😄', '😁', '😅', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙', '😚', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐', '😕', '😟', '🙁', '☹️', '😮', '😯', '😲', '😳', '🥺', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖'],
+      gestures: ['👋', '🤚', '🖐️', '✋', '🖖', '👌', '🤌', '🤏', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '🖕', '👇', '☝️', '👍', '👎', '✊', '👊', '🤛', '🤜', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳', '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '🧠', '🫀', '🫁', '🦷', '🦴', '👀', '👁️', '👅', '👄', '👶', '🧒', '👦', '👧', '🧑', '👱', '👨', '🧔', '👩', '🧓', '👴', '👵'],
+      hearts: ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '♥️', '💌', '💋', '👄', '🫂', '👥', '👤'],
+      animals: ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵', '🙈', '🙉', '🙊', '🐒', '🐔', '🐧', '🐦', '🐤', '🦆', '🦅', '🦉', '🦇', '🐺', '🐗', '🐴', '🦄', '🐝', '🪱', '🐛', '🦋', '🐌', '🐞', '🐜', '🪳', '🦂', '🐢', '🐍', '🦎', '🦖', '🦕', '🐙', '🦑', '🦐', '🦞', '🦀', '🐡', '🐠', '🐟', '🐬', '🐳', '🐋', '🦈', '🐊', '🐅', '🐆', '🦓', '🦍', '🦧', '🐘', '🦛', '🦏', '🐪', '🐫', '🦒', '🦘', '🐃', '🐂', '🐄', '🐎', '🐖', '🐏', '🐑', '🦙', '🐐', '🦌', '🐕', '🐩', '🦮', '🐕‍🦺', '🐈', '🐓', '🦃', '🦚', '🦜', '🦢', '🦩', '🐇', '🦝', '🦨', '🦡', '🦫', '🦦', '🦥', '🐁', '🐀', '🐿️', '🦔'],
+      food: ['🍕', '🍔', '🍟', '🌭', '🍿', '🧂', '🥓', '🥚', '🍳', '🧇', '🥞', '🧈', '🍞', '🥐', '🥖', '🥨', '🧀', '🥗', '🥙', '🥪', '🌮', '🌯', '🫔', '🥫', '🍝', '🍜', '🍲', '🍛', '🍣', '🍱', '🥟', '🦪', '🍤', '🍙', '🍚', '🍘', '🍥', '🥠', '🥮', '🍢', '🍡', '🍧', '🍨', '🍦', '🥧', '🧁', '🍰', '🎂', '🍮', '🍭', '🍬', '🍫', '🍩', '🍪', '🌰', '🥜', '🍯', '🥛', '🍼', '☕', '🫖', '🍵', '🧃', '🥤', '🧋', '🍶', '🍺', '🍻', '🥂', '🍷', '🥃', '🍸', '🍹', '🧉', '🍾', '🧊', '🥄', '🍴', '🍽️', '🥣', '🥡', '🥢', '🧆'],
+      travel: ['✈️', '🚀', '🛸', '🚁', '🛶', '⛵', '🚤', '🛥️', '🛳️', '⛴️', '🚢', '🚂', '🚃', '🚄', '🚅', '🚆', '🚇', '🚈', '🚉', '🚊', '🚝', '🚞', '🚋', '🚌', '🚍', '🚎', '🚐', '🚑', '🚒', '🚓', '🚔', '🚕', '🚖', '🚗', '🚘', '🚙', '🛻', '🚚', '🚛', '🚜', '🏎️', '🏍️', '🛵', '🦽', '🦼', '🛺', '🚲', '🛴', '🛹', '🛼', '🚏', '🛣️', '🛤️', '🛢️', '⛽', '🚨', '🚥', '🚦', '🛑', '🚧', '⚓', '🗺️', '🗿', '🗽', '🗼', '🏰', '🏯', '🏟️', '🎡', '🎢', '🎠', '⛲', '⛱️', '🏖️', '🏝️', '🏜️', '🌋', '⛰️', '🏔️', '🗻', '🏕️', '⛺', '🛖', '🏠', '🏡', '🏘️', '🏚️', '🏗️', '🏢', '🏬', '🏣', '🏤', '🏥', '🏦', '🏨', '🏪', '🏫', '🏩', '💒', '🏛️', '⛪', '🕌', '🕍', '🛕', '🕋', '⛩️'],
+      objects: ['💡', '🔦', '🏮', '🪔', '📱', '📲', '💻', '🖥️', '🖨️', '⌨️', '🖱️', '🖲️', '💽', '💾', '💿', '📀', '🧮', '🎥', '🎞️', '📽️', '🎬', '📺', '📷', '📸', '📹', '📼', '🔍', '🔎', '🕯️', '💵', '💴', '💶', '💷', '💰', '💳', '💎', '⚖️', '🪜', '🧰', '🪛', '🔧', '🔨', '⚒️', '🛠️', '⛏️', '🪚', '🔩', '⚙️', '🪤', '🧱', '⛓️', '🧲', '🔫', '💣', '🧨', '🪓', '🔪', '🗡️', '⚔️', '🛡️', '🚬', '⚰️', '🪦', '⚱️', '🏺', '🔮', '📿', '🧿', '💈', '⚗️', '🔭', '🔬', '🕳️', '🩹', '🩺', '💊', '💉', '🩸', '🧬', '🦠', '🧫', '🧪'],
+      symbols: ['✨', '⭐', '🌟', '💫', '⚡', '🔥', '💥', '☄️', '🌈', '☀️', '🌤️', '⛅', '🌥️', '☁️', '🌦️', '🌧️', '⛈️', '🌩️', '🌨️', '❄️', '☃️', '⛄', '🌬️', '💨', '🌪️', '🌫️', '🌊', '💧', '💦', '☔', '🎵', '🎶', '🎼', '🎤', '🎧', '📻', '🎷', '🪗', '🎸', '🎹', '🎺', '🎻', '🪕', '🥁', '🪘', '⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍', '🏏', '🪃', '🥅', '⛳', '🪁', '🏹', '🎣', '🤿', '🥊', '🥋', '🎽', '🛷', '⛸️', '🥌', '🎿', '⛷️', '🏂', '🪂', '🏋️', '🎯', '🎮', '🕹️', '🎰', '🧩', '♠️', '♥️', '♦️', '♣️', '🃏', '🀄', '🎴', '🎭', '🎨']
+    };
     
     this.init();
   }
@@ -2296,7 +2310,7 @@ class WhatsAppClient {
       }
     }, { passive: true });
 
-    // Close reaction pickers when clicking outside
+    // Close reaction pickers and emoji picker when clicking outside
     document.addEventListener('click', (e) => {
       if (!e.target.closest('.reaction-button-container')) {
         document.querySelectorAll('.reaction-picker.show').forEach(el => el.classList.remove('show'));
@@ -2304,6 +2318,44 @@ class WhatsAppClient {
       // Close send dropdown when clicking outside
       if (!e.target.closest('.send-button-group')) {
         document.getElementById('send-dropdown')?.classList.add('hidden');
+      }
+      // Close emoji picker when clicking outside
+      if (!e.target.closest('.emoji-button-container')) {
+        document.getElementById('emoji-picker')?.classList.add('hidden');
+      }
+    });
+
+    // Emoji picker button
+    const emojiButton = document.getElementById('emoji-button');
+    const emojiPicker = document.getElementById('emoji-picker');
+    
+    emojiButton?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      emojiPicker?.classList.toggle('hidden');
+      if (!emojiPicker?.classList.contains('hidden')) {
+        this.renderEmojiCategory(this.currentEmojiCategory);
+      }
+    });
+
+    // Emoji tab clicks
+    document.querySelectorAll('.emoji-tab').forEach(tab => {
+      tab.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const category = tab.dataset.category;
+        this.currentEmojiCategory = category;
+        document.querySelectorAll('.emoji-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        this.renderEmojiCategory(category);
+      });
+    });
+
+    // Emoji selection (delegated)
+    document.getElementById('emoji-picker-content')?.addEventListener('click', (e) => {
+      const emojiSpan = e.target.closest('.emoji-item');
+      if (emojiSpan) {
+        const emoji = emojiSpan.textContent;
+        this.insertEmoji(emoji);
+        this.addRecentEmoji(emoji);
       }
     });
 
@@ -2750,6 +2802,63 @@ class WhatsAppClient {
       delete message.content.has_media;
       delete message.content.hasMedia;
     }
+  }
+
+  // Render emojis for a category
+  renderEmojiCategory(category) {
+    const container = document.getElementById('emoji-picker-content');
+    if (!container) return;
+
+    let emojis;
+    if (category === 'recent') {
+      emojis = this.recentEmojis.length > 0 
+        ? this.recentEmojis 
+        : ['😀', '😊', '😂', '❤️', '👍', '🎉', '🔥', '✨']; // Default if no recent
+    } else {
+      emojis = this.emojiData[category] || [];
+    }
+
+    container.innerHTML = emojis
+      .map(emoji => `<span class="emoji-item">${emoji}</span>`)
+      .join('');
+  }
+
+  // Insert emoji at cursor position in message input
+  insertEmoji(emoji) {
+    const input = document.getElementById('message-input');
+    if (!input) return;
+
+    const start = input.selectionStart;
+    const end = input.selectionEnd;
+    const text = input.value;
+
+    // Insert emoji at cursor position
+    input.value = text.substring(0, start) + emoji + text.substring(end);
+
+    // Move cursor after the inserted emoji
+    const newCursorPos = start + emoji.length;
+    input.setSelectionRange(newCursorPos, newCursorPos);
+
+    // Focus the input
+    input.focus();
+
+    // Trigger input event to update send button state
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    // Close the picker
+    document.getElementById('emoji-picker')?.classList.add('hidden');
+  }
+
+  // Add emoji to recent list
+  addRecentEmoji(emoji) {
+    // Remove if already exists
+    this.recentEmojis = this.recentEmojis.filter(e => e !== emoji);
+    // Add to front
+    this.recentEmojis.unshift(emoji);
+    // Keep only last 32 emojis
+    this.recentEmojis = this.recentEmojis.slice(0, 32);
+    // Save to localStorage
+    localStorage.setItem('wa_recent_emojis', JSON.stringify(this.recentEmojis));
   }
 }
 
