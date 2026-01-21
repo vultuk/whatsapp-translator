@@ -57,6 +57,13 @@ urlencoding = "2"
 # Regex for URL extraction
 regex = "1"
 
+# MCP (Model Context Protocol) server
+rmcp = { version = "0.13", features = ["server", "macros", "schemars"] }
+schemars = "1"
+pin-project-lite = "0.2"
+tokio-tungstenite = "0.26"
+async-trait = "0.1"
+
 [build-dependencies]
 # For compiling Go bridge at build time
 

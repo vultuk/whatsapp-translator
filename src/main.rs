@@ -7,6 +7,7 @@ mod bridge;
 mod cli;
 mod display;
 mod link_preview;
+mod mcp;
 mod storage;
 mod translation;
 mod web;

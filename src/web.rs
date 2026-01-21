@@ -25,6 +25,7 @@ use tower_http::services::ServeDir;
 use tracing::{error, info, warn};
 
 use crate::bridge::BridgeCommand;
+use crate::mcp::WhatsAppMcpServer;
 use crate::storage::{MessageStore, StoredMessage};
 use crate::translation::TranslationService;
 use tokio::sync::mpsc;
@@ -450,6 +451,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/link-preview", get(get_link_preview))
         // WebSocket
         .route("/ws", get(websocket_handler))
+        // MCP (Model Context Protocol) endpoint
+        .route("/mcp", get(mcp_websocket_handler))
         // Serve static files
         .fallback_service(serve_dir)
         .layer(cors)
@@ -1334,6 +1337,113 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
                     _ => {}
                 }
             }
+        }
+    }
+}
+
+// MCP (Model Context Protocol) WebSocket handler
+
+async fn mcp_websocket_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_mcp_websocket(socket, state))
+}
+
+async fn handle_mcp_websocket(socket: WebSocket, state: Arc<AppState>) {
+    use futures::{Sink, Stream};
+    use rmcp::{
+        service::{RoleServer, RxJsonRpcMessage, TxJsonRpcMessage},
+        ServiceExt,
+    };
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    // Create a wrapper that implements the MCP transport traits
+    pin_project_lite::pin_project! {
+        struct McpWebSocketTransport {
+            #[pin]
+            sender: futures::stream::SplitSink<WebSocket, Message>,
+            #[pin]
+            receiver: futures::stream::SplitStream<WebSocket>,
+        }
+    }
+
+    impl Stream for McpWebSocketTransport {
+        type Item = RxJsonRpcMessage<RoleServer>;
+
+        fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            let this = self.project();
+            match this.receiver.poll_next(cx) {
+                Poll::Ready(Some(Ok(Message::Text(json)))) => {
+                    match serde_json::from_str::<RxJsonRpcMessage<RoleServer>>(&json) {
+                        Ok(msg) => Poll::Ready(Some(msg)),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to parse MCP message");
+                            cx.waker().wake_by_ref();
+                            Poll::Pending
+                        }
+                    }
+                }
+                Poll::Ready(Some(Ok(Message::Close(_)))) | Poll::Ready(None) => Poll::Ready(None),
+                Poll::Ready(Some(Ok(_))) => {
+                    // Ignore other message types, poll again
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    tracing::warn!(error = %e, "WebSocket error");
+                    Poll::Ready(None)
+                }
+                Poll::Pending => Poll::Pending,
+            }
+        }
+    }
+
+    impl Sink<TxJsonRpcMessage<RoleServer>> for McpWebSocketTransport {
+        type Error = axum::Error;
+
+        fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.project().sender.poll_ready(cx)
+        }
+
+        fn start_send(
+            self: Pin<&mut Self>,
+            item: TxJsonRpcMessage<RoleServer>,
+        ) -> Result<(), Self::Error> {
+            let json = serde_json::to_string(&item).expect("JSON serialization should not fail");
+            self.project().sender.start_send(Message::Text(json))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.project().sender.poll_flush(cx)
+        }
+
+        fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.project().sender.poll_close(cx)
+        }
+    }
+
+    let (sender, receiver) = socket.split();
+    let transport = McpWebSocketTransport { sender, receiver };
+
+    // Get the command sender if available
+    let command_tx = state.command_tx.read().await.clone();
+
+    // Create the MCP server
+    let mcp_server = WhatsAppMcpServer::new(Arc::new(state.store.clone()), command_tx);
+
+    // Serve the MCP connection
+    match mcp_server.serve(transport).await {
+        Ok(server) => {
+            info!("MCP client connected");
+            if let Err(e) = server.waiting().await {
+                warn!("MCP server error: {}", e);
+            }
+            info!("MCP client disconnected");
+        }
+        Err(e) => {
+            error!("Failed to start MCP server: {}", e);
         }
     }
 }

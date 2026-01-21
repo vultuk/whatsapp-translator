@@ -5,7 +5,7 @@ use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Maximum response size to fetch (1MB)
 const MAX_RESPONSE_SIZE: usize = 1024 * 1024;
