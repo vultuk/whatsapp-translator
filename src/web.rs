@@ -443,6 +443,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/.well-known/oauth-protected-resource",
             get(oauth_protected_resource_metadata),
         )
+        .route("/oauth/register", post(oauth_register))
         .route("/oauth/authorize", get(oauth_authorize))
         .route("/oauth/approve", post(oauth_approve))
         .route("/oauth/token", post(oauth_token))
@@ -1312,8 +1313,22 @@ async fn oauth_metadata(Host(host): Host) -> impl IntoResponse {
     // Assume HTTPS in production (Railway sets this)
     let is_https = !host.contains("localhost") && !host.contains("127.0.0.1");
     let base_url = get_base_url(&host, is_https);
-    let metadata = OAuthMetadata::new(&base_url);
-    Json(metadata)
+
+    // Extended metadata with Dynamic Client Registration support
+    Json(serde_json::json!({
+        "issuer": base_url,
+        "authorization_endpoint": format!("{}/oauth/authorize", base_url),
+        "token_endpoint": format!("{}/oauth/token", base_url),
+        "registration_endpoint": format!("{}/oauth/register", base_url),
+        "revocation_endpoint": format!("{}/oauth/revoke", base_url),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "scopes_supported": ["mcp"],
+        // MCP-specific fields
+        "service_documentation": format!("{}/docs", base_url),
+    }))
 }
 
 /// OAuth 2.0 Protected Resource Metadata (RFC 9728)
@@ -1328,6 +1343,47 @@ async fn oauth_protected_resource_metadata(Host(host): Host) -> impl IntoRespons
         "scopes_supported": ["mcp"],
         "bearer_methods_supported": ["header"]
     }))
+}
+
+/// Dynamic Client Registration request (RFC 7591)
+#[derive(Debug, Deserialize)]
+struct ClientRegistrationRequest {
+    redirect_uris: Vec<String>,
+    client_name: Option<String>,
+    client_uri: Option<String>,
+    scope: Option<String>,
+    grant_types: Option<Vec<String>>,
+    response_types: Option<Vec<String>>,
+    token_endpoint_auth_method: Option<String>,
+}
+
+/// Dynamic Client Registration endpoint (RFC 7591)
+/// Allows MCP clients like Claude.ai to register before starting OAuth flow
+async fn oauth_register(Json(req): Json<ClientRegistrationRequest>) -> impl IntoResponse {
+    // Generate a client_id for this registration
+    let client_id = format!("client_{}", generate_token()[..16].to_string());
+
+    // For public clients (like Claude.ai), we don't issue a client_secret
+    // The client will use PKCE for security instead
+
+    info!(
+        "OAuth client registered: {} ({:?}) with redirect_uris: {:?}",
+        client_id, req.client_name, req.redirect_uris
+    );
+
+    // Return the registration response
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "client_id": client_id,
+            "client_name": req.client_name,
+            "redirect_uris": req.redirect_uris,
+            "grant_types": req.grant_types.unwrap_or_else(|| vec!["authorization_code".to_string(), "refresh_token".to_string()]),
+            "response_types": req.response_types.unwrap_or_else(|| vec!["code".to_string()]),
+            "token_endpoint_auth_method": "none",
+            "scope": req.scope.unwrap_or_else(|| "mcp".to_string()),
+        })),
+    )
 }
 
 /// OAuth Authorization endpoint - shows approval page
@@ -1902,7 +1958,10 @@ async fn mcp_handler(
         if let Some(token) = header.strip_prefix("Bearer ") {
             // Validate the OAuth access token
             match state.store.oauth_validate_access_token(token) {
-                Ok(Some(_)) => true,
+                Ok(Some(_)) => {
+                    info!("MCP authenticated via OAuth token");
+                    true
+                }
                 Ok(None) => {
                     info!("MCP request with invalid/expired OAuth token");
                     false
@@ -1937,7 +1996,7 @@ async fn mcp_handler(
             ],
             Json(serde_json::json!({
                 "error": "unauthorized",
-                "error_description": "Valid OAuth Bearer token required. Get one from /oauth/authorize"
+                "error_description": "OAuth Bearer token required. Complete the OAuth flow to get a token."
             })),
         )
             .into_response();
