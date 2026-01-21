@@ -3,6 +3,7 @@
 //! Exposes WhatsApp functionality to external LLMs via the MCP protocol.
 
 use crate::storage::{MessageStore, StoredContact, StoredMessage};
+use crate::translation::TranslationService;
 use rmcp::{
     model::{
         CallToolRequestParam, CallToolResult, Content, Implementation, ListToolsResult,
@@ -15,6 +16,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::{error, info, warn};
 
 use crate::bridge::BridgeCommand;
 
@@ -23,6 +25,7 @@ use crate::bridge::BridgeCommand;
 pub struct WhatsAppMcpServer {
     store: Arc<MessageStore>,
     command_tx: Option<mpsc::Sender<BridgeCommand>>,
+    translator: Option<Arc<TranslationService>>,
 }
 
 /// Contact information returned by the API
@@ -91,8 +94,16 @@ impl From<StoredMessage> for MessageInfo {
 }
 
 impl WhatsAppMcpServer {
-    pub fn new(store: Arc<MessageStore>, command_tx: Option<mpsc::Sender<BridgeCommand>>) -> Self {
-        Self { store, command_tx }
+    pub fn new(
+        store: Arc<MessageStore>,
+        command_tx: Option<mpsc::Sender<BridgeCommand>>,
+        translator: Option<Arc<TranslationService>>,
+    ) -> Self {
+        Self {
+            store,
+            command_tx,
+            translator,
+        }
     }
 
     fn list_contacts_tool() -> Tool {
@@ -241,11 +252,60 @@ impl WhatsAppMcpServer {
             .as_ref()
             .ok_or_else(|| McpError::internal_error("WhatsApp bridge not connected", None))?;
 
+        // Translate the message if needed based on conversation language
+        let (text_to_send, was_translated, target_language) =
+            if let Some(translator) = &self.translator {
+                match self.store.get_conversation_language(contact_id, 10) {
+                    Ok(Some(conv_lang)) => {
+                        info!(
+                            "MCP: Conversation language for {} is {}",
+                            contact_id, conv_lang
+                        );
+                        match translator.translate_to(text, &conv_lang).await {
+                            Ok((translated, usage)) => {
+                                // Record usage if there was actual API usage
+                                if usage.input_tokens > 0 {
+                                    if let Err(e) = self.store.record_usage(
+                                        Some(contact_id),
+                                        None,
+                                        &usage,
+                                        "translate_outgoing_mcp",
+                                    ) {
+                                        warn!("Failed to record usage: {}", e);
+                                    }
+                                }
+
+                                if translated != text {
+                                    info!(
+                                        "MCP: Translated outgoing message to {} (cost: ${:.6})",
+                                        conv_lang, usage.cost_usd
+                                    );
+                                    (translated, true, Some(conv_lang))
+                                } else {
+                                    (text.to_string(), false, None)
+                                }
+                            }
+                            Err(e) => {
+                                error!("MCP: Failed to translate outgoing message: {}", e);
+                                (text.to_string(), false, None)
+                            }
+                        }
+                    }
+                    Ok(None) => (text.to_string(), false, None),
+                    Err(e) => {
+                        error!("MCP: Failed to get conversation language: {}", e);
+                        (text.to_string(), false, None)
+                    }
+                }
+            } else {
+                (text.to_string(), false, None)
+            };
+
         // Create the send command
         let cmd = BridgeCommand::Send {
             request_id: None,
             to: contact_id.to_string(),
-            text: text.to_string(),
+            text: text_to_send.clone(),
             reply_to: None,
             reply_to_sender: None,
         };
@@ -256,10 +316,83 @@ impl WhatsAppMcpServer {
             },
         )?;
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Message sent to {}: \"{}\"",
-            contact_id, text
-        ))]))
+        // Store the sent message locally
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let temp_message_id = format!("mcp_pending_{}", timestamp);
+
+        // Get contact info for the recipient
+        let contact_info = self.store.get_contact(contact_id).ok().flatten();
+        let contact_name = contact_info.as_ref().and_then(|c| c.name.clone());
+        let contact_phone = contact_info.as_ref().and_then(|c| c.phone.clone());
+        let chat_type = contact_info
+            .as_ref()
+            .and_then(|c| c.contact_type.clone())
+            .unwrap_or_else(|| "private".to_string());
+
+        // Build content JSON - store what the user typed (English)
+        let content = json!({
+            "type": "text",
+            "body": text
+        });
+
+        // Create StoredMessage struct
+        let stored_msg = StoredMessage {
+            id: temp_message_id,
+            contact_id: contact_id.to_string(),
+            timestamp,
+            is_from_me: true,
+            is_forwarded: false,
+            sender_name: None,
+            sender_phone: None,
+            contact_name: contact_name.clone(),
+            contact_phone: contact_phone.clone(),
+            chat_type: chat_type.clone(),
+            content_type: "Text".to_string(),
+            content_json: content.to_string(),
+            content: Some(content),
+            original_text: if was_translated {
+                Some(text.to_string())
+            } else {
+                None
+            },
+            translated_text: if was_translated {
+                Some(text_to_send.clone())
+            } else {
+                None
+            },
+            source_language: target_language.clone(),
+            is_translated: was_translated,
+        };
+
+        // Store the message
+        if let Err(e) = self.store.add_message(&stored_msg) {
+            warn!("MCP: Failed to store sent message: {}", e);
+        }
+
+        // Update contact's last message time
+        if let Err(e) = self.store.upsert_contact(
+            contact_id,
+            contact_name.as_deref(),
+            contact_phone.as_deref(),
+            Some(&chat_type),
+            timestamp,
+        ) {
+            warn!("MCP: Failed to update contact: {}", e);
+        }
+
+        let response = if was_translated {
+            format!(
+                "Message sent to {} (translated to {}): \"{}\" -> \"{}\"",
+                contact_id,
+                target_language.unwrap_or_default(),
+                text,
+                text_to_send
+            )
+        } else {
+            format!("Message sent to {}: \"{}\"", contact_id, text)
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(response)]))
     }
 }
 
