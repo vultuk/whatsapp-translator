@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 /// Models to use for translation
 const DETECTION_MODEL: &str = "claude-haiku-4-5";
 const TRANSLATION_MODEL: &str = "claude-sonnet-4-5";
-const AI_COMPOSE_MODEL: &str = "claude-sonnet-4-5";
+const AI_COMPOSE_MODEL: &str = "claude-opus-4-5";
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
@@ -733,6 +733,13 @@ Write my reply (keep it short and casual like my examples):"#,
             contact_style_section
         );
 
+        debug!(
+            "AI reply prompt length: {} chars, exchanges: {}, conversation: {} msgs",
+            prompt.len(),
+            exchange_pairs.len(),
+            recent_conversation.len()
+        );
+
         // Call Claude - use lower max_tokens to encourage shorter replies
         let request = ClaudeRequest {
             model: AI_COMPOSE_MODEL.to_string(),
@@ -757,6 +764,7 @@ Write my reply (keep it short and casual like my examples):"#,
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            warn!("AI reply API error: {} - {}", status, body);
             anyhow::bail!("Styled reply API error: {} - {}", status, body);
         }
 
@@ -768,7 +776,7 @@ Write my reply (keep it short and casual like my examples):"#,
         let usage_info = UsageInfo {
             input_tokens: claude_response.usage.input_tokens,
             output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
+            cost_usd: Self::calculate_opus_cost(&claude_response.usage),
         };
 
         let reply = claude_response
