@@ -642,14 +642,14 @@ Respond with ONLY the message text, nothing else."#;
     /// - recent_conversation: Recent messages for context (last ~20)
     /// - global_style: User's overall writing style profile
     /// - contact_style: Optional style specific to this contact
-    /// - exchange_pairs: Pairs of (their message, my reply) showing conversation patterns
+    /// - my_examples: Examples of user's outgoing messages to this contact
     pub async fn compose_styled_reply(
         &self,
         message_to_reply: &crate::storage::StoredMessage,
         recent_conversation: &[crate::storage::StoredMessage],
         global_style: &crate::storage::StyleProfile,
         contact_style: Option<&crate::storage::StyleProfile>,
-        exchange_pairs: &[(crate::storage::StoredMessage, crate::storage::StoredMessage)],
+        my_examples: &[crate::storage::StoredMessage],
     ) -> Result<(String, UsageInfo)> {
         // Extract text from the message being replied to
         let reply_to_text = message_to_reply
@@ -682,8 +682,8 @@ Respond with ONLY the message text, nothing else."#;
         // Format recent conversation
         let conversation_context = Self::format_conversation(recent_conversation);
 
-        // Format exchange pairs (their message -> my reply)
-        let exchange_examples = Self::format_exchange_pairs(exchange_pairs);
+        // Format my example messages
+        let my_examples_formatted = Self::format_my_examples(my_examples);
 
         // Build the contact-specific style section
         let contact_style_section = if let Some(cs) = contact_style {
@@ -725,7 +725,7 @@ Respond with ONLY the message text, nothing else."#;
 10. Output ONLY the message text, nothing else
 
 Write my reply (keep it short and casual like my examples):"#,
-            exchange_examples,
+            my_examples_formatted,
             conversation_context,
             sender_name,
             reply_to_text,
@@ -734,9 +734,9 @@ Write my reply (keep it short and casual like my examples):"#,
         );
 
         debug!(
-            "AI reply prompt length: {} chars, exchanges: {}, conversation: {} msgs",
+            "AI reply prompt length: {} chars, examples: {}, conversation: {} msgs",
             prompt.len(),
-            exchange_pairs.len(),
+            my_examples.len(),
             recent_conversation.len()
         );
 
@@ -851,69 +851,34 @@ Write my reply (keep it short and casual like my examples):"#,
             .join("\n")
     }
 
-    /// Format message exchange pairs for the prompt
-    /// Shows "They said X" -> "I replied Y" patterns
-    fn format_exchange_pairs(
-        pairs: &[(crate::storage::StoredMessage, crate::storage::StoredMessage)],
-    ) -> String {
-        if pairs.is_empty() {
-            return "No previous conversation exchanges with this contact yet.".to_string();
+    /// Format user's example messages for the prompt
+    fn format_my_examples(messages: &[crate::storage::StoredMessage]) -> String {
+        if messages.is_empty() {
+            return "No previous messages to this contact yet.".to_string();
         }
 
-        pairs
+        messages
             .iter()
+            .filter_map(|m| {
+                m.original_text.clone().or_else(|| {
+                    m.content.as_ref().and_then(|c| {
+                        c.get("body")
+                            .and_then(|v| v.as_str().map(String::from))
+                            .or_else(|| c.get("caption").and_then(|v| v.as_str().map(String::from)))
+                    })
+                })
+            })
             .enumerate()
-            .map(|(i, (their_msg, my_reply))| {
-                let their_text = their_msg
-                    .original_text
-                    .clone()
-                    .or_else(|| their_msg.translated_text.clone())
-                    .or_else(|| {
-                        their_msg.content.as_ref().and_then(|c| {
-                            c.get("body")
-                                .and_then(|v| v.as_str().map(String::from))
-                                .or_else(|| {
-                                    c.get("caption").and_then(|v| v.as_str().map(String::from))
-                                })
-                        })
-                    })
-                    .unwrap_or_else(|| "[message]".to_string());
-
-                let my_text = my_reply
-                    .original_text
-                    .clone()
-                    .or_else(|| {
-                        my_reply.content.as_ref().and_then(|c| {
-                            c.get("body")
-                                .and_then(|v| v.as_str().map(String::from))
-                                .or_else(|| {
-                                    c.get("caption").and_then(|v| v.as_str().map(String::from))
-                                })
-                        })
-                    })
-                    .unwrap_or_else(|| "[reply]".to_string());
-
-                // Truncate long messages but keep enough context
-                let their_text = if their_text.len() > 200 {
-                    format!("{}...", &their_text[..197])
+            .map(|(i, text)| {
+                // Keep more text for better style matching
+                let text = if text.len() > 200 {
+                    format!("{}...", &text[..197])
                 } else {
-                    their_text
+                    text
                 };
-
-                let my_text = if my_text.len() > 200 {
-                    format!("{}...", &my_text[..197])
-                } else {
-                    my_text
-                };
-
-                format!(
-                    "---\nExchange {}:\nThem: \"{}\"\nMe: \"{}\"",
-                    i + 1,
-                    their_text,
-                    my_text
-                )
+                format!("{}. \"{}\"", i + 1, text)
             })
             .collect::<Vec<_>>()
-            .join("\n\n")
+            .join("\n")
     }
 }
