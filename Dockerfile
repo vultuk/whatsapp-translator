@@ -13,7 +13,7 @@ RUN go mod download && \
     CGO_ENABLED=1 go build -ldflags="-s -w" -o wa-bridge .
 
 # Build stage for Rust application
-FROM rust:1.87-bookworm AS rust-builder
+FROM rust:1.88-bookworm AS rust-builder
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
