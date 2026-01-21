@@ -1876,3 +1876,129 @@ body {
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
+
+/* Lazy loading media styles */
+.lazy-media {
+  position: relative;
+}
+
+.media-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 120px;
+  padding: 20px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  color: var(--text-secondary);
+}
+
+.media-placeholder:hover {
+  background: var(--bg-hover);
+}
+
+.media-placeholder svg {
+  opacity: 0.7;
+}
+
+.media-placeholder span {
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Document placeholder - horizontal layout like actual documents */
+.media-placeholder.document-placeholder {
+  flex-direction: row;
+  min-height: auto;
+  padding: 12px 16px;
+  gap: 12px;
+}
+
+.media-placeholder.document-placeholder .document-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.media-placeholder.document-placeholder .document-name {
+  font-size: 14px;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.media-placeholder.document-placeholder .document-size {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Sticker placeholder - smaller and square-ish */
+.media-placeholder.sticker-placeholder {
+  min-height: 100px;
+  max-width: 180px;
+  padding: 16px;
+}
+
+/* Loading state */
+.media-placeholder.loading {
+  pointer-events: none;
+}
+
+.media-loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--bg-secondary);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Error state */
+.media-placeholder.error {
+  color: #f44336;
+}
+
+.media-placeholder.error svg {
+  opacity: 1;
+}
+
+/* Image placeholder specific styles */
+.message-image.lazy-media .media-placeholder {
+  min-height: 150px;
+  max-width: 330px;
+}
+
+/* Video placeholder specific styles */
+.message-video.lazy-media .media-placeholder {
+  min-height: 150px;
+  max-width: 330px;
+}
+
+/* Audio placeholder - compact horizontal layout */
+.message-audio.lazy-media .media-placeholder {
+  flex-direction: row;
+  min-height: auto;
+  padding: 12px 16px;
+  max-width: 280px;
+}
+
+.message-audio.lazy-media .media-placeholder svg {
+  flex-shrink: 0;
+}
+
+/* Mobile adjustments for lazy media */
+@media (max-width: 768px) {
+  .media-placeholder {
+    min-height: 100px;
+    padding: 16px;
+  }
+  
+  .message-image.lazy-media .media-placeholder,
+  .message-video.lazy-media .media-placeholder {
+    min-height: 120px;
+  }
+}

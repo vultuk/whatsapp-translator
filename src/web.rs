@@ -457,6 +457,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/contacts", get(get_contacts))
         .route("/api/contacts/:contact_id/pin", post(toggle_pin))
         .route("/api/messages/:contact_id", get(get_messages))
+        .route("/api/media/:message_id", get(get_media))
         .route("/api/avatar/:jid", get(get_avatar))
         .route("/api/qr", get(get_qr))
         .route("/api/send", post(send_message))
@@ -700,9 +701,10 @@ async fn get_messages(
         None => Some(50), // Default to 50 for lazy loading
     };
 
+    // Strip media_data from messages to reduce payload (media loaded on demand via /api/media)
     match state
         .store
-        .get_messages_paginated(&contact_id, limit, params.before)
+        .get_messages_paginated(&contact_id, limit, params.before, true)
     {
         Ok(messages) => {
             // Check if there are more messages (we got a full page)
@@ -712,6 +714,32 @@ async fn get_messages(
         Err(e) => {
             error!("Failed to get messages: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get messages").into_response()
+        }
+    }
+}
+
+/// Get media data for a specific message (lazy loaded)
+async fn get_media(
+    State(state): State<Arc<AppState>>,
+    Path(message_id): Path<String>,
+) -> impl IntoResponse {
+    let message_id = urlencoding::decode(&message_id)
+        .map(|s| s.into_owned())
+        .unwrap_or(message_id);
+
+    match state.store.get_message_media(&message_id) {
+        Ok(Some((media_data, mime_type))) => {
+            // Return the base64 media data and mime type
+            Json(serde_json::json!({
+                "media_data": media_data,
+                "mime_type": mime_type
+            }))
+            .into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "Media not found").into_response(),
+        Err(e) => {
+            error!("Failed to get media: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get media").into_response()
         }
     }
 }

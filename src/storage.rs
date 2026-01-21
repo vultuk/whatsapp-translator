@@ -500,18 +500,84 @@ impl MessageStore {
 
     /// Get messages for a specific contact (all messages - for MCP/internal use)
     pub fn get_messages(&self, contact_id: &str) -> Result<Vec<StoredMessage>> {
-        self.get_messages_paginated(contact_id, None, None)
+        self.get_messages_paginated(contact_id, None, None, false)
+    }
+
+    /// Get media data for a specific message
+    /// Returns the media_data and mime_type for a message
+    pub fn get_message_media(&self, message_id: &str) -> Result<Option<(String, Option<String>)>> {
+        let conn = self.conn.lock().unwrap();
+
+        let result = conn.query_row(
+            "SELECT content_json FROM messages WHERE id = ?",
+            params![message_id],
+            |row| row.get::<_, String>(0),
+        );
+
+        match result {
+            Ok(content_json) => {
+                // Parse and extract media_data and mime_type
+                if let Ok(content) = serde_json::from_str::<serde_json::Value>(&content_json) {
+                    let media_data = content
+                        .get("media_data")
+                        .or_else(|| content.get("mediaData"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    let mime_type = content
+                        .get("mime_type")
+                        .or_else(|| content.get("mimeType"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    if let Some(media) = media_data {
+                        return Ok(Some((media, mime_type)));
+                    }
+                }
+                Ok(None)
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Strip media_data from content JSON to reduce payload size
+    fn strip_media_from_content(content_json: &str) -> (String, Option<serde_json::Value>) {
+        if let Ok(mut content) = serde_json::from_str::<serde_json::Value>(content_json) {
+            // Check if this content has media_data
+            let has_media =
+                content.get("media_data").is_some() || content.get("mediaData").is_some();
+
+            if has_media {
+                // Remove media_data from content
+                if let Some(obj) = content.as_object_mut() {
+                    obj.remove("media_data");
+                    obj.remove("mediaData");
+                    // Add a flag to indicate media is available
+                    obj.insert("has_media".to_string(), serde_json::Value::Bool(true));
+                }
+                let stripped_json =
+                    serde_json::to_string(&content).unwrap_or_else(|_| content_json.to_string());
+                return (stripped_json, Some(content));
+            }
+
+            (content_json.to_string(), Some(content))
+        } else {
+            (content_json.to_string(), None)
+        }
     }
 
     /// Get messages for a specific contact with pagination
     /// - limit: max number of messages to return (default: all)
     /// - before_timestamp: only get messages before this timestamp (for loading older messages)
+    /// - strip_media: if true, remove media_data from content to reduce payload size
     /// Returns messages in ascending order by timestamp (oldest first)
     pub fn get_messages_paginated(
         &self,
         contact_id: &str,
         limit: Option<u32>,
         before_timestamp: Option<i64>,
+        strip_media: bool,
     ) -> Result<Vec<StoredMessage>> {
         let conn = self.conn.lock().unwrap();
 
@@ -579,55 +645,52 @@ impl MessageStore {
 
         let mut stmt = conn.prepare(&query)?;
 
+        // Helper to build StoredMessage from row
+        let build_message = |row: &rusqlite::Row,
+                             contact_name: &Option<String>,
+                             contact_phone: &Option<String>,
+                             strip: bool|
+         -> rusqlite::Result<StoredMessage> {
+            let raw_content_json: String = row.get(9)?;
+            let (content_json, content) = if strip {
+                Self::strip_media_from_content(&raw_content_json)
+            } else {
+                (
+                    raw_content_json.clone(),
+                    serde_json::from_str(&raw_content_json).ok(),
+                )
+            };
+
+            Ok(StoredMessage {
+                id: row.get(0)?,
+                contact_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                is_from_me: row.get(3)?,
+                is_forwarded: row.get(4)?,
+                sender_name: row.get(5)?,
+                sender_phone: row.get(6)?,
+                contact_name: contact_name.clone(),
+                contact_phone: contact_phone.clone(),
+                chat_type: row.get(7)?,
+                content_type: row.get(8)?,
+                content_json,
+                content,
+                original_text: row.get(10)?,
+                translated_text: row.get(11)?,
+                source_language: row.get(12)?,
+                is_translated: row.get(13)?,
+            })
+        };
+
         let messages: Vec<StoredMessage> = if before_timestamp.is_some() {
             stmt.query_map(params![contact_id, before_timestamp], |row| {
-                let content_json: String = row.get(9)?;
-                let content = serde_json::from_str(&content_json).ok();
-                Ok(StoredMessage {
-                    id: row.get(0)?,
-                    contact_id: row.get(1)?,
-                    timestamp: row.get(2)?,
-                    is_from_me: row.get(3)?,
-                    is_forwarded: row.get(4)?,
-                    sender_name: row.get(5)?,
-                    sender_phone: row.get(6)?,
-                    contact_name: contact_name.clone(),
-                    contact_phone: contact_phone.clone(),
-                    chat_type: row.get(7)?,
-                    content_type: row.get(8)?,
-                    content_json,
-                    content,
-                    original_text: row.get(10)?,
-                    translated_text: row.get(11)?,
-                    source_language: row.get(12)?,
-                    is_translated: row.get(13)?,
-                })
+                build_message(row, &contact_name, &contact_phone, strip_media)
             })?
             .filter_map(|r| r.ok())
             .collect()
         } else {
             stmt.query_map(params![contact_id], |row| {
-                let content_json: String = row.get(9)?;
-                let content = serde_json::from_str(&content_json).ok();
-                Ok(StoredMessage {
-                    id: row.get(0)?,
-                    contact_id: row.get(1)?,
-                    timestamp: row.get(2)?,
-                    is_from_me: row.get(3)?,
-                    is_forwarded: row.get(4)?,
-                    sender_name: row.get(5)?,
-                    sender_phone: row.get(6)?,
-                    contact_name: contact_name.clone(),
-                    contact_phone: contact_phone.clone(),
-                    chat_type: row.get(7)?,
-                    content_type: row.get(8)?,
-                    content_json,
-                    content,
-                    original_text: row.get(10)?,
-                    translated_text: row.get(11)?,
-                    source_language: row.get(12)?,
-                    is_translated: row.get(13)?,
-                })
+                build_message(row, &contact_name, &contact_phone, strip_media)
             })?
             .filter_map(|r| r.ok())
             .collect()

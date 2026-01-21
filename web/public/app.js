@@ -1305,10 +1305,13 @@ class WhatsAppClient {
         `;
       
       case 'image':
-        // Check if we have the actual image data
+        // Check if we have the actual image data or if it needs to be lazy loaded
         const mediaData = content.media_data || content.mediaData;
+        const hasMedia = content.has_media || content.hasMedia;
+        const messageId = message.id;
+        const mimeType = content.mime_type || content.mimeType || 'image/jpeg';
+        
         if (mediaData) {
-          const mimeType = content.mime_type || content.mimeType || 'image/jpeg';
           const imgSrc = mediaData.startsWith('data:') ? mediaData : `data:${mimeType};base64,${mediaData}`;
           return `
             <div class="message-image">
@@ -1316,8 +1319,21 @@ class WhatsAppClient {
             </div>
             ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
           `;
+        } else if (hasMedia) {
+          // Media needs to be lazy loaded - show placeholder
+          return `
+            <div class="message-image lazy-media" data-message-id="${messageId}" data-mime-type="${mimeType}" data-media-type="image">
+              <div class="media-placeholder" onclick="app.loadMedia('${messageId}', this)">
+                <svg viewBox="0 0 24 24" width="48" height="48">
+                  <path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                </svg>
+                <span>Click to load image</span>
+              </div>
+            </div>
+            ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
+          `;
         } else {
-          // Fallback for images without data
+          // No media available
           return `
             <div class="message-media image">[ Image ]${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
             ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
@@ -1326,8 +1342,11 @@ class WhatsAppClient {
       
       case 'video':
         const videoData = content.media_data || content.mediaData;
+        const videoHasMedia = content.has_media || content.hasMedia;
+        const videoMsgId = message.id;
+        const videoMime = content.mime_type || content.mimeType || 'video/mp4';
+        
         if (videoData) {
-          const videoMime = content.mime_type || content.mimeType || 'video/mp4';
           const videoSrc = videoData.startsWith('data:') ? videoData : `data:${videoMime};base64,${videoData}`;
           return `
             <div class="message-video">
@@ -1335,6 +1354,20 @@ class WhatsAppClient {
                 <source src="${videoSrc}" type="${videoMime}">
                 Your browser does not support video playback.
               </video>
+            </div>
+            ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
+          `;
+        } else if (videoHasMedia) {
+          // Media needs to be lazy loaded - show placeholder
+          const durationText = content.duration_seconds ? this.formatDuration(content.duration_seconds) : '';
+          return `
+            <div class="message-video lazy-media" data-message-id="${videoMsgId}" data-mime-type="${videoMime}" data-media-type="video">
+              <div class="media-placeholder" onclick="app.loadMedia('${videoMsgId}', this)">
+                <svg viewBox="0 0 24 24" width="48" height="48">
+                  <path fill="currentColor" d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
+                </svg>
+                <span>Click to load video${durationText ? ` (${durationText})` : ''}</span>
+              </div>
             </div>
             ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
           `;
@@ -1347,9 +1380,12 @@ class WhatsAppClient {
       
       case 'audio':
         const audioData = content.media_data || content.mediaData;
+        const audioHasMedia = content.has_media || content.hasMedia;
+        const audioMsgId = message.id;
+        const audioMime = content.mime_type || content.mimeType || 'audio/ogg';
         const isVoiceNote = content.is_voice_note || content.isVoiceNote;
+        
         if (audioData) {
-          const audioMime = content.mime_type || content.mimeType || 'audio/ogg';
           const audioSrc = audioData.startsWith('data:') ? audioData : `data:${audioMime};base64,${audioData}`;
           return `
             <div class="message-audio ${isVoiceNote ? 'voice-note' : ''}">
@@ -1360,6 +1396,20 @@ class WhatsAppClient {
               ${isVoiceNote ? '<span class="voice-note-label">Voice Note</span>' : ''}
             </div>
           `;
+        } else if (audioHasMedia) {
+          // Media needs to be lazy loaded - show placeholder
+          const audioType = isVoiceNote ? 'voice note' : 'audio';
+          const durationText = content.duration_seconds ? this.formatDuration(content.duration_seconds) : '';
+          return `
+            <div class="message-audio lazy-media ${isVoiceNote ? 'voice-note' : ''}" data-message-id="${audioMsgId}" data-mime-type="${audioMime}" data-media-type="audio">
+              <div class="media-placeholder" onclick="app.loadMedia('${audioMsgId}', this)">
+                <svg viewBox="0 0 24 24" width="32" height="32">
+                  <path fill="currentColor" d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/>
+                </svg>
+                <span>Click to load ${audioType}${durationText ? ` (${durationText})` : ''}</span>
+              </div>
+            </div>
+          `;
         } else {
           const audioType = isVoiceNote ? 'Voice Note' : 'Audio';
           return `<div class="message-media audio">[ ${audioType} ]${content.duration_seconds ? ' - ' + this.formatDuration(content.duration_seconds) : ''}</div>`;
@@ -1367,8 +1417,11 @@ class WhatsAppClient {
       
       case 'document':
         const docData = content.media_data || content.mediaData;
+        const docHasMedia = content.has_media || content.hasMedia;
+        const docMsgId = message.id;
         const fileName = content.file_name || content.fileName || 'document';
         const docMime = content.mime_type || content.mimeType || 'application/octet-stream';
+        
         if (docData) {
           const docSrc = docData.startsWith('data:') ? docData : `data:${docMime};base64,${docData}`;
           return `
@@ -1385,6 +1438,23 @@ class WhatsAppClient {
             </div>
             ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
           `;
+        } else if (docHasMedia) {
+          // Media needs to be lazy loaded - show placeholder
+          const sizeText = content.file_size ? this.formatSize(content.file_size) : '';
+          return `
+            <div class="message-document lazy-media" data-message-id="${docMsgId}" data-mime-type="${docMime}" data-media-type="document" data-file-name="${this.escapeHtml(fileName)}">
+              <div class="media-placeholder document-placeholder" onclick="app.loadMedia('${docMsgId}', this)">
+                <svg viewBox="0 0 24 24" width="24" height="24">
+                  <path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/>
+                </svg>
+                <div class="document-info">
+                  <span class="document-name">${this.escapeHtml(fileName)}</span>
+                  <span class="document-size">${sizeText ? sizeText : 'Click to download'}</span>
+                </div>
+              </div>
+            </div>
+            ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
+          `;
         } else {
           return `
             <div class="message-media document">[ Document: ${this.escapeHtml(fileName)} ]${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
@@ -1394,16 +1464,32 @@ class WhatsAppClient {
       
       case 'sticker':
         const stickerData = content.media_data || content.mediaData;
+        const stickerHasMedia = content.has_media || content.hasMedia;
+        const stickerMsgId = message.id;
+        const stickerMime = content.mime_type || content.mimeType || 'image/webp';
+        const isAnimated = content.is_animated || content.isAnimated;
+        
         if (stickerData) {
-          const stickerMime = content.mime_type || content.mimeType || 'image/webp';
           const stickerSrc = stickerData.startsWith('data:') ? stickerData : `data:${stickerMime};base64,${stickerData}`;
           return `
             <div class="message-sticker">
               <img src="${stickerSrc}" alt="Sticker" loading="lazy">
             </div>
           `;
+        } else if (stickerHasMedia) {
+          // Media needs to be lazy loaded - show placeholder
+          return `
+            <div class="message-sticker lazy-media" data-message-id="${stickerMsgId}" data-mime-type="${stickerMime}" data-media-type="sticker">
+              <div class="media-placeholder sticker-placeholder" onclick="app.loadMedia('${stickerMsgId}', this)">
+                <svg viewBox="0 0 24 24" width="48" height="48">
+                  <path fill="currentColor" d="M21.99 4c0-1.1-.89-2-1.99-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4-.01-18zM17 11h-4v4h-2v-4H7V9h4V5h2v4h4v2z"/>
+                </svg>
+                <span>${isAnimated ? 'Animated sticker' : 'Sticker'}</span>
+              </div>
+            </div>
+          `;
         } else {
-          return `<div class="message-media">[ ${content.is_animated || content.isAnimated ? 'Animated ' : ''}Sticker ]</div>`;
+          return `<div class="message-media">[ ${isAnimated ? 'Animated ' : ''}Sticker ]</div>`;
         }
       
       case 'location':
@@ -2522,6 +2608,141 @@ class WhatsAppClient {
           container.insertAdjacentHTML('beforeend', cardHtml);
         }
       }
+    }
+  }
+
+  // Load media on demand (lazy loading)
+  async loadMedia(messageId, placeholderEl) {
+    // Find the lazy-media container
+    const container = placeholderEl.closest('.lazy-media');
+    if (!container) {
+      console.error('Could not find lazy-media container');
+      return;
+    }
+
+    // Get media type info from the container
+    const mediaType = container.dataset.mediaType;
+    const mimeType = container.dataset.mimeType;
+    const fileName = container.dataset.fileName;
+
+    // Show loading state
+    placeholderEl.classList.add('loading');
+    placeholderEl.innerHTML = `
+      <div class="media-loading-spinner"></div>
+      <span>Loading...</span>
+    `;
+
+    try {
+      // Fetch media from the API
+      const response = await fetch(`/api/media/${encodeURIComponent(messageId)}`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to load media');
+      }
+
+      const data = await response.json();
+      
+      if (!data.media_data) {
+        throw new Error('No media data received');
+      }
+
+      // Build the data URL
+      const actualMimeType = data.mime_type || mimeType;
+      const mediaSrc = data.media_data.startsWith('data:') 
+        ? data.media_data 
+        : `data:${actualMimeType};base64,${data.media_data}`;
+
+      // Replace placeholder with actual media based on type
+      let mediaHtml = '';
+      
+      switch (mediaType) {
+        case 'image':
+          mediaHtml = `<img src="${mediaSrc}" alt="Image" loading="lazy" onclick="this.classList.toggle('fullscreen')">`;
+          break;
+          
+        case 'video':
+          mediaHtml = `
+            <video controls preload="metadata" onclick="event.stopPropagation()">
+              <source src="${mediaSrc}" type="${actualMimeType}">
+              Your browser does not support video playback.
+            </video>
+          `;
+          break;
+          
+        case 'audio':
+          const isVoiceNote = container.classList.contains('voice-note');
+          mediaHtml = `
+            <audio controls preload="metadata">
+              <source src="${mediaSrc}" type="${actualMimeType}">
+              Your browser does not support audio playback.
+            </audio>
+            ${isVoiceNote ? '<span class="voice-note-label">Voice Note</span>' : ''}
+          `;
+          break;
+          
+        case 'document':
+          const docFileName = fileName || 'document';
+          mediaHtml = `
+            <a href="${mediaSrc}" download="${this.escapeHtml(docFileName)}" class="document-download">
+              <svg viewBox="0 0 24 24" width="24" height="24">
+                <path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/>
+              </svg>
+              <div class="document-info">
+                <span class="document-name">${this.escapeHtml(docFileName)}</span>
+                <span class="document-size">Click to download</span>
+              </div>
+            </a>
+          `;
+          break;
+          
+        case 'sticker':
+          mediaHtml = `<img src="${mediaSrc}" alt="Sticker" loading="lazy">`;
+          break;
+          
+        default:
+          mediaHtml = `<img src="${mediaSrc}" alt="Media" loading="lazy">`;
+      }
+
+      // Remove lazy-media class and replace content
+      container.classList.remove('lazy-media');
+      container.innerHTML = mediaHtml;
+
+      // Also update the message cache so re-renders show the media
+      this.updateMessageMediaCache(messageId, data.media_data, actualMimeType);
+
+    } catch (err) {
+      console.error('Failed to load media:', err);
+      // Show error state
+      placeholderEl.classList.remove('loading');
+      placeholderEl.classList.add('error');
+      placeholderEl.innerHTML = `
+        <svg viewBox="0 0 24 24" width="32" height="32">
+          <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+        <span>Failed to load. Click to retry.</span>
+      `;
+      // Allow retry on click
+      placeholderEl.onclick = () => this.loadMedia(messageId, placeholderEl);
+    }
+  }
+
+  // Update message cache with loaded media data
+  updateMessageMediaCache(messageId, mediaData, mimeType) {
+    // Find the message in the current contact's messages
+    if (!this.currentContactId) return;
+    
+    const messages = this.messages.get(this.currentContactId);
+    if (!messages) return;
+    
+    const message = messages.find(m => m.id === messageId);
+    if (message && message.content) {
+      message.content.media_data = mediaData;
+      message.content.mediaData = mediaData;
+      message.content.mime_type = mimeType;
+      message.content.mimeType = mimeType;
+      // Remove has_media flag since we now have the data
+      delete message.content.has_media;
+      delete message.content.hasMedia;
     }
   }
 }
