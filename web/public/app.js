@@ -67,6 +67,29 @@ class WhatsAppClient {
     this.connectWebSocket();
     this.bindEvents();
     this.updateInputPlaceholder();
+    this.setupVisualViewport();
+  }
+
+  // Fix for iOS/iPad keyboard suggestion bar causing layout issues
+  setupVisualViewport() {
+    if (!window.visualViewport) return;
+    
+    const updateViewportHeight = () => {
+      // Get the actual visible viewport height (excludes keyboard + suggestion bar)
+      const vh = window.visualViewport.height;
+      document.documentElement.style.setProperty('--viewport-height', `${vh}px`);
+      
+      // On iOS, also adjust for the offset when keyboard pushes content up
+      const offset = window.innerHeight - vh;
+      document.documentElement.style.setProperty('--keyboard-offset', `${offset}px`);
+    };
+    
+    // Update on viewport resize (keyboard open/close)
+    window.visualViewport.addEventListener('resize', updateViewportHeight);
+    window.visualViewport.addEventListener('scroll', updateViewportHeight);
+    
+    // Initial call
+    updateViewportHeight();
   }
 
   async checkAuth() {
