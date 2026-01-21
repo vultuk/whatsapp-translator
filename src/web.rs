@@ -439,6 +439,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/.well-known/oauth-authorization-server",
             get(oauth_metadata),
         )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(oauth_protected_resource_metadata),
+        )
         .route("/oauth/authorize", get(oauth_authorize))
         .route("/oauth/approve", post(oauth_approve))
         .route("/oauth/token", post(oauth_token))
@@ -1312,6 +1316,20 @@ async fn oauth_metadata(Host(host): Host) -> impl IntoResponse {
     Json(metadata)
 }
 
+/// OAuth 2.0 Protected Resource Metadata (RFC 9728)
+/// This tells MCP clients which authorization server to use
+async fn oauth_protected_resource_metadata(Host(host): Host) -> impl IntoResponse {
+    let is_https = !host.contains("localhost") && !host.contains("127.0.0.1");
+    let base_url = get_base_url(&host, is_https);
+
+    Json(serde_json::json!({
+        "resource": format!("{}/mcp", base_url),
+        "authorization_servers": [base_url],
+        "scopes_supported": ["mcp"],
+        "bearer_methods_supported": ["header"]
+    }))
+}
+
 /// OAuth Authorization endpoint - shows approval page
 async fn oauth_authorize(
     State(state): State<Arc<AppState>>,
@@ -1871,6 +1889,7 @@ fn create_mcp_service(
 
 async fn mcp_handler(
     State(state): State<Arc<AppState>>,
+    Host(host): Host,
     request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
     // Check OAuth Bearer token authentication
@@ -1901,12 +1920,20 @@ async fn mcp_handler(
     };
 
     if !is_authenticated {
-        // Return 401 with WWW-Authenticate header per OAuth 2.0 Bearer Token spec (RFC 6750)
+        // Build the resource_metadata URL for the WWW-Authenticate header
+        let is_https = !host.contains("localhost") && !host.contains("127.0.0.1");
+        let base_url = get_base_url(&host, is_https);
+        let resource_metadata_url = format!("{}/.well-known/oauth-protected-resource", base_url);
+
+        // Return 401 with WWW-Authenticate header per RFC 6750 and RFC 9728
+        // The resource_metadata parameter tells MCP clients where to find OAuth config
+        let www_authenticate = format!("Bearer resource_metadata=\"{}\"", resource_metadata_url);
+
         return (
             StatusCode::UNAUTHORIZED,
             [
-                (header::WWW_AUTHENTICATE, "Bearer realm=\"mcp\", error=\"invalid_token\""),
-                (header::CONTENT_TYPE, "application/json"),
+                (header::WWW_AUTHENTICATE.as_str(), www_authenticate.as_str()),
+                (header::CONTENT_TYPE.as_str(), "application/json"),
             ],
             Json(serde_json::json!({
                 "error": "unauthorized",
