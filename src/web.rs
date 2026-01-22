@@ -906,55 +906,75 @@ async fn send_message(
             .into_response();
     }
 
-    // Determine the text to send - translate if needed based on conversation language
+    // Determine the text to send - translate if needed based on conversation settings or language
     let (text_to_send, _original_text, was_translated, target_language) =
         if let Some(translator) = &state.translator {
-            // Check what language the contact has been using
-            match state.store.get_conversation_language(&req.contact_id, 10) {
-                Ok(Some(conv_lang)) => {
-                    // Contact uses a specific language - translate our message to it
-                    info!(
-                        "Conversation language for {} is {}",
-                        req.contact_id, conv_lang
-                    );
-                    match translator.translate_to(&req.text, &conv_lang).await {
-                        Ok((translated, usage)) => {
-                            // Record usage if there was actual API usage
-                            if usage.input_tokens > 0 {
-                                if let Err(e) = state.store.record_usage(
-                                    Some(&req.contact_id),
-                                    None, // No message ID for outgoing yet
-                                    &usage,
-                                    "translate_outgoing",
-                                ) {
-                                    warn!("Failed to record usage: {}", e);
-                                }
-                            }
+            // First check for language override in conversation settings
+            let settings = state
+                .store
+                .get_conversation_settings(&req.contact_id)
+                .unwrap_or_default();
 
-                            if translated != req.text {
-                                info!(
-                                    "Translated outgoing message to {} (cost: ${:.6})",
-                                    conv_lang, usage.cost_usd
-                                );
-                                (translated, Some(req.text.clone()), true, Some(conv_lang))
-                            } else {
-                                (req.text.clone(), None, false, None)
+            // Determine target language: settings override > auto-detected > none
+            let target_lang = if let Some(ref lang_override) = settings.language_override {
+                // User explicitly set a language override - ALWAYS use it
+                Some(lang_override.clone())
+            } else {
+                // Fall back to auto-detected conversation language
+                state
+                    .store
+                    .get_conversation_language(&req.contact_id, 10)
+                    .ok()
+                    .flatten()
+            };
+
+            if let Some(conv_lang) = target_lang {
+                info!(
+                    "Target language for {} is {} (override: {})",
+                    req.contact_id,
+                    conv_lang,
+                    settings.language_override.is_some()
+                );
+
+                // If there's a language override, always translate (even English -> other)
+                // Otherwise, use the normal translate_to which skips if already in target
+                let force_translate = settings.language_override.is_some();
+
+                match translator
+                    .translate_outgoing(&req.text, &conv_lang, force_translate)
+                    .await
+                {
+                    Ok((translated, usage)) => {
+                        // Record usage if there was actual API usage
+                        if usage.input_tokens > 0 {
+                            if let Err(e) = state.store.record_usage(
+                                Some(&req.contact_id),
+                                None, // No message ID for outgoing yet
+                                &usage,
+                                "translate_outgoing",
+                            ) {
+                                warn!("Failed to record usage: {}", e);
                             }
                         }
-                        Err(e) => {
-                            error!("Failed to translate outgoing message: {}", e);
+
+                        if translated != req.text {
+                            info!(
+                                "Translated outgoing message to {} (cost: ${:.6})",
+                                conv_lang, usage.cost_usd
+                            );
+                            (translated, Some(req.text.clone()), true, Some(conv_lang))
+                        } else {
                             (req.text.clone(), None, false, None)
                         }
                     }
+                    Err(e) => {
+                        error!("Failed to translate outgoing message: {}", e);
+                        (req.text.clone(), None, false, None)
+                    }
                 }
-                Ok(None) => {
-                    // No conversation history or language detected
-                    (req.text.clone(), None, false, None)
-                }
-                Err(e) => {
-                    error!("Failed to get conversation language: {}", e);
-                    (req.text.clone(), None, false, None)
-                }
+            } else {
+                // No target language set or detected
+                (req.text.clone(), None, false, None)
             }
         } else {
             (req.text.clone(), None, false, None)

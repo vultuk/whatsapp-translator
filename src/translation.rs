@@ -427,6 +427,104 @@ Text to translate:
         Ok((translated.trim().to_string(), total_usage))
     }
 
+    /// Translate outgoing text to a specific target language.
+    /// When force=true, always translates even if text appears to already be in target language.
+    /// Used for translating outgoing messages when user has set a language override.
+    pub async fn translate_outgoing(
+        &self,
+        text: &str,
+        target_language: &str,
+        force: bool,
+    ) -> Result<(String, UsageInfo)> {
+        let mut total_usage = UsageInfo::default();
+
+        // If not forcing, skip if target is the default language (likely English)
+        if !force && target_language.to_lowercase() == self.default_language.to_lowercase() {
+            return Ok((text.to_string(), total_usage));
+        }
+
+        // Detect the source language
+        let (_is_target_lang, detected_lang, detection_usage) = self.detect_language(text).await?;
+        total_usage = Self::combine_usage(&total_usage, &detection_usage);
+
+        // If not forcing, skip if text is already in target language
+        if !force && detected_lang.to_lowercase() == target_language.to_lowercase() {
+            debug!(
+                "Text already in target language ({}), skipping translation",
+                target_language
+            );
+            return Ok((text.to_string(), total_usage));
+        }
+
+        info!(
+            "Translating outgoing message from {} to {} (force: {})",
+            detected_lang, target_language, force
+        );
+
+        let prompt = format!(
+            r#"Translate the following text to {}.
+Respond with ONLY the translated text, nothing else. Preserve the original formatting, tone, and meaning as closely as possible.
+
+Text to translate:
+{}"#,
+            target_language, text
+        );
+
+        let request = ClaudeRequest {
+            model: TRANSLATION_MODEL.to_string(),
+            max_tokens: 2000,
+            messages: vec![ClaudeMessage {
+                role: "user".to_string(),
+                content: prompt,
+            }],
+        };
+
+        let response = self
+            .client
+            .post(ANTHROPIC_API_URL)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("content-type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send translation request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            warn!("Translation API error: {} - {}", status, body);
+            return Ok((text.to_string(), total_usage));
+        }
+
+        let claude_response: ClaudeResponse = response
+            .json()
+            .await
+            .context("Failed to parse translation response")?;
+
+        let translation_usage = UsageInfo {
+            input_tokens: claude_response.usage.input_tokens,
+            output_tokens: claude_response.usage.output_tokens,
+            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
+        };
+        total_usage = Self::combine_usage(&total_usage, &translation_usage);
+
+        debug!(
+            "Outgoing translation usage: {} in, {} out, ${:.6}",
+            translation_usage.input_tokens,
+            translation_usage.output_tokens,
+            translation_usage.cost_usd
+        );
+
+        let translated = claude_response
+            .content
+            .first()
+            .and_then(|c| c.text.clone())
+            .unwrap_or_else(|| text.to_string());
+
+        Ok((translated.trim().to_string(), total_usage))
+    }
+
     /// Combine two usage infos
     fn combine_usage(a: &UsageInfo, b: &UsageInfo) -> UsageInfo {
         UsageInfo {
