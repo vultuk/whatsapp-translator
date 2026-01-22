@@ -367,13 +367,24 @@ async fn process_message(
         bridge::Chat::Status { .. } => "status",
     };
 
+    // Get conversation settings if we have a store
+    let settings = store
+        .and_then(|s| s.get_conversation_settings(&contact_id).ok())
+        .unwrap_or_default();
+
     // Extract text content for translation (skip history messages)
     let (original_text, translated_text, source_language, is_translated) =
         if let Some(translator) = translator {
             if let Some(text) = extract_text_content(&msg.content) {
                 if !msg.is_from_me && !msg.is_history {
                     // Only translate incoming messages (not history sync)
-                    let result = translator.process_text(&text).await;
+                    let result = translator
+                        .process_text(
+                            &text,
+                            settings.language_override.as_deref(),
+                            settings.translation_style.as_deref(),
+                        )
+                        .await;
 
                     // Record usage if we have a store and there was actual API usage
                     if let Some(store) = store {
@@ -624,7 +635,8 @@ async fn handle_terminal_event(
             if let Some(translator) = translator {
                 if !msg.is_from_me {
                     if let Some(text) = extract_text_content(&msg.content) {
-                        let result = translator.process_text(&text).await;
+                        // CLI mode doesn't have per-conversation settings
+                        let result = translator.process_text(&text, None, None).await;
                         if result.needs_translation {
                             // Display with translation
                             message_display.display_with_translation(

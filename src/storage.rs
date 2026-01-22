@@ -75,6 +75,18 @@ pub struct StoredContact {
     pub last_message_preview: Option<String>,
 }
 
+/// Conversation settings for per-contact customization
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSettings {
+    /// Override the target language for translations in this conversation
+    /// e.g., "Spanish", "French", "Japanese"
+    pub language_override: Option<String>,
+    /// Style instruction for translations in this conversation
+    /// e.g., "formal", "informal", "family", "robotic", "geek"
+    pub translation_style: Option<String>,
+}
+
 /// Style profile for AI reply generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -269,6 +281,9 @@ impl MessageStore {
         // Add style_profiles table for AI reply generation
         self.migrate_add_style_profiles_table(&conn)?;
 
+        // Add conversation settings columns (language_override, translation_style)
+        self.migrate_add_conversation_settings_columns(&conn)?;
+
         Ok(())
     }
 
@@ -300,6 +315,28 @@ impl MessageStore {
                 "#,
             )?;
             info!("Database migration complete: created style_profiles table");
+        }
+
+        Ok(())
+    }
+
+    /// Add conversation settings columns to contacts table
+    fn migrate_add_conversation_settings_columns(&self, conn: &Connection) -> Result<()> {
+        // Check if language_override column exists
+        let has_language_override: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('contacts') WHERE name = 'language_override'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        if !has_language_override {
+            info!("Migrating database: adding conversation settings columns...");
+            conn.execute("ALTER TABLE contacts ADD COLUMN language_override TEXT", [])?;
+            conn.execute("ALTER TABLE contacts ADD COLUMN translation_style TEXT", [])?;
+            info!("Database migration complete: added conversation settings columns");
         }
 
         Ok(())
@@ -675,6 +712,53 @@ impl MessageStore {
             )?;
             Ok(true) // Now pinned
         }
+    }
+
+    /// Get conversation settings for a contact
+    pub fn get_conversation_settings(&self, contact_id: &str) -> Result<ConversationSettings> {
+        let conn = self.conn.lock().unwrap();
+
+        let result = conn.query_row(
+            "SELECT language_override, translation_style FROM contacts WHERE id = ?",
+            params![contact_id],
+            |row| {
+                Ok(ConversationSettings {
+                    language_override: row.get(0)?,
+                    translation_style: row.get(1)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(settings) => Ok(settings),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(ConversationSettings::default()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Update conversation settings for a contact
+    pub fn update_conversation_settings(
+        &self,
+        contact_id: &str,
+        settings: &ConversationSettings,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            "UPDATE contacts SET language_override = ?, translation_style = ? WHERE id = ?",
+            params![
+                settings.language_override,
+                settings.translation_style,
+                contact_id
+            ],
+        )?;
+
+        info!(
+            "Updated conversation settings for {}: language={:?}, style={:?}",
+            contact_id, settings.language_override, settings.translation_style
+        );
+
+        Ok(())
     }
 
     /// Get messages for a specific contact (all messages - for MCP/internal use)

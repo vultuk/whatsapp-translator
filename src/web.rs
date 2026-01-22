@@ -265,6 +265,24 @@ pub struct AuthResponse {
     pub error: Option<String>,
 }
 
+/// Conversation settings request/response
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConversationSettingsRequest {
+    /// Override the target language for translations (plain text, e.g., "Spanish")
+    pub language_override: Option<String>,
+    /// Style instruction for translations (plain text, e.g., "formal", "casual")
+    pub translation_style: Option<String>,
+}
+
+/// Conversation settings response
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSettingsResponse {
+    pub language_override: Option<String>,
+    pub translation_style: Option<String>,
+}
+
 impl AppState {
     pub fn new(
         store: MessageStore,
@@ -474,6 +492,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/status", get(get_status))
         .route("/api/contacts", get(get_contacts))
         .route("/api/contacts/:contact_id/pin", post(toggle_pin))
+        .route(
+            "/api/contacts/:contact_id/settings",
+            get(get_conversation_settings).put(update_conversation_settings),
+        )
         .route("/api/messages/:contact_id", get(get_messages))
         .route("/api/media/:message_id", get(get_media))
         .route("/api/avatar/:jid", get(get_avatar))
@@ -683,6 +705,72 @@ async fn toggle_pin(
         Err(e) => {
             error!("Failed to toggle pin: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to toggle pin").into_response()
+        }
+    }
+}
+
+/// Get conversation settings for a contact
+async fn get_conversation_settings(
+    State(state): State<Arc<AppState>>,
+    Path(contact_id): Path<String>,
+) -> impl IntoResponse {
+    let contact_id = urlencoding::decode(&contact_id)
+        .map(|s| s.into_owned())
+        .unwrap_or(contact_id);
+
+    match state.store.get_conversation_settings(&contact_id) {
+        Ok(settings) => Json(ConversationSettingsResponse {
+            language_override: settings.language_override,
+            translation_style: settings.translation_style,
+        })
+        .into_response(),
+        Err(e) => {
+            error!("Failed to get conversation settings: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to get conversation settings",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Update conversation settings for a contact
+async fn update_conversation_settings(
+    State(state): State<Arc<AppState>>,
+    Path(contact_id): Path<String>,
+    Json(req): Json<UpdateConversationSettingsRequest>,
+) -> impl IntoResponse {
+    let contact_id = urlencoding::decode(&contact_id)
+        .map(|s| s.into_owned())
+        .unwrap_or(contact_id);
+
+    // Convert empty strings to None
+    let settings = crate::storage::ConversationSettings {
+        language_override: req.language_override.filter(|s| !s.trim().is_empty()),
+        translation_style: req.translation_style.filter(|s| !s.trim().is_empty()),
+    };
+
+    match state
+        .store
+        .update_conversation_settings(&contact_id, &settings)
+    {
+        Ok(()) => Json(serde_json::json!({
+            "success": true,
+            "languageOverride": settings.language_override,
+            "translationStyle": settings.translation_style
+        }))
+        .into_response(),
+        Err(e) => {
+            error!("Failed to update conversation settings: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Failed to update settings: {}", e)
+                })),
+            )
+                .into_response()
         }
     }
 }
@@ -1159,8 +1247,20 @@ async fn translate_message(
         }
     };
 
-    // Call the translation service
-    let result = translator.process_text(&req.text).await;
+    // Get conversation settings for this contact
+    let settings = state
+        .store
+        .get_conversation_settings(&req.contact_id)
+        .unwrap_or_default();
+
+    // Call the translation service with conversation settings
+    let result = translator
+        .process_text(
+            &req.text,
+            settings.language_override.as_deref(),
+            settings.translation_style.as_deref(),
+        )
+        .await;
 
     // Record usage if there was API usage
     if result.usage.input_tokens > 0 {

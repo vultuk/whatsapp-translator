@@ -249,15 +249,31 @@ Text: "{}""#,
         Ok((true, self.default_language.clone(), usage_info))
     }
 
-    /// Translate text to the default language
-    async fn translate(&self, text: &str, source_language: &str) -> Result<(String, UsageInfo)> {
+    /// Translate text to a target language with optional style
+    async fn translate(
+        &self,
+        text: &str,
+        source_language: &str,
+        target_language: Option<&str>,
+        translation_style: Option<&str>,
+    ) -> Result<(String, UsageInfo)> {
+        let target = target_language.unwrap_or(&self.default_language);
+
+        // Build style instruction if provided
+        let style_instruction = match translation_style {
+            Some(style) if !style.trim().is_empty() => {
+                format!("\nUse a {} tone in the translation.", style.trim())
+            }
+            _ => String::new(),
+        };
+
         let prompt = format!(
-            r#"Translate the following text (from {}) to {}.
-Respond with ONLY the translated text, nothing else. Preserve the original formatting, tone, and meaning as closely as possible.
+            r#"Translate the following text (from {}) to {}.{}
+Respond with ONLY the translated text, nothing else. Preserve the original formatting and meaning as closely as possible.
 
 Text to translate:
 {}"#,
-            source_language, self.default_language, text
+            source_language, target, style_instruction, text
         );
 
         let request = ClaudeRequest {
@@ -421,31 +437,52 @@ Text to translate:
     }
 
     /// Process a message - detect language and translate if needed
-    pub async fn process_text(&self, text: &str) -> TranslationResult {
+    ///
+    /// Parameters:
+    /// - text: The text to translate
+    /// - language_override: Optional target language override (e.g., "Spanish")
+    /// - translation_style: Optional style instruction (e.g., "formal", "casual")
+    pub async fn process_text(
+        &self,
+        text: &str,
+        language_override: Option<&str>,
+        translation_style: Option<&str>,
+    ) -> TranslationResult {
         let mut total_usage = UsageInfo::default();
+
+        // Determine the target language
+        let target_language = language_override.unwrap_or(&self.default_language);
 
         if text.trim().is_empty() {
             return TranslationResult {
                 needs_translation: false,
                 original_text: text.to_string(),
                 translated_text: None,
-                source_language: self.default_language.clone(),
+                source_language: target_language.to_string(),
                 usage: total_usage,
             };
         }
 
         // Step 1: Detect language
-        let (is_default, detected_language, detection_usage) =
+        let (is_target_lang, detected_language, detection_usage) =
             match self.detect_language(text).await {
-                Ok(result) => result,
+                Ok((is_english, lang, usage)) => {
+                    // Check if detected language matches the target language
+                    let is_target = if language_override.is_some() {
+                        lang.to_lowercase() == target_language.to_lowercase()
+                    } else {
+                        is_english
+                    };
+                    (is_target, lang, usage)
+                }
                 Err(e) => {
                     warn!("Language detection failed: {}", e);
-                    (true, self.default_language.clone(), UsageInfo::default())
+                    (true, target_language.to_string(), UsageInfo::default())
                 }
             };
         total_usage = Self::combine_usage(&total_usage, &detection_usage);
 
-        if is_default {
+        if is_target_lang {
             return TranslationResult {
                 needs_translation: false,
                 original_text: text.to_string(),
@@ -456,8 +493,23 @@ Text to translate:
         }
 
         // Step 2: Translate
-        info!("Translating message from {}...", detected_language);
-        let (translated, translation_usage) = match self.translate(text, &detected_language).await {
+        info!(
+            "Translating message from {} to {}{}...",
+            detected_language,
+            target_language,
+            translation_style
+                .map(|s| format!(" (style: {})", s))
+                .unwrap_or_default()
+        );
+        let (translated, translation_usage) = match self
+            .translate(
+                text,
+                &detected_language,
+                language_override,
+                translation_style,
+            )
+            .await
+        {
             Ok(result) => result,
             Err(e) => {
                 warn!("Translation failed: {}", e);

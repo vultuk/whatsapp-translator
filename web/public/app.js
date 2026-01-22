@@ -2482,6 +2482,71 @@ class WhatsAppClient {
       sendDropdown?.classList.add('hidden');
       this.sendWithAI();
     });
+
+    // Chat settings button in header
+    document.getElementById('chat-settings-button')?.addEventListener('click', () => {
+      this.openSettingsModal();
+    });
+
+    // Context menu for contacts (right-click)
+    document.getElementById('contacts-list').addEventListener('contextmenu', (e) => {
+      const contactItem = e.target.closest('.contact-item');
+      if (contactItem) {
+        e.preventDefault();
+        const contactId = contactItem.dataset.contactId;
+        this.showContactContextMenu(e, contactId);
+      }
+    });
+
+    // Context menu items
+    document.getElementById('contact-context-menu')?.addEventListener('click', (e) => {
+      const item = e.target.closest('.context-menu-item');
+      if (!item) return;
+
+      const action = item.dataset.action;
+      const contactId = this.contextMenuContactId;
+
+      if (action === 'pin') {
+        this.togglePin(contactId);
+      } else if (action === 'settings') {
+        this.currentContactId = contactId;
+        this.openSettingsModal();
+      }
+
+      this.hideContactContextMenu();
+    });
+
+    // Close context menu when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#contact-context-menu')) {
+        this.hideContactContextMenu();
+      }
+    });
+
+    // Settings modal events
+    document.querySelector('#settings-modal .modal-close')?.addEventListener('click', () => {
+      this.closeSettingsModal();
+    });
+
+    document.querySelector('#settings-modal .modal-backdrop')?.addEventListener('click', () => {
+      this.closeSettingsModal();
+    });
+
+    document.getElementById('settings-cancel')?.addEventListener('click', () => {
+      this.closeSettingsModal();
+    });
+
+    document.getElementById('settings-save')?.addEventListener('click', () => {
+      this.saveConversationSettings();
+    });
+
+    // Close modal on Escape key
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        this.closeSettingsModal();
+        this.hideContactContextMenu();
+      }
+    });
   }
 
   // Check if on mobile device
@@ -2967,6 +3032,122 @@ class WhatsAppClient {
     this.recentEmojis = this.recentEmojis.slice(0, 32);
     // Save to localStorage
     localStorage.setItem('wa_recent_emojis', JSON.stringify(this.recentEmojis));
+  }
+
+  // ==================== Conversation Settings ====================
+
+  // Track contact ID for context menu
+  contextMenuContactId = null;
+
+  // Show context menu for a contact
+  showContactContextMenu(event, contactId) {
+    const menu = document.getElementById('contact-context-menu');
+    if (!menu) return;
+
+    this.contextMenuContactId = contactId;
+
+    // Update pin button text based on current state
+    const contact = this.contacts.find(c => c.id === contactId);
+    const pinText = menu.querySelector('.pin-text');
+    if (pinText && contact) {
+      pinText.textContent = contact.pinnedAt ? 'Unpin conversation' : 'Pin conversation';
+    }
+
+    // Position the menu near the cursor
+    menu.style.left = `${event.clientX}px`;
+    menu.style.top = `${event.clientY}px`;
+    menu.classList.remove('hidden');
+
+    // Ensure menu stays within viewport
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+      menu.style.left = `${window.innerWidth - rect.width - 10}px`;
+    }
+    if (rect.bottom > window.innerHeight) {
+      menu.style.top = `${window.innerHeight - rect.height - 10}px`;
+    }
+  }
+
+  // Hide context menu
+  hideContactContextMenu() {
+    const menu = document.getElementById('contact-context-menu');
+    if (menu) {
+      menu.classList.add('hidden');
+    }
+    this.contextMenuContactId = null;
+  }
+
+  // Open settings modal for current contact
+  async openSettingsModal() {
+    if (!this.currentContactId) {
+      console.warn('No contact selected');
+      return;
+    }
+
+    const modal = document.getElementById('settings-modal');
+    if (!modal) return;
+
+    // Fetch current settings
+    try {
+      const response = await fetch(`/api/contacts/${encodeURIComponent(this.currentContactId)}/settings`);
+      const settings = await response.json();
+
+      // Populate form fields
+      document.getElementById('language-override').value = settings.languageOverride || '';
+      document.getElementById('translation-style').value = settings.translationStyle || '';
+
+      // Show modal
+      modal.classList.remove('hidden');
+    } catch (err) {
+      console.error('Failed to fetch conversation settings:', err);
+      alert('Failed to load settings. Please try again.');
+    }
+  }
+
+  // Close settings modal
+  closeSettingsModal() {
+    const modal = document.getElementById('settings-modal');
+    if (modal) {
+      modal.classList.add('hidden');
+    }
+  }
+
+  // Save conversation settings
+  async saveConversationSettings() {
+    if (!this.currentContactId) return;
+
+    const languageOverride = document.getElementById('language-override')?.value?.trim() || null;
+    const translationStyle = document.getElementById('translation-style')?.value?.trim() || null;
+
+    try {
+      const response = await fetch(`/api/contacts/${encodeURIComponent(this.currentContactId)}/settings`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders()
+        },
+        body: JSON.stringify({
+          languageOverride: languageOverride || null,
+          translationStyle: translationStyle || null
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save settings');
+      }
+
+      const result = await response.json();
+      console.log('Settings saved:', result);
+
+      // Close modal
+      this.closeSettingsModal();
+
+      // Show success feedback (optional)
+      // You could add a toast notification here
+    } catch (err) {
+      console.error('Failed to save conversation settings:', err);
+      alert('Failed to save settings. Please try again.');
+    }
   }
 }
 
