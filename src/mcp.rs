@@ -252,6 +252,10 @@ impl WhatsAppMcpServer {
             .as_ref()
             .ok_or_else(|| McpError::internal_error("WhatsApp bridge not connected", None))?;
 
+        // Generate a temporary message ID and timestamp for local storage/usage tracking
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let temp_message_id = format!("mcp_pending_{}", timestamp);
+
         // Translate the message if needed based on conversation language
         let (text_to_send, was_translated, target_language) =
             if let Some(translator) = &self.translator {
@@ -267,7 +271,7 @@ impl WhatsAppMcpServer {
                                 if usage.input_tokens > 0 {
                                     if let Err(e) = self.store.record_usage(
                                         Some(contact_id),
-                                        None,
+                                        Some(temp_message_id.as_str()),
                                         &usage,
                                         "translate_outgoing_mcp",
                                     ) {
@@ -315,10 +319,6 @@ impl WhatsAppMcpServer {
                 McpError::internal_error(format!("Failed to send message: {}", e), None)
             },
         )?;
-
-        // Store the sent message locally
-        let timestamp = chrono::Utc::now().timestamp_millis();
-        let temp_message_id = format!("mcp_pending_{}", timestamp);
 
         // Get contact info for the recipient
         let contact_info = self.store.get_contact(contact_id).ok().flatten();
