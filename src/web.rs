@@ -1314,7 +1314,7 @@ async fn translate_message(
     .into_response()
 }
 
-/// AI compose endpoint - generates a message using Claude
+/// AI compose endpoint - generates a message using OpenAI
 async fn ai_compose(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AiComposeRequest>,

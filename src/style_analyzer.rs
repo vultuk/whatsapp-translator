@@ -1,7 +1,7 @@
 //! Style analyzer for AI reply generation.
 //!
 //! Analyzes user's outgoing messages to build a style profile that helps
-//! Claude generate replies that sound like the user.
+//! OpenAI generate replies that sound like the user.
 
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -10,14 +10,13 @@ use tracing::info;
 
 use crate::storage::{MessageStore, StoredMessage, StyleProfile};
 
-/// Model to use for style analysis (Haiku is cheap and fast enough)
-const STYLE_ANALYSIS_MODEL: &str = "claude-haiku-4-5";
-const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Model to use for style analysis
+const STYLE_ANALYSIS_MODEL: &str = "gpt-4o-mini";
+const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 
-/// Pricing per million tokens (Haiku 4.5)
-const HAIKU_INPUT_COST_PER_M: f64 = 1.0;
-const HAIKU_OUTPUT_COST_PER_M: f64 = 5.0;
+/// Pricing per million tokens (GPT-4o mini)
+const MINI_INPUT_COST_PER_M: f64 = 0.15;
+const MINI_OUTPUT_COST_PER_M: f64 = 0.60;
 
 /// How many new messages before we should refresh a style profile
 const REFRESH_THRESHOLD: i32 = 50;
@@ -39,35 +38,43 @@ pub struct StyleAnalysisUsage {
     pub cost_usd: f64,
 }
 
-/// Claude API structures (duplicated from translation.rs for modularity)
+/// OpenAI Chat Completions structures (duplicated from translation.rs for modularity)
 #[derive(Serialize)]
-struct ClaudeRequest {
+struct OpenAiRequest {
     model: String,
     max_tokens: u32,
-    messages: Vec<ClaudeMessage>,
+    messages: Vec<OpenAiMessage>,
 }
 
 #[derive(Serialize)]
-struct ClaudeMessage {
+struct OpenAiMessage {
     role: String,
     content: String,
 }
 
 #[derive(Deserialize)]
-struct ClaudeResponse {
-    content: Vec<ContentBlock>,
-    usage: ApiUsage,
+struct OpenAiResponse {
+    choices: Vec<OpenAiChoice>,
+    #[serde(default)]
+    usage: OpenAiUsage,
 }
 
 #[derive(Deserialize)]
-struct ContentBlock {
-    text: Option<String>,
+struct OpenAiChoice {
+    message: OpenAiResponseMessage,
 }
 
 #[derive(Deserialize)]
-struct ApiUsage {
-    input_tokens: i32,
-    output_tokens: i32,
+struct OpenAiResponseMessage {
+    content: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct OpenAiUsage {
+    #[serde(default)]
+    prompt_tokens: u32,
+    #[serde(default)]
+    completion_tokens: u32,
 }
 
 impl StyleAnalyzer {
@@ -134,7 +141,7 @@ impl StyleAnalyzer {
             return Ok((profile, None));
         }
 
-        // Generate style profile using Claude
+        // Generate style profile using OpenAI
         let (profile, usage) = self.analyze_messages(&messages, profile_id).await?;
 
         // Save the profile
@@ -213,10 +220,10 @@ Be specific with examples from the messages. This description will help an AI wr
             formatted_messages
         );
 
-        let request = ClaudeRequest {
+        let request = OpenAiRequest {
             model: STYLE_ANALYSIS_MODEL.to_string(),
             max_tokens: 500,
-            messages: vec![ClaudeMessage {
+            messages: vec![OpenAiMessage {
                 role: "user".to_string(),
                 content: prompt,
             }],
@@ -224,9 +231,8 @@ Be specific with examples from the messages. This description will help an AI wr
 
         let response = self
             .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
+            .post(OPENAI_API_URL)
+            .bearer_auth(&self.api_key)
             .header("content-type", "application/json")
             .json(&request)
             .send()
@@ -239,21 +245,21 @@ Be specific with examples from the messages. This description will help an AI wr
             anyhow::bail!("Style analysis API error: {} - {}", status, body);
         }
 
-        let claude_response: ClaudeResponse = response
+        let openai_response: OpenAiResponse = response
             .json()
             .await
             .context("Failed to parse style analysis response")?;
 
-        let profile_text = claude_response
-            .content
+        let profile_text = openai_response
+            .choices
             .first()
-            .and_then(|c| c.text.clone())
+            .and_then(|c| c.message.content.clone())
             .unwrap_or_else(|| "Unable to analyze style.".to_string());
 
         let usage = StyleAnalysisUsage {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_cost(&claude_response.usage),
+            input_tokens: openai_response.usage.prompt_tokens as i32,
+            output_tokens: openai_response.usage.completion_tokens as i32,
+            cost_usd: Self::calculate_cost(&openai_response.usage),
         };
 
         info!(
@@ -275,10 +281,10 @@ Be specific with examples from the messages. This description will help an AI wr
         Ok((profile, usage))
     }
 
-    /// Calculate cost for Haiku usage
-    fn calculate_cost(usage: &ApiUsage) -> f64 {
-        let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * HAIKU_INPUT_COST_PER_M;
-        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * HAIKU_OUTPUT_COST_PER_M;
+    /// Calculate cost for GPT-4o mini usage
+    fn calculate_cost(usage: &OpenAiUsage) -> f64 {
+        let input_cost = (usage.prompt_tokens as f64 / 1_000_000.0) * MINI_INPUT_COST_PER_M;
+        let output_cost = (usage.completion_tokens as f64 / 1_000_000.0) * MINI_OUTPUT_COST_PER_M;
         input_cost + output_cost
     }
 }

@@ -40,9 +40,13 @@ pub struct Args {
     #[arg(long, default_value = "0.0.0.0", env = "WA_HOST")]
     pub host: String,
 
-    /// Claude API key for message translation
-    #[arg(long, env = "ANTHROPIC_API_KEY")]
-    pub claude_api_key: Option<String>,
+    /// OpenAI API key for message translation and AI features
+    #[arg(long, env = "OPENAI_API_KEY")]
+    pub openai_api_key: Option<String>,
+
+    /// Deprecated fallback for legacy deployments; use OPENAI_API_KEY instead
+    #[arg(long, env = "ANTHROPIC_API_KEY", hide = true)]
+    pub anthropic_api_key: Option<String>,
 
     /// Default language for messages (messages in this language won't be translated)
     #[arg(long, default_value = "English", env = "WA_DEFAULT_LANGUAGE")]
@@ -61,6 +65,19 @@ impl Args {
 
     /// Check if translation is enabled
     pub fn translation_enabled(&self) -> bool {
-        self.claude_api_key.is_some()
+        self.translation_api_key().is_some()
+    }
+
+    /// Return the configured translation API key.
+    /// OPENAI_API_KEY is preferred, with ANTHROPIC_API_KEY as a temporary fallback.
+    pub fn translation_api_key(&self) -> Option<String> {
+        self.openai_api_key
+            .clone()
+            .or_else(|| self.anthropic_api_key.clone())
+    }
+
+    /// Whether we are using the deprecated ANTHROPIC_API_KEY fallback.
+    pub fn using_legacy_api_key(&self) -> bool {
+        self.openai_api_key.is_none() && self.anthropic_api_key.is_some()
     }
 }
