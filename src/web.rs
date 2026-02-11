@@ -906,6 +906,11 @@ async fn send_message(
             .into_response();
     }
 
+    // Generate a temporary message ID and timestamp for immediate response
+    // The actual message ID will come back via the bridge's send_result event
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    let temp_message_id = format!("pending_{}", timestamp);
+
     // Determine the text to send - translate if needed based on conversation settings or language
     let (text_to_send, _original_text, was_translated, target_language) =
         if let Some(translator) = &state.translator {
@@ -949,7 +954,7 @@ async fn send_message(
                         if usage.input_tokens > 0 {
                             if let Err(e) = state.store.record_usage(
                                 Some(&req.contact_id),
-                                None, // No message ID for outgoing yet
+                                Some(temp_message_id.as_str()),
                                 &usage,
                                 "translate_outgoing",
                             ) {
@@ -999,11 +1004,6 @@ async fn send_message(
         )
             .into_response();
     }
-
-    // Generate a temporary message ID and timestamp for immediate response
-    // The actual message ID will come back via the bridge's send_result event
-    let timestamp = chrono::Utc::now().timestamp_millis();
-    let temp_message_id = format!("pending_{}", timestamp);
 
     // Store the sent message locally
     // For outgoing translated messages:
@@ -1314,7 +1314,7 @@ async fn translate_message(
     .into_response()
 }
 
-/// AI compose endpoint - generates a message using Claude
+/// AI compose endpoint - generates a message using OpenAI
 async fn ai_compose(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AiComposeRequest>,

@@ -93,7 +93,7 @@ pub struct ConversationSettings {
 pub struct StyleProfile {
     /// Contact ID or "__global__" for overall style
     pub contact_id: String,
-    /// Claude-generated style description
+    /// AI-generated style description
     pub profile_text: String,
     /// Example messages used for analysis (JSON array)
     pub sample_messages: Vec<String>,

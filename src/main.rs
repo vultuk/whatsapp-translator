@@ -71,8 +71,13 @@ async fn main() -> Result<()> {
         verbose: args.verbose,
     };
 
+    if args.using_legacy_api_key() {
+        warn!("ANTHROPIC_API_KEY is deprecated. Please use OPENAI_API_KEY instead.");
+    }
+
     // Initialize translation service if API key provided
-    let translator = args.claude_api_key.as_ref().map(|key| {
+    let translation_api_key = args.translation_api_key();
+    let translator = translation_api_key.as_ref().map(|key| {
         info!("Translation enabled (target: {})", args.default_language);
         Arc::new(TranslationService::new(
             key.clone(),

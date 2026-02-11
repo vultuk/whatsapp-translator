@@ -58,7 +58,7 @@ RUN chmod +x /app/wa-bridge /app/whatsapp-translator
 # WA_PORT - Web server port (default: 3000)
 # WA_HOST - Web server host (default: 0.0.0.0)
 # WA_DEFAULT_LANGUAGE - Default language (default: English)
-# ANTHROPIC_API_KEY - Claude API key for translation
+# OPENAI_API_KEY - OpenAI API key for translation and AI features
 
 ENV WA_DATA_DIR=/data \
     WA_BRIDGE_PATH=/app/wa-bridge \

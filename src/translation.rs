@@ -1,29 +1,25 @@
-//! Translation service using Claude API.
+//! Translation service using OpenAI API.
 //!
-//! Uses a cheap model (Haiku) for language detection and a better model (Sonnet) for translation.
+//! Uses a cheaper model for language detection/translation and a stronger model for AI compose.
 
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-/// Models to use for translation
-const DETECTION_MODEL: &str = "claude-haiku-4-5";
-const TRANSLATION_MODEL: &str = "claude-sonnet-4-5";
-const AI_COMPOSE_MODEL: &str = "claude-opus-4-5";
-const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Models to use for language and translation workflows
+const DETECTION_MODEL: &str = "gpt-4o-mini";
+const TRANSLATION_MODEL: &str = "gpt-4o-mini";
+const AI_COMPOSE_MODEL: &str = "gpt-4o";
+const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 
-/// Pricing per million tokens (as of 2025)
-/// Haiku 4.5: $1/M input, $5/M output
-/// Sonnet 4.5: $3/M input, $15/M output
-/// Opus 4.5: $5/M input, $25/M output
-const HAIKU_INPUT_COST_PER_M: f64 = 1.0;
-const HAIKU_OUTPUT_COST_PER_M: f64 = 5.0;
-const SONNET_INPUT_COST_PER_M: f64 = 3.0;
-const SONNET_OUTPUT_COST_PER_M: f64 = 15.0;
-const OPUS_INPUT_COST_PER_M: f64 = 5.0;
-const OPUS_OUTPUT_COST_PER_M: f64 = 25.0;
+/// Pricing per million tokens (USD, as of 2026)
+/// GPT-4o mini: $0.15/M input, $0.60/M output
+/// GPT-4o: $2.50/M input, $10.00/M output
+const MINI_INPUT_COST_PER_M: f64 = 0.15;
+const MINI_OUTPUT_COST_PER_M: f64 = 0.60;
+const GPT4O_INPUT_COST_PER_M: f64 = 2.50;
+const GPT4O_OUTPUT_COST_PER_M: f64 = 10.00;
 
 /// Translation service for processing messages
 pub struct TranslationService {
@@ -47,65 +43,65 @@ pub struct TranslationResult {
     pub usage: UsageInfo,
 }
 
-/// Claude API request structure
+/// OpenAI Chat Completions request structure
 #[derive(Serialize)]
-struct ClaudeRequest {
+struct OpenAiRequest {
     model: String,
     max_tokens: u32,
-    messages: Vec<ClaudeMessage>,
+    messages: Vec<OpenAiMessage>,
 }
 
 #[derive(Serialize)]
-struct ClaudeMessage {
+struct OpenAiMessage {
     role: String,
-    content: String,
-}
-
-/// Claude API request with vision support
-#[derive(Serialize)]
-struct ClaudeVisionRequest {
-    model: String,
-    max_tokens: u32,
-    messages: Vec<ClaudeVisionMessage>,
+    content: OpenAiMessageContent,
 }
 
 #[derive(Serialize)]
-struct ClaudeVisionMessage {
-    role: String,
-    content: Vec<VisionContentBlock>,
+#[serde(untagged)]
+enum OpenAiMessageContent {
+    Text(String),
+    Blocks(Vec<OpenAiContentBlock>),
 }
 
 #[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum VisionContentBlock {
+#[serde(tag = "type")]
+enum OpenAiContentBlock {
+    #[serde(rename = "text")]
     Text { text: String },
-    Image { source: ImageSource },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: OpenAiImageUrl },
 }
 
 #[derive(Serialize)]
-struct ImageSource {
-    #[serde(rename = "type")]
-    source_type: String,
-    media_type: String,
-    data: String,
+struct OpenAiImageUrl {
+    url: String,
 }
 
-/// Claude API response structure
+/// OpenAI Chat Completions response structure
 #[derive(Deserialize)]
-struct ClaudeResponse {
-    content: Vec<ContentBlock>,
-    usage: ApiUsage,
+struct OpenAiResponse {
+    choices: Vec<OpenAiChoice>,
+    #[serde(default)]
+    usage: OpenAiUsage,
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, Default)]
-struct ApiUsage {
-    input_tokens: u32,
-    output_tokens: u32,
+struct OpenAiUsage {
+    #[serde(default)]
+    prompt_tokens: u32,
+    #[serde(default)]
+    completion_tokens: u32,
 }
 
 #[derive(Deserialize)]
-struct ContentBlock {
-    text: Option<String>,
+struct OpenAiChoice {
+    message: OpenAiResponseMessage,
+}
+
+#[derive(Deserialize)]
+struct OpenAiResponseMessage {
+    content: Option<String>,
 }
 
 /// Token usage and cost information
@@ -146,25 +142,63 @@ impl TranslationService {
         self.api_key.clone()
     }
 
-    /// Calculate cost for Haiku model usage
-    fn calculate_haiku_cost(usage: &ApiUsage) -> f64 {
-        let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * HAIKU_INPUT_COST_PER_M;
-        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * HAIKU_OUTPUT_COST_PER_M;
+    /// Calculate cost for GPT-4o mini usage
+    fn calculate_mini_cost(usage: &OpenAiUsage) -> f64 {
+        let input_cost = (usage.prompt_tokens as f64 / 1_000_000.0) * MINI_INPUT_COST_PER_M;
+        let output_cost = (usage.completion_tokens as f64 / 1_000_000.0) * MINI_OUTPUT_COST_PER_M;
         input_cost + output_cost
     }
 
-    /// Calculate cost for Sonnet model usage
-    fn calculate_sonnet_cost(usage: &ApiUsage) -> f64 {
-        let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * SONNET_INPUT_COST_PER_M;
-        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * SONNET_OUTPUT_COST_PER_M;
+    /// Calculate cost for GPT-4o usage
+    fn calculate_gpt4o_cost(usage: &OpenAiUsage) -> f64 {
+        let input_cost = (usage.prompt_tokens as f64 / 1_000_000.0) * GPT4O_INPUT_COST_PER_M;
+        let output_cost = (usage.completion_tokens as f64 / 1_000_000.0) * GPT4O_OUTPUT_COST_PER_M;
         input_cost + output_cost
     }
 
-    /// Calculate cost for Opus model usage
-    fn calculate_opus_cost(usage: &ApiUsage) -> f64 {
-        let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * OPUS_INPUT_COST_PER_M;
-        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * OPUS_OUTPUT_COST_PER_M;
-        input_cost + output_cost
+    /// Build a text-only OpenAI request
+    fn text_request(model: &str, max_tokens: u32, prompt: String) -> OpenAiRequest {
+        OpenAiRequest {
+            model: model.to_string(),
+            max_tokens,
+            messages: vec![OpenAiMessage {
+                role: "user".to_string(),
+                content: OpenAiMessageContent::Text(prompt),
+            }],
+        }
+    }
+
+    /// Send an OpenAI chat completion request
+    async fn send_request(
+        &self,
+        request: &OpenAiRequest,
+        context: &'static str,
+    ) -> Result<reqwest::Response> {
+        self.client
+            .post(OPENAI_API_URL)
+            .bearer_auth(&self.api_key)
+            .header("content-type", "application/json")
+            .json(request)
+            .send()
+            .await
+            .context(context)
+    }
+
+    /// Extract first textual assistant response
+    fn extract_response_text(response: &OpenAiResponse) -> Option<String> {
+        response
+            .choices
+            .first()
+            .and_then(|c| c.message.content.clone())
+            .map(|content| content.trim().to_string())
+            .filter(|content| !content.is_empty())
+    }
+
+    /// Parse language detection JSON from model output
+    fn parse_language_detection(content: &str) -> Option<LanguageDetection> {
+        let start = content.find('{')?;
+        let end = content.rfind('}')?;
+        serde_json::from_str::<LanguageDetection>(&content[start..=end]).ok()
     }
 
     /// Detect if text is in the default language
@@ -181,25 +215,11 @@ Text: "{}""#,
             text.chars().take(500).collect::<String>()
         );
 
-        let request = ClaudeRequest {
-            model: DETECTION_MODEL.to_string(),
-            max_tokens: 100,
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
+        let request = Self::text_request(DETECTION_MODEL, 100, prompt);
 
         let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send language detection request")?;
+            .send_request(&request, "Failed to send language detection request")
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -208,16 +228,16 @@ Text: "{}""#,
             return Ok((true, self.default_language.clone(), UsageInfo::default()));
         }
 
-        let claude_response: ClaudeResponse = response
+        let openai_response: OpenAiResponse = response
             .json()
             .await
             .context("Failed to parse language detection response")?;
 
-        // Calculate usage info for Haiku
+        // Calculate usage info for GPT-4o mini
         let usage_info = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_haiku_cost(&claude_response.usage),
+            input_tokens: openai_response.usage.prompt_tokens,
+            output_tokens: openai_response.usage.completion_tokens,
+            cost_usd: Self::calculate_mini_cost(&openai_response.usage),
         };
 
         debug!(
@@ -225,24 +245,14 @@ Text: "{}""#,
             usage_info.input_tokens, usage_info.output_tokens, usage_info.cost_usd
         );
 
-        let content = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_default();
+        let content = Self::extract_response_text(&openai_response).unwrap_or_default();
 
-        // Parse JSON from response
-        if let Some(start) = content.find('{') {
-            if let Some(end) = content.rfind('}') {
-                let json_str = &content[start..=end];
-                if let Ok(detection) = serde_json::from_str::<LanguageDetection>(json_str) {
-                    debug!(
-                        "Detected language: {} (isEnglish: {})",
-                        detection.language, detection.is_english
-                    );
-                    return Ok((detection.is_english, detection.language, usage_info));
-                }
-            }
+        if let Some(detection) = Self::parse_language_detection(&content) {
+            debug!(
+                "Detected language: {} (isEnglish: {})",
+                detection.language, detection.is_english
+            );
+            return Ok((detection.is_english, detection.language, usage_info));
         }
 
         // Fallback: assume default language
@@ -276,25 +286,11 @@ Text to translate:
             source_language, target, style_instruction, text
         );
 
-        let request = ClaudeRequest {
-            model: TRANSLATION_MODEL.to_string(),
-            max_tokens: 2000,
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
+        let request = Self::text_request(TRANSLATION_MODEL, 2000, prompt);
 
         let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send translation request")?;
+            .send_request(&request, "Failed to send translation request")
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -303,16 +299,16 @@ Text to translate:
             return Ok((text.to_string(), UsageInfo::default()));
         }
 
-        let claude_response: ClaudeResponse = response
+        let openai_response: OpenAiResponse = response
             .json()
             .await
             .context("Failed to parse translation response")?;
 
-        // Calculate usage info for Sonnet
+        // Calculate usage info for GPT-4o mini
         let usage_info = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
+            input_tokens: openai_response.usage.prompt_tokens,
+            output_tokens: openai_response.usage.completion_tokens,
+            cost_usd: Self::calculate_mini_cost(&openai_response.usage),
         };
 
         debug!(
@@ -320,11 +316,8 @@ Text to translate:
             usage_info.input_tokens, usage_info.output_tokens, usage_info.cost_usd
         );
 
-        let translated = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_else(|| text.to_string());
+        let translated =
+            Self::extract_response_text(&openai_response).unwrap_or_else(|| text.to_string());
 
         Ok((translated.trim().to_string(), usage_info))
     }
@@ -371,25 +364,11 @@ Text to translate:
             target_language, text
         );
 
-        let request = ClaudeRequest {
-            model: TRANSLATION_MODEL.to_string(),
-            max_tokens: 2000,
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
+        let request = Self::text_request(TRANSLATION_MODEL, 2000, prompt);
 
         let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send translation request")?;
+            .send_request(&request, "Failed to send translation request")
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -398,16 +377,16 @@ Text to translate:
             return Ok((text.to_string(), total_usage));
         }
 
-        let claude_response: ClaudeResponse = response
+        let openai_response: OpenAiResponse = response
             .json()
             .await
             .context("Failed to parse translation response")?;
 
-        // Calculate usage info for Sonnet
+        // Calculate usage info for GPT-4o mini
         let translation_usage = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
+            input_tokens: openai_response.usage.prompt_tokens,
+            output_tokens: openai_response.usage.completion_tokens,
+            cost_usd: Self::calculate_mini_cost(&openai_response.usage),
         };
         total_usage = Self::combine_usage(&total_usage, &translation_usage);
 
@@ -418,11 +397,8 @@ Text to translate:
             translation_usage.cost_usd
         );
 
-        let translated = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_else(|| text.to_string());
+        let translated =
+            Self::extract_response_text(&openai_response).unwrap_or_else(|| text.to_string());
 
         Ok((translated.trim().to_string(), total_usage))
     }
@@ -470,25 +446,11 @@ Text to translate:
             target_language, text
         );
 
-        let request = ClaudeRequest {
-            model: TRANSLATION_MODEL.to_string(),
-            max_tokens: 2000,
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
+        let request = Self::text_request(TRANSLATION_MODEL, 2000, prompt);
 
         let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send translation request")?;
+            .send_request(&request, "Failed to send translation request")
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -497,15 +459,15 @@ Text to translate:
             return Ok((text.to_string(), total_usage));
         }
 
-        let claude_response: ClaudeResponse = response
+        let openai_response: OpenAiResponse = response
             .json()
             .await
             .context("Failed to parse translation response")?;
 
         let translation_usage = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
+            input_tokens: openai_response.usage.prompt_tokens,
+            output_tokens: openai_response.usage.completion_tokens,
+            cost_usd: Self::calculate_mini_cost(&openai_response.usage),
         };
         total_usage = Self::combine_usage(&total_usage, &translation_usage);
 
@@ -516,11 +478,8 @@ Text to translate:
             translation_usage.cost_usd
         );
 
-        let translated = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_else(|| text.to_string());
+        let translated =
+            Self::extract_response_text(&openai_response).unwrap_or_else(|| text.to_string());
 
         Ok((translated.trim().to_string(), total_usage))
     }
@@ -678,69 +637,41 @@ Respond with ONLY the message text, nothing else."#;
             format!("{}\n\nUser request: {}", system_prompt, prompt)
         };
 
-        // Build request - use vision API if image is provided
-        let response = if let Some((media_type, base64_data)) = reply_image {
-            // Vision request with image
+        // Build request - include image blocks when available
+        let request = if let Some((media_type, base64_data)) = reply_image {
             let mut content_blocks = vec![
-                VisionContentBlock::Image {
-                    source: ImageSource {
-                        source_type: "base64".to_string(),
-                        media_type: media_type.to_string(),
-                        data: base64_data.to_string(),
+                OpenAiContentBlock::ImageUrl {
+                    image_url: OpenAiImageUrl {
+                        url: format!("data:{};base64,{}", media_type, base64_data),
                     },
                 },
-                VisionContentBlock::Text { text: text_content },
+                OpenAiContentBlock::Text { text: text_content },
             ];
 
-            // If there's text context about the image, add it
             if let Some((sender, _)) = reply_context {
                 content_blocks.insert(
                     1,
-                    VisionContentBlock::Text {
+                    OpenAiContentBlock::Text {
                         text: format!("The above image was sent by {}.", sender),
                     },
                 );
             }
 
-            let request = ClaudeVisionRequest {
+            OpenAiRequest {
                 model: AI_COMPOSE_MODEL.to_string(),
                 max_tokens: 300,
-                messages: vec![ClaudeVisionMessage {
+                messages: vec![OpenAiMessage {
                     role: "user".to_string(),
-                    content: content_blocks,
+                    content: OpenAiMessageContent::Blocks(content_blocks),
                 }],
-            };
-
-            self.client
-                .post(ANTHROPIC_API_URL)
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", ANTHROPIC_VERSION)
-                .header("content-type", "application/json")
-                .json(&request)
-                .send()
-                .await
-                .context("Failed to send AI compose request")?
+            }
         } else {
-            // Text-only request
-            let request = ClaudeRequest {
-                model: AI_COMPOSE_MODEL.to_string(),
-                max_tokens: 300,
-                messages: vec![ClaudeMessage {
-                    role: "user".to_string(),
-                    content: text_content,
-                }],
-            };
-
-            self.client
-                .post(ANTHROPIC_API_URL)
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", ANTHROPIC_VERSION)
-                .header("content-type", "application/json")
-                .json(&request)
-                .send()
-                .await
-                .context("Failed to send AI compose request")?
+            Self::text_request(AI_COMPOSE_MODEL, 300, text_content)
         };
+
+        let response = self
+            .send_request(&request, "Failed to send AI compose request")
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -748,24 +679,18 @@ Respond with ONLY the message text, nothing else."#;
             anyhow::bail!("AI compose API error: {} - {}", status, body);
         }
 
-        let claude_response: ClaudeResponse = response
+        let openai_response: OpenAiResponse = response
             .json()
             .await
             .context("Failed to parse AI compose response")?;
 
         let usage_info = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_opus_cost(&claude_response.usage),
+            input_tokens: openai_response.usage.prompt_tokens,
+            output_tokens: openai_response.usage.completion_tokens,
+            cost_usd: Self::calculate_gpt4o_cost(&openai_response.usage),
         };
 
-        let composed = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        let composed = Self::extract_response_text(&openai_response).unwrap_or_default();
 
         // Final safety check - truncate if somehow still too long
         let composed = if composed.len() > 500 {
@@ -890,26 +815,12 @@ Write my reply (keep it short and casual like my examples):"#,
             recent_conversation.len()
         );
 
-        // Call Claude - use lower max_tokens to encourage shorter replies
-        let request = ClaudeRequest {
-            model: AI_COMPOSE_MODEL.to_string(),
-            max_tokens: 150,
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
+        // Call OpenAI - use lower max_tokens to encourage shorter replies
+        let request = Self::text_request(AI_COMPOSE_MODEL, 150, prompt);
 
         let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send styled reply request")?;
+            .send_request(&request, "Failed to send styled reply request")
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -918,24 +829,18 @@ Write my reply (keep it short and casual like my examples):"#,
             anyhow::bail!("Styled reply API error: {} - {}", status, body);
         }
 
-        let claude_response: ClaudeResponse = response
+        let openai_response: OpenAiResponse = response
             .json()
             .await
             .context("Failed to parse styled reply response")?;
 
         let usage_info = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_opus_cost(&claude_response.usage),
+            input_tokens: openai_response.usage.prompt_tokens,
+            output_tokens: openai_response.usage.completion_tokens,
+            cost_usd: Self::calculate_gpt4o_cost(&openai_response.usage),
         };
 
-        let reply = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        let reply = Self::extract_response_text(&openai_response).unwrap_or_default();
 
         // Safety check - truncate if too long
         let reply = if reply.len() > 500 {
@@ -1030,5 +935,84 @@ Write my reply (keep it short and casual like my examples):"#,
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_language_detection_reads_embedded_json() {
+        let content = "Language analysis: {\"language\":\"Spanish\",\"isEnglish\":false}";
+        let detection =
+            TranslationService::parse_language_detection(content).expect("detection should parse");
+
+        assert_eq!(detection.language, "Spanish");
+        assert!(!detection.is_english);
+    }
+
+    #[test]
+    fn parse_language_detection_returns_none_for_invalid_content() {
+        let content = "No JSON here";
+        assert!(TranslationService::parse_language_detection(content).is_none());
+    }
+
+    #[test]
+    fn extract_response_text_returns_first_choice() {
+        let response = OpenAiResponse {
+            choices: vec![OpenAiChoice {
+                message: OpenAiResponseMessage {
+                    content: Some("Bonjour".to_string()),
+                },
+            }],
+            usage: OpenAiUsage {
+                prompt_tokens: 12,
+                completion_tokens: 5,
+            },
+        };
+
+        let text = TranslationService::extract_response_text(&response);
+        assert_eq!(text.as_deref(), Some("Bonjour"));
+    }
+
+    #[test]
+    fn extract_response_text_returns_none_without_choices() {
+        let response = OpenAiResponse {
+            choices: vec![],
+            usage: OpenAiUsage::default(),
+        };
+
+        assert!(TranslationService::extract_response_text(&response).is_none());
+    }
+
+    #[test]
+    fn request_serializes_vision_payload_in_openai_shape() {
+        let request = OpenAiRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: 64,
+            messages: vec![OpenAiMessage {
+                role: "user".to_string(),
+                content: OpenAiMessageContent::Blocks(vec![
+                    OpenAiContentBlock::ImageUrl {
+                        image_url: OpenAiImageUrl {
+                            url: "data:image/png;base64,abc123".to_string(),
+                        },
+                    },
+                    OpenAiContentBlock::Text {
+                        text: "Describe this image".to_string(),
+                    },
+                ]),
+            }],
+        };
+
+        let json = serde_json::to_value(request).expect("request should serialize");
+
+        assert_eq!(json["messages"][0]["content"][0]["type"], "image_url");
+        assert_eq!(
+            json["messages"][0]["content"][0]["image_url"]["url"],
+            "data:image/png;base64,abc123"
+        );
+        assert_eq!(json["messages"][0]["content"][1]["type"], "text");
     }
 }
