@@ -45,16 +45,24 @@ pub struct Args {
     pub openai_api_key: Option<String>,
 
     /// OpenAI model for language detection and style analysis
-    #[arg(long, env = "WA_OPENAI_DETECTION_MODEL")]
-    pub openai_detection_model: Option<String>,
+    #[arg(
+        long,
+        env = "WA_OPENAI_DETECTION_MODEL",
+        default_value = "gpt-5.4-nano"
+    )]
+    pub openai_detection_model: String,
 
     /// OpenAI model for translation
-    #[arg(long, env = "WA_OPENAI_TRANSLATION_MODEL")]
-    pub openai_translation_model: Option<String>,
+    #[arg(
+        long,
+        env = "WA_OPENAI_TRANSLATION_MODEL",
+        default_value = "gpt-5.4-mini"
+    )]
+    pub openai_translation_model: String,
 
     /// OpenAI model for AI compose and styled replies
-    #[arg(long, env = "WA_OPENAI_HIGH_END_MODEL")]
-    pub openai_high_end_model: Option<String>,
+    #[arg(long, env = "WA_OPENAI_HIGH_END_MODEL", default_value = "gpt-5.4")]
+    pub openai_high_end_model: String,
 
     /// Default language for messages (messages in this language won't be translated)
     #[arg(long, default_value = "English", env = "WA_DEFAULT_LANGUAGE")]
@@ -74,8 +82,5 @@ impl Args {
     /// Check if translation is enabled
     pub fn translation_enabled(&self) -> bool {
         self.openai_api_key.is_some()
-            && self.openai_detection_model.is_some()
-            && self.openai_translation_model.is_some()
-            && self.openai_high_end_model.is_some()
     }
 }
