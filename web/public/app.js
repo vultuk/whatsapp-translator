@@ -8,6 +8,8 @@ class WhatsAppClient {
     this.currentContactId = null;
     this.initialMessageLimit = 30;
     this.messageCacheLimit = 200;
+    this.notificationsReadyAt = 0;
+    this.notificationPermissionRequested = false;
     this.messages = new Map();
     this.contactsRenderTimer = null;
     this.messagesHasMore = new Map(); // contactId -> boolean (whether more messages exist)
@@ -74,6 +76,7 @@ class WhatsAppClient {
     this.bindEvents();
     this.updateInputPlaceholder();
     this.setupVisualViewport();
+    this.setupNotificationPermissionRequest();
   }
 
   // Fix for iOS/iPad keyboard suggestion bar causing layout issues
@@ -429,6 +432,7 @@ class WhatsAppClient {
   // Handle connected state
   handleConnected(data) {
     this.connected = true;
+    this.notificationsReadyAt = Date.now() + 10000;
     
     document.getElementById('qr-overlay').classList.add('hidden');
     document.getElementById('connecting-overlay').classList.add('hidden');
@@ -500,6 +504,8 @@ class WhatsAppClient {
     
     // Update contact in list
     this.updateContactInList(message);
+
+    this.maybeShowNotification(message);
     
     // If this contact is currently selected, show the message
     if (this.currentContactId === message.contactId) {
@@ -519,6 +525,131 @@ class WhatsAppClient {
     if (!message.isFromMe && !message.is_from_me) {
       this.clearTypingState(message.contactId);
     }
+  }
+
+  notificationsSupported() {
+    return typeof window !== 'undefined' && 'Notification' in window;
+  }
+
+  setupNotificationPermissionRequest() {
+    if (!this.notificationsSupported()) return;
+    if (Notification.permission !== 'default') return;
+    if (this.notificationPermissionRequested) return;
+
+    const requestPermission = async () => {
+      if (this.notificationPermissionRequested) return;
+      this.notificationPermissionRequested = true;
+
+      try {
+        await Notification.requestPermission();
+      } catch (err) {
+        console.error('Failed to request notification permission:', err);
+      } finally {
+        window.removeEventListener('click', requestPermission, true);
+        window.removeEventListener('keydown', requestPermission, true);
+        window.removeEventListener('touchstart', requestPermission, true);
+      }
+    };
+
+    window.addEventListener('click', requestPermission, true);
+    window.addEventListener('keydown', requestPermission, true);
+    window.addEventListener('touchstart', requestPermission, true);
+  }
+
+  shouldNotifyForMessage(message) {
+    if (!this.notificationsSupported()) return false;
+    if (Notification.permission !== 'granted') return false;
+    if (Date.now() < this.notificationsReadyAt) return false;
+    if (message.isFromMe || message.is_from_me) return false;
+
+    const contentType = message.content?.type || message.contentType || message.content_type;
+    if (!contentType || ['reaction', 'protocol', 'unknown'].includes(contentType)) {
+      return false;
+    }
+
+    const isCurrentThreadVisible =
+      this.currentContactId === message.contactId &&
+      document.visibilityState === 'visible' &&
+      document.hasFocus();
+
+    return !isCurrentThreadVisible;
+  }
+
+  getThreadDisplayName(message) {
+    const contact = this.contacts.find(c => c.id === message.contactId);
+    return (
+      contact?.name ||
+      message.contactName ||
+      contact?.phone ||
+      message.contactPhone ||
+      message.senderName ||
+      message.senderPhone ||
+      'WhatsApp'
+    );
+  }
+
+  getNotificationText(message) {
+    const translated = message.translatedText || message.translated_text;
+    if (translated) {
+      return translated;
+    }
+
+    const content = message.content || {};
+    switch (content.type) {
+      case 'text':
+        return content.body || content.text || '';
+      case 'image':
+        return content.caption || '[ Image ]';
+      case 'video':
+        return content.caption || '[ Video ]';
+      case 'audio':
+        return content.isVoiceNote || content.is_voice_note ? '[ Voice note ]' : '[ Audio ]';
+      case 'document':
+        return content.fileName || content.file_name || '[ Document ]';
+      case 'sticker':
+        return '[ Sticker ]';
+      case 'location':
+        return '[ Location ]';
+      case 'contact':
+        return content.name || '[ Contact ]';
+      case 'poll':
+        return content.question || '[ Poll ]';
+      default:
+        return this.getMessagePreview(message).replace(/^You:\s*/, '');
+    }
+  }
+
+  maybeShowNotification(message) {
+    if (!this.shouldNotifyForMessage(message)) {
+      return;
+    }
+
+    const title = this.getThreadDisplayName(message);
+    let body = this.getNotificationText(message);
+
+    const isGroup = (message.chatType || message.chat_type) === 'group';
+    const sender = message.senderName || message.sender_name || message.senderPhone || message.sender_phone;
+    if (isGroup && sender) {
+      body = `${sender}: ${body}`;
+    }
+
+    if (!body) {
+      body = 'New message';
+    }
+
+    const notification = new Notification(title, {
+      body,
+      tag: `chat:${message.contactId}`,
+      renotify: false,
+    });
+
+    notification.onclick = () => {
+      window.focus();
+      if (message.contactId) {
+        this.selectContact(message.contactId);
+      }
+      notification.close();
+    };
   }
 
   // Handle incoming reaction message
