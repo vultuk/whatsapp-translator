@@ -476,6 +476,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let serve_dir = ServeDir::new(&state.web_dir);
 
     Router::new()
+        .route("/", get(serve_index))
+        .route("/index.html", get(serve_index))
         // OAuth 2.0 routes for MCP authentication
         .route(
             "/.well-known/oauth-authorization-server",
@@ -681,6 +683,18 @@ async fn get_status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> 
         phone: state.phone.read().await.clone(),
         name: state.name.read().await.clone(),
     })
+}
+
+async fn serve_index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let index_path = state.web_dir.join("index.html");
+
+    match tokio::fs::read_to_string(&index_path).await {
+        Ok(contents) => Html(contents).into_response(),
+        Err(err) => {
+            error!("Failed to read index.html from {:?}: {}", index_path, err);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load web UI").into_response()
+        }
+    }
 }
 
 async fn get_contacts(State(state): State<Arc<AppState>>) -> impl IntoResponse {
