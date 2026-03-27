@@ -4,9 +4,9 @@ Small WhatsApp Web client with a local web UI, message history, translation, AI 
 
 ## Deploy
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new)
-
 Railway is the easiest hosted option for this app because it supports long-running services and a persistent volume for WhatsApp session data.
+
+[Deploy from GitHub on Railway](https://railway.com/new)
 
 ## Features
 
@@ -90,7 +90,10 @@ http://localhost:3000
 
 ## Deploy on Railway
 
-1. Click the Railway button above.
+This repo is not a published Railway template yet, so Railway cannot one-click clone and provision it directly from the README button.
+
+Use the link above, then:
+
 2. Choose `Deploy from GitHub repo` and select this repository.
 3. Attach a persistent volume mounted at `/data`.
 4. Set:
@@ -100,7 +103,7 @@ http://localhost:3000
 
 The repo includes [railway.toml](/Users/vultuk/Development/Personal/whatsapp-translator/railway.toml) for Dockerfile-based deploys and `/api/status` health checks.
 
-If you later publish this repo as a Railway template, replace the button link with the template URL for a true one-click deploy.
+If you later publish this repo as a Railway template, the README can use Railway's official `Deploy on Railway` button with the template URL for a real one-click deploy.
 
 ## Run With Docker
 
