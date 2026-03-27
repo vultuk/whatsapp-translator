@@ -138,8 +138,15 @@ impl MessageStore {
         )
         .with_context(|| format!("unable to open database file: {:?}", db_path))?;
 
-        // Enable WAL mode for better performance
-        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        // Tune SQLite for a read-heavy chat workload.
+        conn.execute_batch(
+            r#"
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=NORMAL;
+            PRAGMA temp_store=MEMORY;
+            PRAGMA cache_size=-20000;
+            "#,
+        )?;
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -187,6 +194,7 @@ impl MessageStore {
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_messages_contact_id ON messages(contact_id);
             CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_desc ON messages(contact_id, timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_contacts_last_message ON contacts(last_message_time DESC);
 
             -- AI usage tracking
@@ -274,6 +282,7 @@ impl MessageStore {
         // Add translation columns if they don't exist (migration for existing databases)
         self.migrate_add_translation_columns(&conn)?;
         self.migrate_add_cached_usage_column(&conn)?;
+        self.migrate_add_query_indexes(&conn)?;
 
         // Fix contact types based on JID suffix
         self.migrate_fix_contact_types(&conn)?;
@@ -289,6 +298,26 @@ impl MessageStore {
 
         // Add conversation settings columns (language_override, translation_style)
         self.migrate_add_conversation_settings_columns(&conn)?;
+
+        Ok(())
+    }
+
+    /// Add composite indexes for the most common read paths on existing databases
+    fn migrate_add_query_indexes(&self, conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_desc
+                ON messages(contact_id, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_contacts_pinned_sort
+                ON contacts(pinned_at, last_message_time DESC);
+            CREATE INDEX IF NOT EXISTS idx_usage_contact_timestamp
+                ON translation_usage(contact_id, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_contact_language
+                ON messages(contact_id, is_from_me, source_language);
+            "#,
+        )?;
+
+        conn.execute_batch("PRAGMA optimize;")?;
 
         Ok(())
     }
