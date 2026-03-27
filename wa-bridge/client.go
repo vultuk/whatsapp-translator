@@ -805,9 +805,22 @@ func (c *Client) GetStore() *store.Device {
 	return c.client.Store
 }
 
-// SendTextMessage sends a text message to the specified JID
-// If replyToID is provided, the message will be a reply to that message
-func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string, replyToID string, replyToSender string) (string, int64, error) {
+func buildQuotedMessage(replyToText string) *waE2E.Message {
+	if replyToText == "" {
+		return nil
+	}
+
+	textCopy := replyToText
+	return &waE2E.Message{
+		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+			Text: &textCopy,
+		},
+	}
+}
+
+// SendTextMessage sends a text message to the specified JID.
+// If replyToID is provided, the message will be a reply to that message.
+func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string, replyToID string, replyToSender string, replyToText string) (string, int64, error) {
 	// Parse the JID
 	jid, err := types.ParseJID(jidStr)
 	if err != nil {
@@ -821,6 +834,10 @@ func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string
 		// Create context info for the reply
 		contextInfo := &waE2E.ContextInfo{
 			StanzaID: &replyToID,
+			RemoteJID: func() *string {
+				remote := jid.String()
+				return &remote
+			}(),
 		}
 
 		// Set the participant (sender of the quoted message)
@@ -832,6 +849,10 @@ func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string
 				participant = replyToSender + "@s.whatsapp.net"
 			}
 			contextInfo.Participant = &participant
+		}
+
+		if quoted := buildQuotedMessage(replyToText); quoted != nil {
+			contextInfo.QuotedMessage = quoted
 		}
 
 		// Use ExtendedTextMessage for replies (required for ContextInfo)
@@ -857,9 +878,9 @@ func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string
 	return resp.ID, resp.Timestamp.Unix(), nil
 }
 
-// SendImageMessage sends an image message to the specified JID
-// If replyToID is provided, the message will be a reply to that message
-func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB64 string, mimeType string, caption string, replyToID string, replyToSender string) (string, int64, error) {
+// SendImageMessage sends an image message to the specified JID.
+// If replyToID is provided, the message will be a reply to that message.
+func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB64 string, mimeType string, caption string, replyToID string, replyToSender string, replyToText string) (string, int64, error) {
 	// Parse the JID
 	jid, err := types.ParseJID(jidStr)
 	if err != nil {
@@ -902,6 +923,10 @@ func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB
 	if replyToID != "" {
 		contextInfo := &waE2E.ContextInfo{
 			StanzaID: &replyToID,
+			RemoteJID: func() *string {
+				remote := jid.String()
+				return &remote
+			}(),
 		}
 		// Convert phone number to full JID if needed
 		if replyToSender != "" {
@@ -910,6 +935,9 @@ func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB
 				participant = replyToSender + "@s.whatsapp.net"
 			}
 			contextInfo.Participant = &participant
+		}
+		if quoted := buildQuotedMessage(replyToText); quoted != nil {
+			contextInfo.QuotedMessage = quoted
 		}
 		imageMsg.ContextInfo = contextInfo
 	}

@@ -143,7 +143,8 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			return
 		}
 
-		messageID, timestamp, err := client.SendTextMessage(ctx, cmd.To, cmd.Text, cmd.ReplyTo, cmd.ReplyToSender)
+		SendEvent(NewLogEvent("info", fmt.Sprintf("Processing send command to %s", cmd.To)))
+		messageID, timestamp, err := client.SendTextMessage(ctx, cmd.To, cmd.Text, cmd.ReplyTo, cmd.ReplyToSender, cmd.ReplyToText)
 		if err != nil {
 			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, err.Error()))
 		} else {
@@ -156,12 +157,14 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			return
 		}
 
-		url, id, err := client.GetProfilePicture(ctx, cmd.To)
-		if err != nil {
-			SendEvent(NewProfilePictureEvent(cmd.RequestID, cmd.To, "", "", err.Error()))
-		} else {
-			SendEvent(NewProfilePictureEvent(cmd.RequestID, cmd.To, url, id, ""))
-		}
+		go func(cmd Command) {
+			url, id, err := client.GetProfilePicture(ctx, cmd.To)
+			if err != nil {
+				SendEvent(NewProfilePictureEvent(cmd.RequestID, cmd.To, "", "", err.Error()))
+			} else {
+				SendEvent(NewProfilePictureEvent(cmd.RequestID, cmd.To, url, id, ""))
+			}
+		}(cmd)
 
 	case "send_image":
 		if cmd.To == "" || cmd.MediaData == "" {
@@ -169,7 +172,7 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			return
 		}
 
-		messageID, timestamp, err := client.SendImageMessage(ctx, cmd.To, cmd.MediaData, cmd.MimeType, cmd.Caption, cmd.ReplyTo, cmd.ReplyToSender)
+		messageID, timestamp, err := client.SendImageMessage(ctx, cmd.To, cmd.MediaData, cmd.MimeType, cmd.Caption, cmd.ReplyTo, cmd.ReplyToSender, cmd.ReplyToText)
 		if err != nil {
 			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, err.Error()))
 		} else {

@@ -308,6 +308,7 @@ impl WhatsAppMcpServer {
             text: text_to_send.clone(),
             reply_to: None,
             reply_to_sender: None,
+            reply_to_text: None,
         };
 
         command_tx.send(cmd).await.map_err(

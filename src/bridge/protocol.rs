@@ -260,6 +260,9 @@ pub enum BridgeCommand {
         /// Sender JID of the replied message (optional)
         #[serde(skip_serializing_if = "Option::is_none")]
         reply_to_sender: Option<String>,
+        /// Text preview of the replied message (optional)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reply_to_text: Option<String>,
     },
 
     /// Send an image message
@@ -278,6 +281,9 @@ pub enum BridgeCommand {
         /// Sender JID of the replied message (optional)
         #[serde(skip_serializing_if = "Option::is_none")]
         reply_to_sender: Option<String>,
+        /// Text preview of the replied message (optional)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reply_to_text: Option<String>,
     },
 
     /// Send a reaction to a message

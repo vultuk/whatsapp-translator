@@ -4,6 +4,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -264,7 +265,12 @@ func NewMarkAsReadEvent(chatID string) MarkAsReadEvent {
 }
 
 // SendEvent marshals an event to JSON and prints it to stdout
+var sendEventMu sync.Mutex
+
 func SendEvent(event interface{}) {
+	sendEventMu.Lock()
+	defer sendEventMu.Unlock()
+
 	data, err := json.Marshal(event)
 	if err != nil {
 		// If we can't marshal, send an error event the hard way

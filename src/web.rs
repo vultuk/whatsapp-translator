@@ -993,6 +993,7 @@ async fn send_message(
         text: text_to_send.clone(),
         reply_to: req.reply_to.clone(),
         reply_to_sender: req.reply_to_sender.clone(),
+        reply_to_text: req.reply_to_text.clone(),
     };
 
     if let Err(e) = state.send_bridge_command(cmd).await {
@@ -1145,6 +1146,7 @@ async fn send_image(
         caption: req.caption.clone(),
         reply_to: req.reply_to.clone(),
         reply_to_sender: req.reply_to_sender.clone(),
+        reply_to_text: req.reply_to_text.clone(),
     };
 
     if let Err(e) = state.send_bridge_command(cmd).await {
