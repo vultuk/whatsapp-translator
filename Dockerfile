@@ -66,7 +66,6 @@ RUN chmod +x /app/wa-bridge /app/whatsapp-translator
 ENV WA_DATA_DIR=/data \
     WA_BRIDGE_PATH=/app/wa-bridge \
     WA_WEB=true \
-    WA_PORT=3000 \
     WA_HOST=0.0.0.0
 
 # Expose web server port
@@ -74,7 +73,7 @@ EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${WA_PORT}/api/status || exit 1
+    CMD port="${WA_PORT:-${PORT:-3000}}"; curl -f "http://localhost:${port}/api/status" || exit 1
 
 # Note: For persistent data (WhatsApp session), mount a volume to /data
 # On Railway, use Railway Volumes: https://docs.railway.com/reference/volumes
