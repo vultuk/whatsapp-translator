@@ -1004,7 +1004,7 @@ func (c *Client) MarkRead(ctx context.Context, chatJIDStr string, messageID stri
 	}
 
 	readAt := time.Unix(timestamp, 0)
-	if err := c.client.MarkRead([]types.MessageID{types.MessageID(messageID)}, readAt, chatJID, senderJID); err != nil {
+	if err := c.client.MarkRead(ctx, []types.MessageID{types.MessageID(messageID)}, readAt, chatJID, senderJID); err != nil {
 		return fmt.Errorf("failed to mark read: %w", err)
 	}
 
