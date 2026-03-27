@@ -272,7 +272,7 @@ func (c *Client) handleMessage(evt *events.Message) {
 	}
 
 	// Set sender info
-	msg.From = c.buildContact(evt.Info.Sender)
+	msg.From = c.buildContact(evt.Info.Sender, evt.Info.SenderAlt)
 
 	// Set chat info
 	msg.Chat = c.buildChat(evt.Info)
@@ -353,7 +353,7 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 				}
 
 				// Build contact from JID
-				msg.From = c.buildContact(senderJID)
+				msg.From = c.buildContact(senderJID, types.JID{})
 
 				// If we have a push name from the message, use it as the contact name
 				// This is more reliable for history messages where contact store might not have the info
@@ -529,8 +529,28 @@ func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageC
 	}
 }
 
+func normalizeAddress(primary types.JID, alternate types.JID) types.JID {
+	if primary.Server == "lid" && alternate.User != "" {
+		return alternate
+	}
+	return primary
+}
+
+func normalizePrivateChatJID(info types.MessageInfo) types.JID {
+	if info.IsGroup || strings.HasSuffix(info.Chat.Server, "broadcast") || info.Chat.Server == "status@broadcast" {
+		return info.Chat
+	}
+
+	if info.IsFromMe {
+		return normalizeAddress(info.Chat, info.RecipientAlt)
+	}
+
+	return normalizeAddress(info.Chat, info.SenderAlt)
+}
+
 // buildContact creates a Contact from a JID
-func (c *Client) buildContact(jid types.JID) Contact {
+func (c *Client) buildContact(jid types.JID, alternate types.JID) Contact {
+	jid = normalizeAddress(jid, alternate)
 	contact := Contact{
 		JID: jid.String(),
 	}
@@ -558,8 +578,9 @@ func (c *Client) buildContact(jid types.JID) Contact {
 
 // buildChat creates a Chat from message info
 func (c *Client) buildChat(info types.MessageInfo) Chat {
+	chatJID := normalizePrivateChatJID(info)
 	chat := Chat{
-		JID: info.Chat.String(),
+		JID: chatJID.String(),
 	}
 
 	if info.IsGroup {
@@ -578,7 +599,7 @@ func (c *Client) buildChat(info types.MessageInfo) Chat {
 	} else {
 		chat.Type = "private"
 		// For private chats, get the contact name from the chat JID (the other person)
-		contactInfo, err := c.client.Store.Contacts.GetContact(c.ctx, info.Chat)
+		contactInfo, err := c.client.Store.Contacts.GetContact(c.ctx, chatJID)
 		if err == nil && contactInfo.Found {
 			if contactInfo.FullName != "" {
 				chat.Name = contactInfo.FullName

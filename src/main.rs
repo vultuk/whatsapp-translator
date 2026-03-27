@@ -364,12 +364,26 @@ async fn process_message(
     translator: Option<&Arc<TranslationService>>,
     store: Option<&storage::MessageStore>,
 ) -> StoredMessage {
-    let contact_id = msg.chat.jid().to_string();
     let chat_type = match &msg.chat {
         bridge::Chat::Private { .. } => "private",
         bridge::Chat::Group { .. } => "group",
         bridge::Chat::Broadcast { .. } => "broadcast",
         bridge::Chat::Status { .. } => "status",
+    };
+
+    let canonical_private_phone = if chat_type == "private" {
+        phone_from_chat_jid(msg.chat.jid())
+    } else {
+        None
+    };
+
+    let contact_id = if chat_type == "private" {
+        canonical_private_phone
+            .as_ref()
+            .map(|phone| format!("{}@s.whatsapp.net", phone))
+            .unwrap_or_else(|| msg.chat.jid().to_string())
+    } else {
+        msg.chat.jid().to_string()
     };
 
     // Get conversation settings if we have a store
@@ -435,12 +449,14 @@ async fn process_message(
     // For groups: this is the group name
     let (contact_name, contact_phone) = match &msg.chat {
         bridge::Chat::Private { name, jid } => {
-            let phone = jid.split('@').next().map(|s| s.to_string());
+            let phone = canonical_private_phone
+                .clone()
+                .or_else(|| phone_from_chat_jid(jid));
             (name.clone(), phone)
         }
         bridge::Chat::Group { name, .. } => (name.clone(), None),
         bridge::Chat::Broadcast { jid } => {
-            let phone = jid.split('@').next().map(|s| s.to_string());
+            let phone = phone_from_chat_jid(jid);
             (
                 Some(format!(
                     "Broadcast: {}",
@@ -470,6 +486,14 @@ async fn process_message(
         translated_text,
         source_language,
         is_translated,
+    }
+}
+
+fn phone_from_chat_jid(jid: &str) -> Option<String> {
+    let (user, server) = jid.split_once('@')?;
+    match server {
+        "s.whatsapp.net" | "c.us" | "broadcast" => Some(user.to_string()),
+        _ => None,
     }
 }
 
