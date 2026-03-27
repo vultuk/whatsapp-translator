@@ -10,6 +10,7 @@ class WhatsAppClient {
     this.messageCacheLimit = 200;
     this.notificationsReadyAt = 0;
     this.notificationPermissionRequested = false;
+    this.notificationPromptEl = null;
     this.messages = new Map();
     this.contactsRenderTimer = null;
     this.messagesHasMore = new Map(); // contactId -> boolean (whether more messages exist)
@@ -76,6 +77,7 @@ class WhatsAppClient {
     this.bindEvents();
     this.updateInputPlaceholder();
     this.setupVisualViewport();
+    this.updateNotificationPrompt();
     this.setupNotificationPermissionRequest();
   }
 
@@ -531,7 +533,70 @@ class WhatsAppClient {
   }
 
   notificationsSupported() {
-    return typeof window !== 'undefined' && 'Notification' in window;
+    return (
+      typeof window !== 'undefined' &&
+      'Notification' in window &&
+      window.isSecureContext
+    );
+  }
+
+  updateNotificationPrompt() {
+    const host = document.getElementById('contacts-panel');
+    if (!host) return;
+
+    if (!this.notificationPromptEl) {
+      this.notificationPromptEl = document.createElement('div');
+      this.notificationPromptEl.id = 'notification-prompt';
+      this.notificationPromptEl.className = 'notification-prompt hidden';
+      host.insertBefore(this.notificationPromptEl, document.getElementById('contacts-list'));
+    }
+
+    if (!this.notificationsSupported()) {
+      this.notificationPromptEl.innerHTML = `
+        <span>Browser notifications are not available in this context.</span>
+      `;
+      this.notificationPromptEl.classList.remove('hidden');
+      return;
+    }
+
+    if (Notification.permission === 'default') {
+      this.notificationPromptEl.innerHTML = `
+        <span>Enable browser notifications for new translated messages.</span>
+        <button id="notification-enable-button" type="button">Enable</button>
+      `;
+      this.notificationPromptEl.classList.remove('hidden');
+      this.notificationPromptEl
+        .querySelector('#notification-enable-button')
+        ?.addEventListener('click', () => this.requestNotificationPermission());
+      return;
+    }
+
+    if (Notification.permission === 'denied') {
+      this.notificationPromptEl.innerHTML = `
+        <span>Notifications are blocked in your browser settings.</span>
+      `;
+      this.notificationPromptEl.classList.remove('hidden');
+      return;
+    }
+
+    this.notificationPromptEl.classList.add('hidden');
+  }
+
+  async requestNotificationPermission() {
+    if (!this.notificationsSupported()) {
+      this.updateNotificationPrompt();
+      return;
+    }
+
+    this.notificationPermissionRequested = true;
+
+    try {
+      await Notification.requestPermission();
+    } catch (err) {
+      console.error('Failed to request notification permission:', err);
+    } finally {
+      this.updateNotificationPrompt();
+    }
   }
 
   setupNotificationPermissionRequest() {
@@ -548,6 +613,7 @@ class WhatsAppClient {
       } catch (err) {
         console.error('Failed to request notification permission:', err);
       } finally {
+        this.updateNotificationPrompt();
         window.removeEventListener('click', requestPermission, true);
         window.removeEventListener('keydown', requestPermission, true);
         window.removeEventListener('touchstart', requestPermission, true);

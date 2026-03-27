@@ -139,6 +139,29 @@ body {
   min-height: 64px;
 }
 
+.notification-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba(0, 168, 132, 0.12);
+  border-bottom: 1px solid rgba(0, 168, 132, 0.2);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.notification-prompt button {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: var(--accent-color);
+  color: #041a15;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .user-info {
   display: flex;
   align-items: center;
