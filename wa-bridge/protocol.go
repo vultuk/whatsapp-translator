@@ -164,6 +164,7 @@ type Command struct {
 	MessageID string `json:"message_id,omitempty"` // Target message ID to react to
 	Emoji     string `json:"emoji,omitempty"`      // Reaction emoji (empty to remove)
 	SenderJID string `json:"sender_jid,omitempty"` // Sender of the target message
+	Timestamp int64  `json:"timestamp,omitempty"`  // Original message timestamp (unix seconds)
 	// For reply context (used by send and send_image)
 	ReplyTo       string `json:"reply_to,omitempty"`        // Message ID to reply to
 	ReplyToSender string `json:"reply_to_sender,omitempty"` // JID of the sender of the replied message

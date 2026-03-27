@@ -187,6 +187,15 @@ pub struct SendReactionResponse {
     pub success: bool,
 }
 
+/// Mark-read request
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkReadRequest {
+    pub message_id: Option<String>,
+    pub timestamp: Option<i64>,
+    pub sender_jid: Option<String>,
+}
+
 /// Translate message request
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -711,16 +720,34 @@ async fn get_contacts(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 async fn mark_contact_as_read(
     State(state): State<Arc<AppState>>,
     Path(contact_id): Path<String>,
+    Json(req): Json<MarkReadRequest>,
 ) -> impl IntoResponse {
     let contact_id = urlencoding::decode(&contact_id)
         .map(|s| s.into_owned())
         .unwrap_or(contact_id);
 
     match state.store.mark_as_read(&contact_id) {
-        Ok(()) => Json(serde_json::json!({
-            "success": true
-        }))
-        .into_response(),
+        Ok(()) => {
+            if let (Some(message_id), Some(timestamp)) = (req.message_id, req.timestamp) {
+                if let Some(tx) = state.command_tx.read().await.as_ref() {
+                    let cmd = BridgeCommand::MarkRead {
+                        to: contact_id.clone(),
+                        message_id,
+                        timestamp,
+                        sender_jid: req.sender_jid,
+                    };
+
+                    if let Err(e) = tx.send(cmd).await {
+                        warn!("Failed to send mark-read command to bridge: {}", e);
+                    }
+                }
+            }
+
+            Json(serde_json::json!({
+                "success": true
+            }))
+            .into_response()
+        }
         Err(e) => {
             error!("Failed to mark contact as read: {}", e);
             (

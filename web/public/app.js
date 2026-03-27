@@ -510,7 +510,7 @@ class WhatsAppClient {
     // If this contact is currently selected, show the message
     if (this.currentContactId === message.contactId) {
       if (!message.isFromMe && !message.is_from_me) {
-        this.markConversationRead(message.contactId);
+        this.markConversationRead(message.contactId, message);
       }
       this.appendMessage(message);
       this.scrollToBottom();
@@ -1097,13 +1097,35 @@ class WhatsAppClient {
     return senderPhone.includes('@') ? senderPhone : `${senderPhone}@s.whatsapp.net`;
   }
 
-  async markConversationRead(contactId) {
+  getLatestIncomingMessage(contactId) {
+    const messages = this.messages.get(contactId) || [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (!message.isFromMe && !message.is_from_me) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  async markConversationRead(contactId, message = null) {
     if (!contactId) return;
 
     try {
+      const targetMessage = message || this.getLatestIncomingMessage(contactId);
+      const body = targetMessage ? {
+        messageId: targetMessage.id,
+        timestamp: Math.floor((targetMessage.timestamp || 0) / 1000),
+        senderJid: targetMessage.senderJid || this.getMessageSenderJid(targetMessage) || null
+      } : {};
+
       await fetch(`/api/contacts/${encodeURIComponent(contactId)}/read`, {
         method: 'POST',
-        headers: this.getAuthHeaders()
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders()
+        },
+        body: JSON.stringify(body)
       });
     } catch (err) {
       console.error('Failed to mark conversation as read:', err);
@@ -1174,6 +1196,8 @@ class WhatsAppClient {
         this.showMessagesLoading();
         await this.loadMessages(contactId);
       }
+
+      this.markConversationRead(contactId);
 
       this.scheduleConversationUsageFetch(contactId);
       

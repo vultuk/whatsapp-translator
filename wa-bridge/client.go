@@ -986,6 +986,31 @@ func (c *Client) SendReaction(ctx context.Context, chatJIDStr string, targetMess
 	return resp.ID, resp.Timestamp.Unix(), nil
 }
 
+// MarkRead marks a message as read in WhatsApp.
+func (c *Client) MarkRead(ctx context.Context, chatJIDStr string, messageID string, timestamp int64, senderJIDStr string) error {
+	chatJID, err := types.ParseJID(chatJIDStr)
+	if err != nil {
+		return fmt.Errorf("invalid chat JID: %w", err)
+	}
+
+	var senderJID types.JID
+	if senderJIDStr != "" {
+		senderJID, err = types.ParseJID(senderJIDStr)
+		if err != nil {
+			return fmt.Errorf("invalid sender JID: %w", err)
+		}
+	} else {
+		senderJID = chatJID
+	}
+
+	readAt := time.Unix(timestamp, 0)
+	if err := c.client.MarkRead([]types.MessageID{types.MessageID(messageID)}, readAt, chatJID, senderJID); err != nil {
+		return fmt.Errorf("failed to mark read: %w", err)
+	}
+
+	return nil
+}
+
 // GetProfilePicture fetches the profile picture URL for a JID
 func (c *Client) GetProfilePicture(ctx context.Context, jidStr string) (string, string, error) {
 	// Parse the JID

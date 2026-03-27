@@ -192,6 +192,16 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			SendEvent(NewSendResultEvent(cmd.RequestID, true, messageID, timestamp, ""))
 		}
 
+	case "mark_read":
+		if cmd.To == "" || cmd.MessageID == "" || cmd.Timestamp == 0 {
+			SendEvent(NewLogEvent("warn", "missing required fields for mark_read command"))
+			return
+		}
+
+		if err := client.MarkRead(ctx, cmd.To, cmd.MessageID, cmd.Timestamp, cmd.SenderJID); err != nil {
+			SendEvent(NewLogEvent("warn", fmt.Sprintf("failed to mark chat as read: %v", err)))
+		}
+
 	default:
 		SendEvent(NewLogEvent("warn", fmt.Sprintf("Unknown command type: %s", cmd.Type)))
 	}
