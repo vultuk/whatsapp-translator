@@ -76,7 +76,17 @@ pub struct Args {
 impl Args {
     /// Parse command line arguments
     pub fn parse_args() -> Self {
-        Self::parse()
+        let mut args = Self::parse();
+
+        if std::env::var_os("WA_PORT").is_none() {
+            if let Ok(port) = std::env::var("PORT") {
+                if let Ok(parsed_port) = port.parse::<u16>() {
+                    args.port = parsed_port;
+                }
+            }
+        }
+
+        args
     }
 
     /// Check if translation is enabled
