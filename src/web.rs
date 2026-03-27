@@ -499,6 +499,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // API routes
         .route("/api/status", get(get_status))
         .route("/api/contacts", get(get_contacts))
+        .route("/api/contacts/:contact_id/read", post(mark_contact_as_read))
         .route("/api/contacts/:contact_id/pin", post(toggle_pin))
         .route(
             "/api/contacts/:contact_id/settings",
@@ -703,6 +704,33 @@ async fn get_contacts(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         Err(e) => {
             error!("Failed to get contacts: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get contacts").into_response()
+        }
+    }
+}
+
+async fn mark_contact_as_read(
+    State(state): State<Arc<AppState>>,
+    Path(contact_id): Path<String>,
+) -> impl IntoResponse {
+    let contact_id = urlencoding::decode(&contact_id)
+        .map(|s| s.into_owned())
+        .unwrap_or(contact_id);
+
+    match state.store.mark_as_read(&contact_id) {
+        Ok(()) => Json(serde_json::json!({
+            "success": true
+        }))
+        .into_response(),
+        Err(e) => {
+            error!("Failed to mark contact as read: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": "Failed to mark conversation as read"
+                })),
+            )
+                .into_response()
         }
     }
 }

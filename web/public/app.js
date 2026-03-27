@@ -509,6 +509,9 @@ class WhatsAppClient {
     
     // If this contact is currently selected, show the message
     if (this.currentContactId === message.contactId) {
+      if (!message.isFromMe && !message.is_from_me) {
+        this.markConversationRead(message.contactId);
+      }
       this.appendMessage(message);
       this.scrollToBottom();
     }
@@ -639,6 +642,8 @@ class WhatsAppClient {
 
     const notification = new Notification(title, {
       body,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
       tag: `chat:${message.contactId}`,
       renotify: false,
     });
@@ -1092,6 +1097,19 @@ class WhatsAppClient {
     return senderPhone.includes('@') ? senderPhone : `${senderPhone}@s.whatsapp.net`;
   }
 
+  async markConversationRead(contactId) {
+    if (!contactId) return;
+
+    try {
+      await fetch(`/api/contacts/${encodeURIComponent(contactId)}/read`, {
+        method: 'POST',
+        headers: this.getAuthHeaders()
+      });
+    } catch (err) {
+      console.error('Failed to mark conversation as read:', err);
+    }
+  }
+
   // Select a contact
   async selectContact(contactId) {
     try {
@@ -1105,6 +1123,7 @@ class WhatsAppClient {
       if (contact) {
         contact.unreadCount = 0;
       }
+      this.markConversationRead(contactId);
       
       // Update UI
       document.getElementById('no-chat-selected').classList.add('hidden');

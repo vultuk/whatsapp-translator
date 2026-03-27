@@ -301,6 +301,19 @@ pub enum BridgeCommand {
         emoji: String,
     },
 
+    /// Mark a message as read in WhatsApp
+    MarkRead {
+        /// Chat JID
+        to: String,
+        /// Message ID to mark as read
+        message_id: String,
+        /// Original message timestamp (unix seconds)
+        timestamp: i64,
+        /// Sender JID of the message (required for groups)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sender_jid: Option<String>,
+    },
+
     /// Get profile picture for a JID
     GetProfilePicture { request_id: i32, to: String },
 
