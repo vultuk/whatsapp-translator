@@ -71,14 +71,28 @@ async fn main() -> Result<()> {
         verbose: args.verbose,
     };
 
-    // Initialize translation service if API key provided
-    let translator = args.claude_api_key.as_ref().map(|key| {
-        info!("Translation enabled (target: {})", args.default_language);
-        Arc::new(TranslationService::new(
-            key.clone(),
+    // Initialize OpenAI-backed translation service if fully configured
+    let translator = if args.translation_enabled() {
+        info!("AI features enabled (target: {})", args.default_language);
+        Some(Arc::new(TranslationService::new(
+            args.openai_api_key.clone().unwrap(),
+            args.openai_detection_model.clone().unwrap(),
+            args.openai_translation_model.clone().unwrap(),
+            args.openai_high_end_model.clone().unwrap(),
             args.default_language.clone(),
-        ))
-    });
+        )))
+    } else {
+        if args.openai_api_key.is_some()
+            || args.openai_detection_model.is_some()
+            || args.openai_translation_model.is_some()
+            || args.openai_high_end_model.is_some()
+        {
+            warn!(
+                "OpenAI AI features are partially configured; set OPENAI_API_KEY, WA_OPENAI_DETECTION_MODEL, WA_OPENAI_TRANSLATION_MODEL, and WA_OPENAI_HIGH_END_MODEL to enable them"
+            );
+        }
+        None
+    };
 
     if args.web {
         // Web server mode

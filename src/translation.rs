@@ -1,265 +1,329 @@
-//! Translation service using Claude API.
-//!
-//! Uses a cheap model (Haiku) for language detection and a better model (Sonnet) for translation.
+//! Translation service using the OpenAI Responses API.
 
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
-/// Models to use for translation
-const DETECTION_MODEL: &str = "claude-haiku-4-5";
-const TRANSLATION_MODEL: &str = "claude-sonnet-4-5";
-const AI_COMPOSE_MODEL: &str = "claude-opus-4-5";
-const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_VERSION: &str = "2023-06-01";
+const OPENAI_API_URL: &str = "https://api.openai.com/v1/responses";
 
-/// Pricing per million tokens (as of 2025)
-/// Haiku 4.5: $1/M input, $5/M output
-/// Sonnet 4.5: $3/M input, $15/M output
-/// Opus 4.5: $5/M input, $25/M output
-const HAIKU_INPUT_COST_PER_M: f64 = 1.0;
-const HAIKU_OUTPUT_COST_PER_M: f64 = 5.0;
-const SONNET_INPUT_COST_PER_M: f64 = 3.0;
-const SONNET_OUTPUT_COST_PER_M: f64 = 15.0;
-const OPUS_INPUT_COST_PER_M: f64 = 5.0;
-const OPUS_OUTPUT_COST_PER_M: f64 = 25.0;
+const GPT_5_4_INPUT_COST_PER_M: f64 = 2.50;
+const GPT_5_4_CACHED_INPUT_COST_PER_M: f64 = 0.25;
+const GPT_5_4_OUTPUT_COST_PER_M: f64 = 15.00;
 
-/// Translation service for processing messages
+const GPT_5_4_MINI_INPUT_COST_PER_M: f64 = 0.75;
+const GPT_5_4_MINI_CACHED_INPUT_COST_PER_M: f64 = 0.075;
+const GPT_5_4_MINI_OUTPUT_COST_PER_M: f64 = 4.50;
+
+const GPT_5_4_NANO_INPUT_COST_PER_M: f64 = 0.10;
+const GPT_5_4_NANO_CACHED_INPUT_COST_PER_M: f64 = 0.01;
+const GPT_5_4_NANO_OUTPUT_COST_PER_M: f64 = 0.625;
+
+#[derive(Clone, Copy)]
+struct PricingTier {
+    input_cost_per_m: f64,
+    cached_input_cost_per_m: f64,
+    output_cost_per_m: f64,
+}
+
+const HIGH_END_PRICING: PricingTier = PricingTier {
+    input_cost_per_m: GPT_5_4_INPUT_COST_PER_M,
+    cached_input_cost_per_m: GPT_5_4_CACHED_INPUT_COST_PER_M,
+    output_cost_per_m: GPT_5_4_OUTPUT_COST_PER_M,
+};
+
+const TRANSLATION_PRICING: PricingTier = PricingTier {
+    input_cost_per_m: GPT_5_4_MINI_INPUT_COST_PER_M,
+    cached_input_cost_per_m: GPT_5_4_MINI_CACHED_INPUT_COST_PER_M,
+    output_cost_per_m: GPT_5_4_MINI_OUTPUT_COST_PER_M,
+};
+
+const CHEAP_PRICING: PricingTier = PricingTier {
+    input_cost_per_m: GPT_5_4_NANO_INPUT_COST_PER_M,
+    cached_input_cost_per_m: GPT_5_4_NANO_CACHED_INPUT_COST_PER_M,
+    output_cost_per_m: GPT_5_4_NANO_OUTPUT_COST_PER_M,
+};
+
+/// Translation service for processing messages and AI replies.
 pub struct TranslationService {
     client: Client,
     api_key: String,
+    detection_model: String,
+    translation_model: String,
+    high_end_model: String,
     default_language: String,
 }
 
-/// Result of processing a message for translation
+/// Result of processing a message for translation.
 #[derive(Debug, Clone)]
 pub struct TranslationResult {
-    /// Whether translation was needed
     pub needs_translation: bool,
-    /// Original text
     pub original_text: String,
-    /// Translated text (None if no translation needed)
     pub translated_text: Option<String>,
-    /// Detected source language
     pub source_language: String,
-    /// Token usage and cost for this translation
     pub usage: UsageInfo,
 }
 
-/// Claude API request structure
-#[derive(Serialize)]
-struct ClaudeRequest {
-    model: String,
-    max_tokens: u32,
-    messages: Vec<ClaudeMessage>,
+/// Token usage and cost information.
+#[derive(Debug, Clone, Default)]
+pub struct UsageInfo {
+    pub input_tokens: u32,
+    pub cached_input_tokens: u32,
+    pub output_tokens: u32,
+    pub cost_usd: f64,
 }
 
-#[derive(Serialize)]
-struct ClaudeMessage {
-    role: String,
-    content: String,
-}
-
-/// Claude API request with vision support
-#[derive(Serialize)]
-struct ClaudeVisionRequest {
-    model: String,
-    max_tokens: u32,
-    messages: Vec<ClaudeVisionMessage>,
-}
-
-#[derive(Serialize)]
-struct ClaudeVisionMessage {
-    role: String,
-    content: Vec<VisionContentBlock>,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum VisionContentBlock {
-    Text { text: String },
-    Image { source: ImageSource },
-}
-
-#[derive(Serialize)]
-struct ImageSource {
-    #[serde(rename = "type")]
-    source_type: String,
-    media_type: String,
-    data: String,
-}
-
-/// Claude API response structure
 #[derive(Deserialize)]
-struct ClaudeResponse {
-    content: Vec<ContentBlock>,
-    usage: ApiUsage,
+struct OpenAiResponse {
+    #[serde(default)]
+    output: Vec<OpenAiOutputItem>,
+    usage: Option<ApiUsage>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiOutputItem {
+    #[serde(rename = "type")]
+    item_type: String,
+    content: Option<Vec<OpenAiContentPart>>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiContentPart {
+    #[serde(rename = "type")]
+    part_type: String,
+    text: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, Default)]
 struct ApiUsage {
+    #[serde(default)]
     input_tokens: u32,
+    #[serde(default)]
     output_tokens: u32,
+    input_tokens_details: Option<InputTokensDetails>,
 }
 
-#[derive(Deserialize)]
-struct ContentBlock {
-    text: Option<String>,
+#[derive(Deserialize, Debug, Clone, Copy, Default)]
+struct InputTokensDetails {
+    #[serde(default)]
+    cached_tokens: u32,
 }
 
-/// Token usage and cost information
-#[derive(Debug, Clone, Default)]
-pub struct UsageInfo {
-    /// Total input tokens used
-    pub input_tokens: u32,
-    /// Total output tokens used
-    pub output_tokens: u32,
-    /// Total cost in USD
-    pub cost_usd: f64,
-}
-
-/// Language detection result
 #[derive(Deserialize)]
 struct LanguageDetection {
     language: String,
-    #[serde(rename = "isEnglish")]
-    is_english: bool,
+    #[serde(rename = "isTargetLanguage", alias = "is_target_language")]
+    is_target_language: bool,
 }
 
 impl TranslationService {
-    /// Create a new translation service
-    pub fn new(api_key: String, default_language: String) -> Self {
+    pub fn new(
+        api_key: String,
+        detection_model: String,
+        translation_model: String,
+        high_end_model: String,
+        default_language: String,
+    ) -> Self {
         info!(
-            "Translation service initialized (target: {})",
+            "Translation service initialized with OpenAI models (target: {})",
             default_language
         );
         Self {
             client: Client::new(),
             api_key,
+            detection_model,
+            translation_model,
+            high_end_model,
             default_language,
         }
     }
 
-    /// Get the API key (for creating other services like StyleAnalyzer)
     pub fn get_api_key(&self) -> String {
         self.api_key.clone()
     }
 
-    /// Calculate cost for Haiku model usage
-    fn calculate_haiku_cost(usage: &ApiUsage) -> f64 {
-        let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * HAIKU_INPUT_COST_PER_M;
-        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * HAIKU_OUTPUT_COST_PER_M;
-        input_cost + output_cost
+    pub fn get_detection_model(&self) -> String {
+        self.detection_model.clone()
     }
 
-    /// Calculate cost for Sonnet model usage
-    fn calculate_sonnet_cost(usage: &ApiUsage) -> f64 {
-        let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * SONNET_INPUT_COST_PER_M;
-        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * SONNET_OUTPUT_COST_PER_M;
-        input_cost + output_cost
-    }
+    fn usage_from_api(usage: Option<ApiUsage>, pricing: PricingTier) -> UsageInfo {
+        let usage = usage.unwrap_or_default();
+        let cached_input_tokens = usage
+            .input_tokens_details
+            .unwrap_or_default()
+            .cached_tokens
+            .min(usage.input_tokens);
+        let uncached_input_tokens = usage.input_tokens.saturating_sub(cached_input_tokens);
 
-    /// Calculate cost for Opus model usage
-    fn calculate_opus_cost(usage: &ApiUsage) -> f64 {
-        let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * OPUS_INPUT_COST_PER_M;
-        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * OPUS_OUTPUT_COST_PER_M;
-        input_cost + output_cost
-    }
+        let input_cost = (uncached_input_tokens as f64 / 1_000_000.0) * pricing.input_cost_per_m;
+        let cached_input_cost =
+            (cached_input_tokens as f64 / 1_000_000.0) * pricing.cached_input_cost_per_m;
+        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * pricing.output_cost_per_m;
 
-    /// Detect if text is in the default language
-    async fn detect_language(&self, text: &str) -> Result<(bool, String, UsageInfo)> {
-        // Skip very short messages
-        if text.trim().len() < 5 {
-            return Ok((true, self.default_language.clone(), UsageInfo::default()));
+        UsageInfo {
+            input_tokens: usage.input_tokens,
+            cached_input_tokens,
+            output_tokens: usage.output_tokens,
+            cost_usd: input_cost + cached_input_cost + output_cost,
         }
+    }
 
-        let prompt = format!(
-            r#"Detect the language of this text and respond with ONLY a JSON object in this exact format: {{"language": "Language Name", "isEnglish": true/false}}
+    fn combine_usage(a: &UsageInfo, b: &UsageInfo) -> UsageInfo {
+        UsageInfo {
+            input_tokens: a.input_tokens + b.input_tokens,
+            cached_input_tokens: a.cached_input_tokens + b.cached_input_tokens,
+            output_tokens: a.output_tokens + b.output_tokens,
+            cost_usd: a.cost_usd + b.cost_usd,
+        }
+    }
 
-Text: "{}""#,
-            text.chars().take(500).collect::<String>()
-        );
+    fn extract_output_text(response: &OpenAiResponse) -> String {
+        response
+            .output
+            .iter()
+            .filter(|item| item.item_type == "message")
+            .filter_map(|item| item.content.as_ref())
+            .flat_map(|content| content.iter())
+            .filter(|part| part.part_type == "output_text")
+            .filter_map(|part| part.text.as_deref())
+            .collect::<Vec<_>>()
+            .join("")
+    }
 
-        let request = ClaudeRequest {
-            model: DETECTION_MODEL.to_string(),
-            max_tokens: 100,
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
+    fn extract_json_object(text: &str) -> Option<&str> {
+        let start = text.find('{')?;
+        let end = text.rfind('}')?;
+        Some(&text[start..=end])
+    }
 
+    fn truncate_for_display(text: String, max_len: usize) -> String {
+        if text.chars().count() > max_len {
+            let truncated: String = text.chars().take(max_len.saturating_sub(3)).collect();
+            format!("{}...", truncated)
+        } else {
+            text
+        }
+    }
+
+    fn build_data_url(media_type: &str, base64_data: &str) -> String {
+        if base64_data.starts_with("data:") {
+            base64_data.to_string()
+        } else {
+            format!("data:{};base64,{}", media_type, base64_data)
+        }
+    }
+
+    async fn send_request(&self, body: Value) -> Result<OpenAiResponse> {
         let response = self
             .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
+            .post(OPENAI_API_URL)
+            .bearer_auth(&self.api_key)
             .header("content-type", "application/json")
-            .json(&request)
+            .json(&body)
             .send()
             .await
-            .context("Failed to send language detection request")?;
+            .context("Failed to send OpenAI Responses API request")?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            warn!("Language detection API error: {} - {}", status, body);
-            return Ok((true, self.default_language.clone(), UsageInfo::default()));
+            anyhow::bail!("OpenAI Responses API error: {} - {}", status, body);
         }
 
-        let claude_response: ClaudeResponse = response
+        response
             .json()
             .await
-            .context("Failed to parse language detection response")?;
+            .context("Failed to parse OpenAI response")
+    }
 
-        // Calculate usage info for Haiku
-        let usage_info = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_haiku_cost(&claude_response.usage),
-        };
+    async fn request_text_output(
+        &self,
+        model: &str,
+        pricing: PricingTier,
+        instructions: &str,
+        input: Value,
+        max_output_tokens: u32,
+        reasoning_effort: Option<&str>,
+        verbosity: Option<&str>,
+        json_mode: bool,
+    ) -> Result<(String, UsageInfo)> {
+        let mut body = json!({
+            "model": model,
+            "instructions": instructions,
+            "input": input,
+            "max_output_tokens": max_output_tokens,
+        });
+
+        if let Some(effort) = reasoning_effort {
+            body["reasoning"] = json!({ "effort": effort });
+        }
+
+        let mut text_settings = serde_json::Map::new();
+        if let Some(level) = verbosity {
+            text_settings.insert("verbosity".to_string(), json!(level));
+        }
+        if json_mode {
+            text_settings.insert("format".to_string(), json!({ "type": "json_object" }));
+        }
+        if !text_settings.is_empty() {
+            body["text"] = Value::Object(text_settings);
+        }
+
+        let response = self.send_request(body).await?;
+        let usage = Self::usage_from_api(response.usage, pricing);
+        Ok((Self::extract_output_text(&response), usage))
+    }
+
+    async fn detect_language(
+        &self,
+        text: &str,
+        target_language: &str,
+    ) -> Result<(bool, String, UsageInfo)> {
+        if text.trim().len() < 5 {
+            return Ok((true, target_language.to_string(), UsageInfo::default()));
+        }
+
+        let instructions = format!(
+            "Return JSON only. Detect the language of the provided text and respond with a JSON object in this exact shape: {{\"language\":\"Language Name\",\"isTargetLanguage\":true}}. Set isTargetLanguage to true only if the text is already written primarily in {}.",
+            target_language
+        );
+        let input_text = format!("Text: {}", text.chars().take(500).collect::<String>());
+
+        let (content, usage) = self
+            .request_text_output(
+                &self.detection_model,
+                CHEAP_PRICING,
+                &instructions,
+                json!(input_text),
+                120,
+                Some("none"),
+                None,
+                true,
+            )
+            .await?;
 
         debug!(
-            "Language detection usage: {} in, {} out, ${:.6}",
-            usage_info.input_tokens, usage_info.output_tokens, usage_info.cost_usd
+            "Language detection usage: {} in ({} cached), {} out, ${:.6}",
+            usage.input_tokens, usage.cached_input_tokens, usage.output_tokens, usage.cost_usd
         );
 
-        let content = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_default();
-
-        // Parse JSON from response
-        if let Some(start) = content.find('{') {
-            if let Some(end) = content.rfind('}') {
-                let json_str = &content[start..=end];
-                if let Ok(detection) = serde_json::from_str::<LanguageDetection>(json_str) {
-                    debug!(
-                        "Detected language: {} (isEnglish: {})",
-                        detection.language, detection.is_english
-                    );
-                    return Ok((detection.is_english, detection.language, usage_info));
-                }
+        if let Some(json_str) = Self::extract_json_object(&content) {
+            if let Ok(detection) = serde_json::from_str::<LanguageDetection>(json_str) {
+                return Ok((detection.is_target_language, detection.language, usage));
             }
         }
 
-        // Fallback: assume default language
-        Ok((true, self.default_language.clone(), usage_info))
+        Ok((true, target_language.to_string(), usage))
     }
 
-    /// Translate text to a target language with optional style
     async fn translate(
         &self,
         text: &str,
         source_language: &str,
-        target_language: Option<&str>,
+        target_language: &str,
         translation_style: Option<&str>,
     ) -> Result<(String, UsageInfo)> {
-        let target = target_language.unwrap_or(&self.default_language);
-
-        // Build style instruction if provided
         let style_instruction = match translation_style {
             Some(style) if !style.trim().is_empty() => {
                 format!("\nUse a {} tone in the translation.", style.trim())
@@ -267,71 +331,32 @@ Text: "{}""#,
             _ => String::new(),
         };
 
-        let prompt = format!(
-            r#"Translate the following text (from {}) to {}.{}
-Respond with ONLY the translated text, nothing else. Preserve the original formatting and meaning as closely as possible.
-
-Text to translate:
-{}"#,
-            source_language, target, style_instruction, text
+        let instructions = format!(
+            "Translate the user's text from {} to {}.{} Respond with only the translated text. Preserve formatting, tone, and meaning as closely as possible.",
+            source_language, target_language, style_instruction
         );
 
-        let request = ClaudeRequest {
-            model: TRANSLATION_MODEL.to_string(),
-            max_tokens: 2000,
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
-
-        let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send translation request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!("Translation API error: {} - {}", status, body);
-            return Ok((text.to_string(), UsageInfo::default()));
-        }
-
-        let claude_response: ClaudeResponse = response
-            .json()
-            .await
-            .context("Failed to parse translation response")?;
-
-        // Calculate usage info for Sonnet
-        let usage_info = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
-        };
+        let (translated, usage) = self
+            .request_text_output(
+                &self.translation_model,
+                TRANSLATION_PRICING,
+                &instructions,
+                json!(text),
+                2000,
+                Some("none"),
+                Some("low"),
+                false,
+            )
+            .await?;
 
         debug!(
-            "Translation usage: {} in, {} out, ${:.6}",
-            usage_info.input_tokens, usage_info.output_tokens, usage_info.cost_usd
+            "Translation usage: {} in ({} cached), {} out, ${:.6}",
+            usage.input_tokens, usage.cached_input_tokens, usage.output_tokens, usage.cost_usd
         );
 
-        let translated = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_else(|| text.to_string());
-
-        Ok((translated.trim().to_string(), usage_info))
+        Ok((translated.trim().to_string(), usage))
     }
 
-    /// Translate text to a specific target language.
-    /// Used for translating outgoing messages to match the conversation language.
-    /// Returns (translated_text, usage_info)
     pub async fn translate_to(
         &self,
         text: &str,
@@ -339,17 +364,15 @@ Text to translate:
     ) -> Result<(String, UsageInfo)> {
         let mut total_usage = UsageInfo::default();
 
-        // Skip if target is the default language (likely English)
-        if target_language.to_lowercase() == self.default_language.to_lowercase() {
+        if target_language.eq_ignore_ascii_case(&self.default_language) {
             return Ok((text.to_string(), total_usage));
         }
 
-        // First detect if the text is already in the target language
-        let (_is_target_lang, detected_lang, detection_usage) = self.detect_language(text).await?;
+        let (is_target_lang, detected_lang, detection_usage) =
+            self.detect_language(text, target_language).await?;
         total_usage = Self::combine_usage(&total_usage, &detection_usage);
 
-        // If the text appears to be in the target language already, skip translation
-        if detected_lang.to_lowercase() == target_language.to_lowercase() {
+        if is_target_lang || detected_lang.eq_ignore_ascii_case(target_language) {
             debug!(
                 "Text already in target language ({}), skipping translation",
                 target_language
@@ -362,74 +385,22 @@ Text to translate:
             detected_lang, target_language
         );
 
-        let prompt = format!(
-            r#"Translate the following text to {}.
-Respond with ONLY the translated text, nothing else. Preserve the original formatting, tone, and meaning as closely as possible.
-
-Text to translate:
-{}"#,
-            target_language, text
-        );
-
-        let request = ClaudeRequest {
-            model: TRANSLATION_MODEL.to_string(),
-            max_tokens: 2000,
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
-
-        let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send translation request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!("Translation API error: {} - {}", status, body);
-            return Ok((text.to_string(), total_usage));
-        }
-
-        let claude_response: ClaudeResponse = response
-            .json()
-            .await
-            .context("Failed to parse translation response")?;
-
-        // Calculate usage info for Sonnet
-        let translation_usage = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
-        };
+        let (translated, translation_usage) = self
+            .translate(text, &detected_lang, target_language, None)
+            .await?;
         total_usage = Self::combine_usage(&total_usage, &translation_usage);
 
         debug!(
-            "Outgoing translation usage: {} in, {} out, ${:.6}",
+            "Outgoing translation usage: {} in ({} cached), {} out, ${:.6}",
             translation_usage.input_tokens,
+            translation_usage.cached_input_tokens,
             translation_usage.output_tokens,
             translation_usage.cost_usd
         );
 
-        let translated = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_else(|| text.to_string());
-
-        Ok((translated.trim().to_string(), total_usage))
+        Ok((translated, total_usage))
     }
 
-    /// Translate outgoing text to a specific target language.
-    /// When force=true, always translates even if text appears to already be in target language.
-    /// Used for translating outgoing messages when user has set a language override.
     pub async fn translate_outgoing(
         &self,
         text: &str,
@@ -438,17 +409,15 @@ Text to translate:
     ) -> Result<(String, UsageInfo)> {
         let mut total_usage = UsageInfo::default();
 
-        // If not forcing, skip if target is the default language (likely English)
-        if !force && target_language.to_lowercase() == self.default_language.to_lowercase() {
+        if !force && target_language.eq_ignore_ascii_case(&self.default_language) {
             return Ok((text.to_string(), total_usage));
         }
 
-        // Detect the source language
-        let (_is_target_lang, detected_lang, detection_usage) = self.detect_language(text).await?;
+        let (is_target_lang, detected_lang, detection_usage) =
+            self.detect_language(text, target_language).await?;
         total_usage = Self::combine_usage(&total_usage, &detection_usage);
 
-        // If not forcing, skip if text is already in target language
-        if !force && detected_lang.to_lowercase() == target_language.to_lowercase() {
+        if !force && (is_target_lang || detected_lang.eq_ignore_ascii_case(target_language)) {
             debug!(
                 "Text already in target language ({}), skipping translation",
                 target_language
@@ -461,85 +430,22 @@ Text to translate:
             detected_lang, target_language, force
         );
 
-        let prompt = format!(
-            r#"Translate the following text to {}.
-Respond with ONLY the translated text, nothing else. Preserve the original formatting, tone, and meaning as closely as possible.
-
-Text to translate:
-{}"#,
-            target_language, text
-        );
-
-        let request = ClaudeRequest {
-            model: TRANSLATION_MODEL.to_string(),
-            max_tokens: 2000,
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
-
-        let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send translation request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!("Translation API error: {} - {}", status, body);
-            return Ok((text.to_string(), total_usage));
-        }
-
-        let claude_response: ClaudeResponse = response
-            .json()
-            .await
-            .context("Failed to parse translation response")?;
-
-        let translation_usage = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_sonnet_cost(&claude_response.usage),
-        };
+        let (translated, translation_usage) = self
+            .translate(text, &detected_lang, target_language, None)
+            .await?;
         total_usage = Self::combine_usage(&total_usage, &translation_usage);
 
         debug!(
-            "Outgoing translation usage: {} in, {} out, ${:.6}",
+            "Outgoing translation usage: {} in ({} cached), {} out, ${:.6}",
             translation_usage.input_tokens,
+            translation_usage.cached_input_tokens,
             translation_usage.output_tokens,
             translation_usage.cost_usd
         );
 
-        let translated = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_else(|| text.to_string());
-
-        Ok((translated.trim().to_string(), total_usage))
+        Ok((translated, total_usage))
     }
 
-    /// Combine two usage infos
-    fn combine_usage(a: &UsageInfo, b: &UsageInfo) -> UsageInfo {
-        UsageInfo {
-            input_tokens: a.input_tokens + b.input_tokens,
-            output_tokens: a.output_tokens + b.output_tokens,
-            cost_usd: a.cost_usd + b.cost_usd,
-        }
-    }
-
-    /// Process a message - detect language and translate if needed
-    ///
-    /// Parameters:
-    /// - text: The text to translate
-    /// - language_override: Optional target language override (e.g., "Spanish")
-    /// - translation_style: Optional style instruction (e.g., "formal", "casual")
     pub async fn process_text(
         &self,
         text: &str,
@@ -547,8 +453,6 @@ Text to translate:
         translation_style: Option<&str>,
     ) -> TranslationResult {
         let mut total_usage = UsageInfo::default();
-
-        // Determine the target language
         let target_language = language_override.unwrap_or(&self.default_language);
 
         if text.trim().is_empty() {
@@ -561,18 +465,9 @@ Text to translate:
             };
         }
 
-        // Step 1: Detect language
         let (is_target_lang, detected_language, detection_usage) =
-            match self.detect_language(text).await {
-                Ok((is_english, lang, usage)) => {
-                    // Check if detected language matches the target language
-                    let is_target = if language_override.is_some() {
-                        lang.to_lowercase() == target_language.to_lowercase()
-                    } else {
-                        is_english
-                    };
-                    (is_target, lang, usage)
-                }
+            match self.detect_language(text, target_language).await {
+                Ok(result) => result,
                 Err(e) => {
                     warn!("Language detection failed: {}", e);
                     (true, target_language.to_string(), UsageInfo::default())
@@ -590,7 +485,6 @@ Text to translate:
             };
         }
 
-        // Step 2: Translate
         info!(
             "Translating message from {} to {}{}...",
             detected_language,
@@ -599,13 +493,9 @@ Text to translate:
                 .map(|s| format!(" (style: {})", s))
                 .unwrap_or_default()
         );
+
         let (translated, translation_usage) = match self
-            .translate(
-                text,
-                &detected_language,
-                language_override,
-                translation_style,
-            )
+            .translate(text, &detected_language, target_language, translation_style)
             .await
         {
             Ok(result) => result,
@@ -617,8 +507,11 @@ Text to translate:
         total_usage = Self::combine_usage(&total_usage, &translation_usage);
 
         info!(
-            "Translation complete - total usage: {} in, {} out, ${:.6}",
-            total_usage.input_tokens, total_usage.output_tokens, total_usage.cost_usd
+            "Translation complete - total usage: {} in ({} cached), {} out, ${:.6}",
+            total_usage.input_tokens,
+            total_usage.cached_input_tokens,
+            total_usage.output_tokens,
+            total_usage.cost_usd
         );
 
         TranslationResult {
@@ -630,20 +523,12 @@ Text to translate:
         }
     }
 
-    /// Compose an AI-generated message based on user's prompt
-    /// Returns the composed message and usage info
-    ///
-    /// Parameters:
-    /// - prompt: The user's instruction for what message to compose
-    /// - reply_context: Optional (sender_name, message_text) of the message being replied to
-    /// - reply_image: Optional (media_type, base64_data) of an image being replied to
     pub async fn compose_ai_message(
         &self,
         prompt: &str,
         reply_context: Option<(&str, &str)>,
         reply_image: Option<(&str, &str)>,
     ) -> Result<(String, UsageInfo)> {
-        // Validate input length (max 1000 chars for the prompt)
         if prompt.trim().is_empty() {
             anyhow::bail!("Prompt cannot be empty");
         }
@@ -651,7 +536,7 @@ Text to translate:
             anyhow::bail!("Prompt is too long (max 1000 characters)");
         }
 
-        let system_prompt = r#"You are a helpful assistant composing WhatsApp messages. Your task is to write a message based on the user's request.
+        let instructions = r#"You are a helpful assistant composing WhatsApp messages. Your task is to write a message based on the user's request.
 
 IMPORTANT RULES:
 1. Keep your response SHORT and appropriate for a chat message (max 500 characters)
@@ -661,138 +546,75 @@ IMPORTANT RULES:
 5. If the request is unclear, write a friendly, neutral message
 6. Do not pretend to be someone specific or impersonate anyone
 7. Do not include private information or make up facts about real people
-8. If an image is provided, you can reference what you see in it when composing your reply
+8. If an image is provided, you can reference what you see in it when composing your reply"#;
 
-Respond with ONLY the message text, nothing else."#;
-
-        // Build the user message with optional reply context
         let text_content = if let Some((sender, text)) = reply_context {
             format!(
-                "{}\n\nThe user is REPLYING to this message from {}:\n\"{}\"\n\nUser's request for their reply: {}",
-                system_prompt,
+                "The user is replying to this message from {}:\n\"{}\"\n\nUser request for their reply: {}",
                 sender,
-                text.chars().take(500).collect::<String>(), // Limit context length
+                text.chars().take(500).collect::<String>(),
                 prompt
             )
         } else {
-            format!("{}\n\nUser request: {}", system_prompt, prompt)
+            format!("User request: {}", prompt)
         };
 
-        // Build request - use vision API if image is provided
-        let response = if let Some((media_type, base64_data)) = reply_image {
-            // Vision request with image
-            let mut content_blocks = vec![
-                VisionContentBlock::Image {
-                    source: ImageSource {
-                        source_type: "base64".to_string(),
-                        media_type: media_type.to_string(),
-                        data: base64_data.to_string(),
-                    },
-                },
-                VisionContentBlock::Text { text: text_content },
+        let input = if let Some((media_type, base64_data)) = reply_image {
+            let mut content = vec![
+                json!({
+                    "type": "input_image",
+                    "image_url": Self::build_data_url(media_type, base64_data),
+                }),
+                json!({
+                    "type": "input_text",
+                    "text": text_content,
+                }),
             ];
 
-            // If there's text context about the image, add it
             if let Some((sender, _)) = reply_context {
-                content_blocks.insert(
+                content.insert(
                     1,
-                    VisionContentBlock::Text {
-                        text: format!("The above image was sent by {}.", sender),
-                    },
+                    json!({
+                        "type": "input_text",
+                        "text": format!("The above image was sent by {}.", sender),
+                    }),
                 );
             }
 
-            let request = ClaudeVisionRequest {
-                model: AI_COMPOSE_MODEL.to_string(),
-                max_tokens: 300,
-                messages: vec![ClaudeVisionMessage {
-                    role: "user".to_string(),
-                    content: content_blocks,
-                }],
-            };
-
-            self.client
-                .post(ANTHROPIC_API_URL)
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", ANTHROPIC_VERSION)
-                .header("content-type", "application/json")
-                .json(&request)
-                .send()
-                .await
-                .context("Failed to send AI compose request")?
+            json!([{
+                "role": "user",
+                "content": content,
+            }])
         } else {
-            // Text-only request
-            let request = ClaudeRequest {
-                model: AI_COMPOSE_MODEL.to_string(),
-                max_tokens: 300,
-                messages: vec![ClaudeMessage {
-                    role: "user".to_string(),
-                    content: text_content,
-                }],
-            };
-
-            self.client
-                .post(ANTHROPIC_API_URL)
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", ANTHROPIC_VERSION)
-                .header("content-type", "application/json")
-                .json(&request)
-                .send()
-                .await
-                .context("Failed to send AI compose request")?
+            json!(text_content)
         };
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("AI compose API error: {} - {}", status, body);
-        }
+        let (composed, usage_info) = self
+            .request_text_output(
+                &self.high_end_model,
+                HIGH_END_PRICING,
+                instructions,
+                input,
+                300,
+                Some("medium"),
+                Some("low"),
+                false,
+            )
+            .await?;
 
-        let claude_response: ClaudeResponse = response
-            .json()
-            .await
-            .context("Failed to parse AI compose response")?;
-
-        let usage_info = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_opus_cost(&claude_response.usage),
-        };
-
-        let composed = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-
-        // Final safety check - truncate if somehow still too long
-        let composed = if composed.len() > 500 {
-            format!("{}...", &composed[..497])
-        } else {
-            composed
-        };
+        let composed = Self::truncate_for_display(composed.trim().to_string(), 500);
 
         info!(
-            "AI compose usage: {} in, {} out, ${:.6}",
-            usage_info.input_tokens, usage_info.output_tokens, usage_info.cost_usd
+            "AI compose usage: {} in ({} cached), {} out, ${:.6}",
+            usage_info.input_tokens,
+            usage_info.cached_input_tokens,
+            usage_info.output_tokens,
+            usage_info.cost_usd
         );
 
         Ok((composed, usage_info))
     }
 
-    /// Generate a styled reply to a received message
-    ///
-    /// Uses the user's style profile and conversation context to generate
-    /// a reply that sounds like them.
-    ///
-    /// Parameters:
-    /// - message_to_reply: The incoming message to reply to
-    /// - recent_conversation: Recent messages for context (last ~20)
-    /// - global_style: User's overall writing style profile
-    /// - contact_style: Optional style specific to this contact
-    /// - my_examples: Examples of user's outgoing messages to this contact
     pub async fn compose_styled_reply(
         &self,
         message_to_reply: &crate::storage::StoredMessage,
@@ -801,7 +623,6 @@ Respond with ONLY the message text, nothing else."#;
         contact_style: Option<&crate::storage::StyleProfile>,
         my_examples: &[crate::storage::StoredMessage],
     ) -> Result<(String, UsageInfo)> {
-        // Extract text from the message being replied to
         let reply_to_text = message_to_reply
             .original_text
             .clone()
@@ -814,28 +635,17 @@ Respond with ONLY the message text, nothing else."#;
                 })
             })
             .unwrap_or_else(|| "[No text content]".to_string());
+        let reply_to_text = Self::truncate_for_display(reply_to_text, 500);
 
-        // Truncate if too long
-        let reply_to_text = if reply_to_text.len() > 500 {
-            format!("{}...", &reply_to_text[..497])
-        } else {
-            reply_to_text
-        };
-
-        // Get sender name
         let sender_name = message_to_reply
             .sender_name
             .clone()
             .or_else(|| message_to_reply.contact_name.clone())
             .unwrap_or_else(|| "Someone".to_string());
 
-        // Format recent conversation
         let conversation_context = Self::format_conversation(recent_conversation);
-
-        // Format my example messages
         let my_examples_formatted = Self::format_my_examples(my_examples);
 
-        // Build the contact-specific style section
         let contact_style_section = if let Some(cs) = contact_style {
             format!(
                 "## MY STYLE WITH THIS SPECIFIC CONTACT:\n{}\n",
@@ -845,7 +655,6 @@ Respond with ONLY the message text, nothing else."#;
             "## MY STYLE WITH THIS SPECIFIC CONTACT:\nNo specific style data for this contact yet. Use my general style.\n".to_string()
         };
 
-        // Build the full prompt - prioritize examples, be aggressive about casual tone
         let prompt = format!(
             r#"Write a WhatsApp reply AS ME. You must sound EXACTLY like my example messages below.
 
@@ -865,7 +674,7 @@ Respond with ONLY the message text, nothing else."#;
 ## ABSOLUTE RULES - FOLLOW THESE OR FAIL:
 1. BE SHORT. Real WhatsApp messages are 1-2 sentences max, not paragraphs
 2. DO NOT start with "Oh" or "Ah" or any filler words - that's AI speak
-3. DO NOT over-explain feelings ("I love that", "That's really interesting") - just react naturally  
+3. DO NOT over-explain feelings ("I love that", "That's really interesting") - just react naturally
 4. DO NOT write in complete formal sentences if my examples don't
 5. DO NOT be more enthusiastic or wordy than my examples show
 6. COPY my emoji patterns exactly - if I use "😂" use that, if I don't use emojis, DON'T add them
@@ -890,64 +699,26 @@ Write my reply (keep it short and casual like my examples):"#,
             recent_conversation.len()
         );
 
-        // Call Claude - use lower max_tokens to encourage shorter replies
-        let request = ClaudeRequest {
-            model: AI_COMPOSE_MODEL.to_string(),
-            max_tokens: 150,
-            messages: vec![ClaudeMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
+        let (reply, usage_info) = self
+            .request_text_output(
+                &self.high_end_model,
+                HIGH_END_PRICING,
+                "Generate a short WhatsApp reply that follows the user's style exactly. Output only the reply text.",
+                json!(prompt),
+                150,
+                Some("medium"),
+                Some("low"),
+                false,
+            )
+            .await?;
 
-        let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send styled reply request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!("AI reply API error: {} - {}", status, body);
-            anyhow::bail!("Styled reply API error: {} - {}", status, body);
-        }
-
-        let claude_response: ClaudeResponse = response
-            .json()
-            .await
-            .context("Failed to parse styled reply response")?;
-
-        let usage_info = UsageInfo {
-            input_tokens: claude_response.usage.input_tokens,
-            output_tokens: claude_response.usage.output_tokens,
-            cost_usd: Self::calculate_opus_cost(&claude_response.usage),
-        };
-
-        let reply = claude_response
-            .content
-            .first()
-            .and_then(|c| c.text.clone())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-
-        // Safety check - truncate if too long
-        let reply = if reply.len() > 500 {
-            format!("{}...", &reply[..497])
-        } else {
-            reply
-        };
+        let reply = Self::truncate_for_display(reply.trim().to_string(), 500);
 
         info!(
-            "Styled reply generated: {} chars, {} in, {} out, ${:.6}",
+            "Styled reply generated: {} chars, {} in ({} cached), {} out, ${:.6}",
             reply.len(),
             usage_info.input_tokens,
+            usage_info.cached_input_tokens,
             usage_info.output_tokens,
             usage_info.cost_usd
         );
@@ -955,7 +726,6 @@ Write my reply (keep it short and casual like my examples):"#,
         Ok((reply, usage_info))
     }
 
-    /// Format conversation messages for the prompt
     fn format_conversation(messages: &[crate::storage::StoredMessage]) -> String {
         if messages.is_empty() {
             return "No recent messages.".to_string();
@@ -988,20 +758,12 @@ Write my reply (keep it short and casual like my examples):"#,
                     })
                     .unwrap_or_else(|| format!("[{}]", m.content_type));
 
-                // Truncate long messages
-                let text = if text.len() > 200 {
-                    format!("{}...", &text[..197])
-                } else {
-                    text
-                };
-
-                format!("{}: {}", sender, text)
+                format!("{}: {}", sender, Self::truncate_for_display(text, 200))
             })
             .collect::<Vec<_>>()
             .join("\n")
     }
 
-    /// Format user's example messages for the prompt
     fn format_my_examples(messages: &[crate::storage::StoredMessage]) -> String {
         if messages.is_empty() {
             return "No previous messages to this contact yet.".to_string();
@@ -1019,16 +781,80 @@ Write my reply (keep it short and casual like my examples):"#,
                 })
             })
             .enumerate()
-            .map(|(i, text)| {
-                // Keep more text for better style matching
-                let text = if text.len() > 200 {
-                    format!("{}...", &text[..197])
-                } else {
-                    text
-                };
-                format!("{}. \"{}\"", i + 1, text)
-            })
+            .map(|(i, text)| format!("{}. \"{}\"", i + 1, Self::truncate_for_display(text, 200)))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TranslationService, UsageInfo, CHEAP_PRICING};
+
+    #[test]
+    fn calculates_cost_with_cached_input_tokens() {
+        let usage = super::ApiUsage {
+            input_tokens: 1_000_000,
+            output_tokens: 1_000_000,
+            input_tokens_details: Some(super::InputTokensDetails {
+                cached_tokens: 250_000,
+            }),
+        };
+
+        let priced = TranslationService::usage_from_api(Some(usage), CHEAP_PRICING);
+
+        assert_eq!(priced.input_tokens, 1_000_000);
+        assert_eq!(priced.cached_input_tokens, 250_000);
+        assert_eq!(priced.output_tokens, 1_000_000);
+        assert!((priced.cost_usd - 0.7025).abs() < 0.000001);
+    }
+
+    #[test]
+    fn extracts_json_object_from_wrapped_text() {
+        let wrapped = "```json\n{\"language\":\"Spanish\",\"isTargetLanguage\":false}\n```";
+        assert_eq!(
+            TranslationService::extract_json_object(wrapped),
+            Some("{\"language\":\"Spanish\",\"isTargetLanguage\":false}")
+        );
+    }
+
+    #[test]
+    fn builds_data_url_from_raw_base64() {
+        assert_eq!(
+            TranslationService::build_data_url("image/jpeg", "abc123"),
+            "data:image/jpeg;base64,abc123"
+        );
+    }
+
+    #[test]
+    fn preserves_existing_data_url() {
+        let data_url = "data:image/png;base64,abc123";
+        assert_eq!(
+            TranslationService::build_data_url("image/png", data_url),
+            data_url
+        );
+    }
+
+    #[test]
+    fn combines_cached_usage() {
+        let combined = TranslationService::combine_usage(
+            &UsageInfo {
+                input_tokens: 10,
+                cached_input_tokens: 3,
+                output_tokens: 4,
+                cost_usd: 1.0,
+            },
+            &UsageInfo {
+                input_tokens: 8,
+                cached_input_tokens: 2,
+                output_tokens: 5,
+                cost_usd: 2.0,
+            },
+        );
+
+        assert_eq!(combined.input_tokens, 18);
+        assert_eq!(combined.cached_input_tokens, 5);
+        assert_eq!(combined.output_tokens, 9);
+        assert_eq!(combined.cost_usd, 3.0);
     }
 }

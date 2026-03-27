@@ -1314,7 +1314,7 @@ async fn translate_message(
     .into_response()
 }
 
-/// AI compose endpoint - generates a message using Claude
+/// AI compose endpoint - generates a message using OpenAI
 async fn ai_compose(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AiComposeRequest>,
@@ -1346,7 +1346,7 @@ async fn ai_compose(
         _ => None,
     };
 
-    // Call the AI compose method (using Opus 4.5)
+    // Call the AI compose method
     match translator
         .compose_ai_message(&req.prompt, reply_context, reply_image)
         .await
@@ -1364,6 +1364,7 @@ async fn ai_compose(
                 None,
                 &crate::translation::UsageInfo {
                     input_tokens: usage.input_tokens,
+                    cached_input_tokens: usage.cached_input_tokens,
                     output_tokens: usage.output_tokens,
                     cost_usd: usage.cost_usd,
                 },
@@ -1447,7 +1448,8 @@ async fn ai_reply(
 
     // Create style analyzer
     let api_key = translator.get_api_key();
-    let style_analyzer = crate::style_analyzer::StyleAnalyzer::new(api_key);
+    let detection_model = translator.get_detection_model();
+    let style_analyzer = crate::style_analyzer::StyleAnalyzer::new(api_key, detection_model);
 
     // Get or create global style profile
     let (global_style, global_usage) = match style_analyzer
@@ -1514,11 +1516,20 @@ async fn ai_reply(
     {
         Ok((reply_text, usage)) => {
             // Calculate total cost (including any style analysis)
+            let mut total_input_tokens = usage.input_tokens as i64;
+            let mut total_cached_input_tokens = usage.cached_input_tokens as i64;
+            let mut total_output_tokens = usage.output_tokens as i64;
             let mut total_cost = usage.cost_usd;
             if let Some(gu) = &global_usage {
+                total_input_tokens += gu.input_tokens as i64;
+                total_cached_input_tokens += gu.cached_input_tokens as i64;
+                total_output_tokens += gu.output_tokens as i64;
                 total_cost += gu.cost_usd;
             }
             if let Some(cu) = &contact_usage {
+                total_input_tokens += cu.input_tokens as i64;
+                total_cached_input_tokens += cu.cached_input_tokens as i64;
+                total_output_tokens += cu.output_tokens as i64;
                 total_cost += cu.cost_usd;
             }
 
@@ -1533,8 +1544,9 @@ async fn ai_reply(
                 Some(&req.contact_id),
                 Some(&req.message_id),
                 &crate::translation::UsageInfo {
-                    input_tokens: usage.input_tokens,
-                    output_tokens: usage.output_tokens,
+                    input_tokens: total_input_tokens as u32,
+                    cached_input_tokens: total_cached_input_tokens as u32,
+                    output_tokens: total_output_tokens as u32,
                     cost_usd: total_cost,
                 },
                 "ai_styled_reply",
@@ -1582,6 +1594,7 @@ async fn get_global_usage(State(state): State<Arc<AppState>>) -> impl IntoRespon
     match state.store.get_global_usage() {
         Ok(usage) => Json(serde_json::json!({
             "inputTokens": usage.input_tokens,
+            "cachedInputTokens": usage.cached_input_tokens,
             "outputTokens": usage.output_tokens,
             "costUsd": usage.cost_usd,
         }))
@@ -1605,6 +1618,7 @@ async fn get_conversation_usage(
     match state.store.get_conversation_usage(&contact_id) {
         Ok(usage) => Json(serde_json::json!({
             "inputTokens": usage.input_tokens,
+            "cachedInputTokens": usage.cached_input_tokens,
             "outputTokens": usage.output_tokens,
             "costUsd": usage.cost_usd,
         }))
@@ -1727,12 +1741,12 @@ struct ClientRegistrationRequest {
 }
 
 /// Dynamic Client Registration endpoint (RFC 7591)
-/// Allows MCP clients like Claude.ai to register before starting OAuth flow
+/// Allows public MCP clients to register before starting OAuth flow
 async fn oauth_register(Json(req): Json<ClientRegistrationRequest>) -> impl IntoResponse {
     // Generate a client_id for this registration
     let client_id = format!("client_{}", generate_token()[..16].to_string());
 
-    // For public clients (like Claude.ai), we don't issue a client_secret
+    // For public clients, we don't issue a client_secret
     // The client will use PKCE for security instead
 
     info!(

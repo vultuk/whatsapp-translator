@@ -93,7 +93,7 @@ pub struct ConversationSettings {
 pub struct StyleProfile {
     /// Contact ID or "__global__" for overall style
     pub contact_id: String,
-    /// Claude-generated style description
+    /// AI-generated style description
     pub profile_text: String,
     /// Example messages used for analysis (JSON array)
     pub sample_messages: Vec<String>,
@@ -188,13 +188,14 @@ impl MessageStore {
             CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
             CREATE INDEX IF NOT EXISTS idx_contacts_last_message ON contacts(last_message_time DESC);
 
-            -- Translation usage tracking
+            -- AI usage tracking
             CREATE TABLE IF NOT EXISTS translation_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 contact_id TEXT,
                 message_id TEXT,
                 timestamp INTEGER NOT NULL,
                 input_tokens INTEGER NOT NULL,
+                cached_input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL,
                 cost_usd REAL NOT NULL,
                 operation TEXT NOT NULL
@@ -271,6 +272,7 @@ impl MessageStore {
 
         // Add translation columns if they don't exist (migration for existing databases)
         self.migrate_add_translation_columns(&conn)?;
+        self.migrate_add_cached_usage_column(&conn)?;
 
         // Fix contact types based on JID suffix
         self.migrate_fix_contact_types(&conn)?;
@@ -417,6 +419,29 @@ impl MessageStore {
                 "#,
             )?;
             tracing::info!("Database migration complete");
+        }
+
+        Ok(())
+    }
+
+    /// Add cached_input_tokens column to usage tracking
+    fn migrate_add_cached_usage_column(&self, conn: &Connection) -> Result<()> {
+        let has_cached_input_tokens: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('translation_usage') WHERE name = 'cached_input_tokens'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        if !has_cached_input_tokens {
+            info!("Migrating database: adding cached_input_tokens to translation_usage...");
+            conn.execute(
+                "ALTER TABLE translation_usage ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+            info!("Database migration complete: added cached_input_tokens");
         }
 
         Ok(())
@@ -1058,7 +1083,7 @@ impl MessageStore {
         Ok(language)
     }
 
-    /// Record translation usage for a message
+    /// Record AI usage for a message
     pub fn record_usage(
         &self,
         contact_id: Option<&str>,
@@ -1075,14 +1100,15 @@ impl MessageStore {
         conn.execute(
             r#"
             INSERT INTO translation_usage 
-            (contact_id, message_id, timestamp, input_tokens, output_tokens, cost_usd, operation)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            (contact_id, message_id, timestamp, input_tokens, cached_input_tokens, output_tokens, cost_usd, operation)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 contact_id,
                 message_id,
                 timestamp,
                 usage.input_tokens,
+                usage.cached_input_tokens,
                 usage.output_tokens,
                 usage.cost_usd,
                 operation,
@@ -1098,7 +1124,8 @@ impl MessageStore {
 
         let result = conn.query_row(
             r#"
-            SELECT COALESCE(SUM(input_tokens), 0), 
+            SELECT COALESCE(SUM(input_tokens), 0),
+                   COALESCE(SUM(cached_input_tokens), 0),
                    COALESCE(SUM(output_tokens), 0), 
                    COALESCE(SUM(cost_usd), 0.0)
             FROM translation_usage
@@ -1107,8 +1134,9 @@ impl MessageStore {
             |row| {
                 Ok(UsageInfo {
                     input_tokens: row.get::<_, i64>(0)? as u32,
-                    output_tokens: row.get::<_, i64>(1)? as u32,
-                    cost_usd: row.get(2)?,
+                    cached_input_tokens: row.get::<_, i64>(1)? as u32,
+                    output_tokens: row.get::<_, i64>(2)? as u32,
+                    cost_usd: row.get(3)?,
                 })
             },
         )?;
@@ -1122,7 +1150,8 @@ impl MessageStore {
 
         let result = conn.query_row(
             r#"
-            SELECT COALESCE(SUM(input_tokens), 0), 
+            SELECT COALESCE(SUM(input_tokens), 0),
+                   COALESCE(SUM(cached_input_tokens), 0),
                    COALESCE(SUM(output_tokens), 0), 
                    COALESCE(SUM(cost_usd), 0.0)
             FROM translation_usage
@@ -1132,8 +1161,9 @@ impl MessageStore {
             |row| {
                 Ok(UsageInfo {
                     input_tokens: row.get::<_, i64>(0)? as u32,
-                    output_tokens: row.get::<_, i64>(1)? as u32,
-                    cost_usd: row.get(2)?,
+                    cached_input_tokens: row.get::<_, i64>(1)? as u32,
+                    output_tokens: row.get::<_, i64>(2)? as u32,
+                    cost_usd: row.get(3)?,
                 })
             },
         )?;
