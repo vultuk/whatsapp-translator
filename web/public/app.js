@@ -7,6 +7,7 @@ class WhatsAppClient {
     this.contacts = [];
     this.currentContactId = null;
     this.initialMessageLimit = 30;
+    this.messageCacheLimit = 200;
     this.messages = new Map();
     this.contactsRenderTimer = null;
     this.messagesHasMore = new Map(); // contactId -> boolean (whether more messages exist)
@@ -494,6 +495,8 @@ class WhatsAppClient {
       messages.push(message);
       messages.sort((a, b) => a.timestamp - b.timestamp);
     }
+
+    this.trimCachedMessages(message.contactId, true);
     
     // Update contact in list
     this.updateContactInList(message);
@@ -1010,7 +1013,12 @@ class WhatsAppClient {
 
       const cachedMessages = this.messages.get(contactId);
       if (cachedMessages && cachedMessages.length > 0) {
-        this.renderMessages(cachedMessages);
+        const visibleMessages = this.getRecentVisibleMessages(cachedMessages);
+        if (visibleMessages.length !== cachedMessages.length) {
+          this.messages.set(contactId, visibleMessages);
+          this.messagesHasMore.set(contactId, true);
+        }
+        this.renderMessages(visibleMessages);
         this.setupScrollHandler();
       } else {
         this.showMessagesLoading();
@@ -1042,6 +1050,28 @@ class WhatsAppClient {
         <span>Loading messages...</span>
       </div>
     `;
+  }
+
+  getRecentVisibleMessages(messages) {
+    if (!messages || messages.length <= this.initialMessageLimit) {
+      return messages || [];
+    }
+
+    return messages.slice(-this.initialMessageLimit);
+  }
+
+  trimCachedMessages(contactId, preserveVisible = false) {
+    const messages = this.messages.get(contactId);
+    if (!messages || messages.length <= this.messageCacheLimit) {
+      return;
+    }
+
+    if (preserveVisible && this.currentContactId === contactId) {
+      return;
+    }
+
+    this.messages.set(contactId, messages.slice(-this.messageCacheLimit));
+    this.messagesHasMore.set(contactId, true);
   }
 
   scheduleDeferredWork(callback, delay = 80) {
