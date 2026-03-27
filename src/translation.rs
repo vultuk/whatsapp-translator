@@ -702,20 +702,46 @@ Write my reply (keep it short and casual like my examples):"#,
             recent_conversation.len()
         );
 
-        let (reply, usage_info) = self
+        let (mut reply, mut usage_info) = self
             .request_text_output(
                 &self.high_end_model,
                 HIGH_END_PRICING,
                 "Generate a short WhatsApp reply that follows the user's style exactly. Output only the reply text.",
-                json!(prompt),
+                json!(prompt.clone()),
                 150,
-                Some("medium"),
+                Some("none"),
                 Some("low"),
                 false,
             )
             .await?;
 
+        if reply.trim().is_empty() {
+            warn!("Styled reply returned no text, retrying with a simpler prompt");
+            let retry_prompt = format!(
+                "{}\n\nFINAL REQUIREMENT: Reply with one short WhatsApp message right now. Do not leave the answer blank.",
+                prompt
+            );
+            let (retry_reply, retry_usage) = self
+                .request_text_output(
+                    &self.high_end_model,
+                    HIGH_END_PRICING,
+                    "Write exactly one short WhatsApp reply in the user's style. Output only the reply text.",
+                    json!(retry_prompt),
+                    220,
+                    Some("none"),
+                    Some("low"),
+                    false,
+                )
+                .await?;
+            reply = retry_reply;
+            usage_info = Self::combine_usage(&usage_info, &retry_usage);
+        }
+
         let reply = Self::truncate_for_display(reply.trim().to_string(), 500);
+
+        if reply.is_empty() {
+            anyhow::bail!("OpenAI returned an empty styled reply");
+        }
 
         info!(
             "Styled reply generated: {} chars, {} in ({} cached), {} out, ${:.6}",

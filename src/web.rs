@@ -125,6 +125,8 @@ pub struct SendMessageRequest {
     pub reply_to_sender: Option<String>,
     /// Text preview of the replied message (for storage)
     pub reply_to_text: Option<String>,
+    /// Sender display name of the replied message (for storage)
+    pub reply_to_sender_name: Option<String>,
 }
 
 /// Send message response
@@ -154,6 +156,10 @@ pub struct SendImageRequest {
     pub reply_to: Option<String>,
     /// Sender JID of the replied message (optional)
     pub reply_to_sender: Option<String>,
+    /// Text preview of the replied message (for storage)
+    pub reply_to_text: Option<String>,
+    /// Sender display name of the replied message (for storage)
+    pub reply_to_sender_name: Option<String>,
 }
 
 /// Send image response
@@ -1033,8 +1039,29 @@ async fn send_message(
         chat_type,
         content_type: "Text".to_string(),
         // Store English (what user typed) as the content for display
-        content_json: serde_json::json!({"type": "text", "body": req.text.clone()}).to_string(),
-        content: Some(serde_json::json!({"type": "text", "body": req.text.clone()})),
+        content_json: serde_json::json!({
+            "type": "text",
+            "body": req.text.clone(),
+            "reply_context": req.reply_to.as_ref().map(|reply_to| serde_json::json!({
+                "messageId": reply_to,
+                "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
+                    req.reply_to_sender.clone().unwrap_or_else(|| "Unknown".to_string())
+                }),
+                "text": req.reply_to_text.clone().unwrap_or_default()
+            }))
+        })
+        .to_string(),
+        content: Some(serde_json::json!({
+            "type": "text",
+            "body": req.text.clone(),
+            "reply_context": req.reply_to.as_ref().map(|reply_to| serde_json::json!({
+                "messageId": reply_to,
+                "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
+                    req.reply_to_sender.clone().unwrap_or_else(|| "Unknown".to_string())
+                }),
+                "text": req.reply_to_text.clone().unwrap_or_default()
+            }))
+        })),
         original_text: if was_translated {
             Some(req.text.clone())
         } else {
@@ -1161,14 +1188,28 @@ async fn send_image(
             "type": "image",
             "mime_type": req.mime_type,
             "caption": req.caption,
-            "media_data": req.media_data
+            "media_data": req.media_data,
+            "reply_context": req.reply_to.as_ref().map(|reply_to| serde_json::json!({
+                "messageId": reply_to,
+                "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
+                    req.reply_to_sender.clone().unwrap_or_else(|| "Unknown".to_string())
+                }),
+                "text": req.reply_to_text.clone().unwrap_or_default()
+            }))
         })
         .to_string(),
         content: Some(serde_json::json!({
             "type": "image",
             "mime_type": req.mime_type,
             "caption": req.caption,
-            "media_data": req.media_data
+            "media_data": req.media_data,
+            "reply_context": req.reply_to.as_ref().map(|reply_to| serde_json::json!({
+                "messageId": reply_to,
+                "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
+                    req.reply_to_sender.clone().unwrap_or_else(|| "Unknown".to_string())
+                }),
+                "text": req.reply_to_text.clone().unwrap_or_default()
+            }))
         })),
         original_text: None,
         translated_text: None,

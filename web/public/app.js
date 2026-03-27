@@ -461,6 +461,13 @@ class WhatsAppClient {
 
   // Handle new message
   handleNewMessage(message) {
+    if (!message.senderJid) {
+      message.senderJid = this.getMessageSenderJid(message);
+    }
+    if (!message.replyContext && message.content?.reply_context) {
+      message.replyContext = message.content.reply_context;
+    }
+
     // Check if this is a reaction message
     if (message.content && message.content.type === 'reaction') {
       this.handleReactionMessage(message);
@@ -931,6 +938,22 @@ class WhatsAppClient {
     }
   }
 
+  getMessageSenderJid(message) {
+    const isFromMe = message.isFromMe || message.is_from_me;
+
+    if (isFromMe) {
+      const myPhone = document.getElementById('user-phone')?.textContent?.replace('+', '') || '';
+      return myPhone ? `${myPhone}@s.whatsapp.net` : '';
+    }
+
+    const senderJid = message.senderJid || message.sender_jid;
+    if (senderJid) return senderJid;
+
+    const senderPhone = message.senderPhone || message.sender_phone || '';
+    if (!senderPhone) return '';
+    return senderPhone.includes('@') ? senderPhone : `${senderPhone}@s.whatsapp.net`;
+  }
+
   // Select a contact
   async selectContact(contactId) {
     try {
@@ -1009,6 +1032,15 @@ class WhatsAppClient {
       // Handle both old format (array) and new format (object with messages/hasMore)
       const messages = Array.isArray(data) ? data : data.messages;
       const hasMore = Array.isArray(data) ? false : data.hasMore;
+
+      messages.forEach(message => {
+        if (!message.senderJid) {
+          message.senderJid = this.getMessageSenderJid(message);
+        }
+        if (!message.replyContext && message.content?.reply_context) {
+          message.replyContext = message.content.reply_context;
+        }
+      });
       
       this.messages.set(contactId, messages);
       this.messagesHasMore.set(contactId, hasMore);
@@ -1049,6 +1081,15 @@ class WhatsAppClient {
       
       const olderMessages = Array.isArray(data) ? data : data.messages;
       const hasMore = Array.isArray(data) ? false : data.hasMore;
+
+      olderMessages.forEach(message => {
+        if (!message.senderJid) {
+          message.senderJid = this.getMessageSenderJid(message);
+        }
+        if (!message.replyContext && message.content?.reply_context) {
+          message.replyContext = message.content.reply_context;
+        }
+      });
       
       if (olderMessages.length > 0) {
         // Prepend older messages
@@ -1256,7 +1297,7 @@ class WhatsAppClient {
     
     // Get message metadata for reactions
     const messageId = message.id;
-    const senderJid = message.senderPhone || message.sender_phone || '';
+    const senderJid = this.getMessageSenderJid(message);
     const contactId = message.contactId || message.contact_id || this.currentContactId;
     
     // Check if message can be translated (incoming, has text, not already translated)
@@ -1700,6 +1741,8 @@ class WhatsAppClient {
         if (replyToSender) {
           requestBody.replyToSender = replyToSender;
         }
+        requestBody.replyToText = this.replyingTo?.text || null;
+        requestBody.replyToSenderName = this.replyingTo?.senderName || null;
       }
       
       const response = await fetch('/api/send', {
@@ -1730,6 +1773,7 @@ class WhatsAppClient {
         contactId: this.currentContactId,
         isFromMe: true,
         isForwarded: false,
+        senderJid: this.getMessageSenderJid({ isFromMe: true }),
         content: { type: 'text', body: text },
         // Include translation info if the message was translated
         isTranslated: result.isTranslated || false,
@@ -1810,6 +1854,8 @@ class WhatsAppClient {
         if (replyToSender) {
           requestBody.replyToSender = replyToSender;
         }
+        requestBody.replyToText = this.replyingTo?.text || null;
+        requestBody.replyToSenderName = this.replyingTo?.senderName || null;
       }
       
       const response = await fetch('/api/send-image', {
@@ -1837,6 +1883,7 @@ class WhatsAppClient {
         contactId: this.currentContactId,
         isFromMe: true,
         isForwarded: false,
+        senderJid: this.getMessageSenderJid({ isFromMe: true }),
         content: { 
           type: 'image', 
           mime_type: file.type,
@@ -2097,7 +2144,7 @@ class WhatsAppClient {
     }
     
     // Get sender JID for the reply
-    const senderJid = isFromMe ? null : (message.senderPhone || message.sender_phone || '');
+    const senderJid = this.getMessageSenderJid(message);
     
     // Capture image data if replying to an image (for AI compose)
     let imageData = null;
@@ -2277,6 +2324,9 @@ class WhatsAppClient {
       
       if (!result.success) {
         throw new Error(result.error || 'AI reply generation failed');
+      }
+      if (!result.replyText || !result.replyText.trim()) {
+        throw new Error('AI reply was empty');
       }
       
       // Set reply context to this message (reuses existing setReplyTo)
