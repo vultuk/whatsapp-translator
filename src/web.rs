@@ -784,7 +784,7 @@ async fn update_conversation_settings(
 /// Query parameters for messages pagination
 #[derive(Debug, Deserialize)]
 struct MessagesQuery {
-    /// Maximum number of messages to return (default: 50 for initial load)
+    /// Maximum number of messages to return (default: 30 for initial load)
     limit: Option<u32>,
     /// Only get messages before this timestamp (for loading older messages)
     before: Option<i64>,
@@ -807,11 +807,11 @@ async fn get_messages(
         .map(|s| s.into_owned())
         .unwrap_or(contact_id);
 
-    // Default to 50 messages for initial load, unless explicitly requesting all (limit=0)
+    // Default to 30 messages for initial load, unless explicitly requesting all (limit=0)
     let limit = match params.limit {
         Some(0) => None, // 0 means all messages (for backwards compatibility / MCP)
         Some(n) => Some(n),
-        None => Some(50), // Default to 50 for lazy loading
+        None => Some(30), // Default to 30 for lazy loading
     };
 
     // Strip media_data from messages to reduce payload (media loaded on demand via /api/media)

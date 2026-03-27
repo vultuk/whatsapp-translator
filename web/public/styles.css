@@ -566,6 +566,16 @@ body {
   overscroll-behavior-y: contain;
 }
 
+.messages-loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 120px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
 .message {
   max-width: 65%;
   padding: 8px 12px;

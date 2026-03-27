@@ -6,6 +6,7 @@ class WhatsAppClient {
     this.connected = false;
     this.contacts = [];
     this.currentContactId = null;
+    this.initialMessageLimit = 30;
     this.messages = new Map();
     this.contactsRenderTimer = null;
     this.messagesHasMore = new Map(); // contactId -> boolean (whether more messages exist)
@@ -13,8 +14,11 @@ class WhatsAppClient {
     this.avatarCache = new Map(); // JID -> URL
     this.avatarFetching = new Set(); // JIDs currently being fetched
     this.globalUsage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    this.conversationUsageCache = new Map(); // contactId -> usage
+    this.conversationUsageTimer = null;
     this.linkPreviewCache = new Map(); // URL -> LinkPreview
     this.linkPreviewFetching = new Set(); // URLs currently being fetched
+    this.linkPreviewLoadTimer = null;
     this.typingState = new Map(); // chatId -> { userId, state, timestamp }
     this.typingTimeouts = new Map(); // chatId -> timeoutId (auto-clear after 10s)
     this.replyingTo = null; // { messageId, senderJid, senderName, text, isFromMe }
@@ -1000,12 +1004,20 @@ class WhatsAppClient {
           }
         }
       }
-      
-      // Load messages
-      await this.loadMessages(contactId);
-      
-      // Load conversation usage
-      this.fetchConversationUsage(contactId);
+
+      const cachedUsage = this.conversationUsageCache.get(contactId);
+      this.updateConversationUsageDisplay(cachedUsage || { costUsd: 0 });
+
+      const cachedMessages = this.messages.get(contactId);
+      if (cachedMessages && cachedMessages.length > 0) {
+        this.renderMessages(cachedMessages);
+        this.setupScrollHandler();
+      } else {
+        this.showMessagesLoading();
+        await this.loadMessages(contactId);
+      }
+
+      this.scheduleConversationUsageFetch(contactId);
       
       // Re-render contacts to update active state and unread
       this.scheduleRenderContacts();
@@ -1020,11 +1032,75 @@ class WhatsAppClient {
     }
   }
 
-  // Load messages for a contact (initial load - most recent 50)
+  showMessagesLoading() {
+    const container = document.getElementById('messages-list');
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="messages-loading-state">
+        <div class="loading-spinner"></div>
+        <span>Loading messages...</span>
+      </div>
+    `;
+  }
+
+  scheduleDeferredWork(callback, delay = 80) {
+    const run = () => window.setTimeout(callback, delay);
+
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(callback, { timeout: delay + 200 });
+      return;
+    }
+
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(run);
+      return;
+    }
+
+    window.setTimeout(callback, delay);
+  }
+
+  scheduleConversationUsageFetch(contactId) {
+    if (this.conversationUsageTimer) {
+      clearTimeout(this.conversationUsageTimer);
+      this.conversationUsageTimer = null;
+    }
+
+    this.conversationUsageTimer = window.setTimeout(() => {
+      this.conversationUsageTimer = null;
+      this.scheduleDeferredWork(() => {
+        if (contactId === this.currentContactId) {
+          this.fetchConversationUsage(contactId);
+        }
+      }, 40);
+    }, 0);
+  }
+
+  scheduleLinkPreviewLoad(root = document) {
+    if (this.linkPreviewLoadTimer) {
+      clearTimeout(this.linkPreviewLoadTimer);
+      this.linkPreviewLoadTimer = null;
+    }
+
+    const activeContactId = this.currentContactId;
+    this.linkPreviewLoadTimer = window.setTimeout(() => {
+      this.linkPreviewLoadTimer = null;
+      this.scheduleDeferredWork(() => {
+        if (activeContactId !== this.currentContactId) {
+          return;
+        }
+
+        const scope = root && root.isConnected ? root : document;
+        this.loadVisibleLinkPreviews(scope);
+      });
+    }, 0);
+  }
+
+  // Load messages for a contact (initial load - most recent page)
   async loadMessages(contactId) {
     try {
       this.messagesLoading.set(contactId, true);
-      const response = await fetch(`/api/messages/${encodeURIComponent(contactId)}`, {
+      const response = await fetch(`/api/messages/${encodeURIComponent(contactId)}?limit=${this.initialMessageLimit}`, {
         headers: this.getAuthHeaders()
       });
       const data = await response.json();
@@ -1044,10 +1120,14 @@ class WhatsAppClient {
       
       this.messages.set(contactId, messages);
       this.messagesHasMore.set(contactId, hasMore);
-      this.renderMessages(messages);
+      if (contactId === this.currentContactId) {
+        this.renderMessages(messages);
+      }
       
       // Set up scroll handler for infinite scroll
-      this.setupScrollHandler();
+      if (contactId === this.currentContactId) {
+        this.setupScrollHandler();
+      }
     } catch (err) {
       console.error('Failed to load messages:', err);
     } finally {
@@ -1124,6 +1204,7 @@ class WhatsAppClient {
       if (container.scrollTop < 200 && this.currentContactId) {
         this.loadOlderMessages(this.currentContactId);
       }
+      this.scheduleLinkPreviewLoad(container);
     };
     
     container.addEventListener('scroll', this.handleMessagesScroll);
@@ -1191,8 +1272,8 @@ class WhatsAppClient {
     const scrollHeightAfter = container.scrollHeight;
     container.scrollTop = scrollTopBefore + (scrollHeightAfter - scrollHeightBefore);
     
-    // Load link previews for prepended messages
-    this.loadAllLinkPreviews();
+    // Load link previews after the DOM settles
+    this.scheduleLinkPreviewLoad(container);
   }
 
   // Render messages
@@ -1221,14 +1302,25 @@ class WhatsAppClient {
     container.innerHTML = html;
     this.scrollToBottom();
     
-    // Load link previews for all messages
-    this.loadAllLinkPreviews();
+    // Defer previews until after the first paint.
+    this.scheduleLinkPreviewLoad(container);
   }
 
-  // Load link previews for all messages in the current view
-  loadAllLinkPreviews() {
-    const containers = document.querySelectorAll('.link-previews-container[data-urls]');
+  // Load link previews for messages near the viewport.
+  loadVisibleLinkPreviews(root = document) {
+    const containers = root.querySelectorAll('.link-previews-container[data-urls]');
     containers.forEach(container => {
+      if (container.dataset.previewLoaded === 'true' || container.dataset.previewLoading === 'true') {
+        return;
+      }
+
+      const rect = container.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      const isNearViewport = rect.bottom >= -300 && rect.top <= viewportHeight + 600;
+      if (!isNearViewport) {
+        return;
+      }
+
       try {
         const urls = JSON.parse(container.dataset.urls);
         if (urls && urls.length > 0) {
@@ -1694,18 +1786,9 @@ class WhatsAppClient {
     html += this.renderMessage(message);
     container.insertAdjacentHTML('beforeend', html);
     
-    // Load link previews for the new message
     const newMessage = container.lastElementChild;
-    const previewContainer = newMessage?.querySelector('.link-previews-container[data-urls]');
-    if (previewContainer) {
-      try {
-        const urls = JSON.parse(previewContainer.dataset.urls);
-        if (urls && urls.length > 0) {
-          this.loadLinkPreviews(newMessage, urls);
-        }
-      } catch (e) {
-        console.error('Failed to parse URLs:', e);
-      }
+    if (newMessage) {
+      this.scheduleLinkPreviewLoad(newMessage);
     }
   }
 
@@ -2748,9 +2831,14 @@ class WhatsAppClient {
   // Fetch and display conversation usage
   async fetchConversationUsage(contactId) {
     try {
-      const response = await fetch(`/api/usage/${encodeURIComponent(contactId)}`);
+      const response = await fetch(`/api/usage/${encodeURIComponent(contactId)}`, {
+        headers: this.getAuthHeaders()
+      });
       const usage = await response.json();
-      this.updateConversationUsageDisplay(usage);
+      this.conversationUsageCache.set(contactId, usage);
+      if (contactId === this.currentContactId) {
+        this.updateConversationUsageDisplay(usage);
+      }
     } catch (err) {
       console.error('Failed to fetch conversation usage:', err);
     }
@@ -2902,6 +2990,9 @@ class WhatsAppClient {
   async loadLinkPreviews(messageEl, urls) {
     const container = messageEl.querySelector('.link-previews-container');
     if (!container || urls.length === 0) return;
+    if (container.dataset.previewLoaded === 'true' || container.dataset.previewLoading === 'true') return;
+
+    container.dataset.previewLoading = 'true';
 
     for (const url of urls) {
       const preview = await this.fetchLinkPreview(url);
@@ -2912,6 +3003,9 @@ class WhatsAppClient {
         }
       }
     }
+
+    container.dataset.previewLoading = 'false';
+    container.dataset.previewLoaded = 'true';
   }
 
   // Load media on demand (lazy loading)
