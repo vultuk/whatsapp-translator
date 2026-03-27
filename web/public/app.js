@@ -7,6 +7,7 @@ class WhatsAppClient {
     this.contacts = [];
     this.currentContactId = null;
     this.messages = new Map();
+    this.contactsRenderTimer = null;
     this.messagesHasMore = new Map(); // contactId -> boolean (whether more messages exist)
     this.messagesLoading = new Map(); // contactId -> boolean (whether currently loading)
     this.avatarCache = new Map(); // JID -> URL
@@ -330,7 +331,7 @@ class WhatsAppClient {
     const contact = this.contacts.find(c => c.id === chatId);
     if (contact) {
       contact.unreadCount = 0;
-      this.renderContacts();
+      this.scheduleRenderContacts();
     }
   }
 
@@ -351,7 +352,7 @@ class WhatsAppClient {
       const contact = this.contacts.find(c => c.id === contactId);
       if (contact) {
         contact.pinnedAt = result.pinned ? Date.now() : null;
-        this.renderContacts();
+        this.scheduleRenderContacts();
       }
     } catch (err) {
       console.error('Failed to toggle pin:', err);
@@ -693,14 +694,16 @@ class WhatsAppClient {
       contact.unreadCount = (contact.unreadCount || 0) + 1;
     }
     
-    // Re-render contacts list
-    this.renderContacts();
+    // Batch contact list updates during reconnect/history sync.
+    this.scheduleRenderContacts();
   }
 
   // Load contacts from server
   async loadContacts() {
     try {
-      const response = await fetch('/api/contacts');
+      const response = await fetch('/api/contacts', {
+        headers: this.getAuthHeaders()
+      });
       this.contacts = await response.json();
       
       // Debug: log contacts with their types
@@ -709,14 +712,18 @@ class WhatsAppClient {
       console.log('Groups found:', groups.length, groups.map(g => ({ id: g.id, name: g.name, type: g.type })));
       
       this.renderContacts();
-      
-      // Fetch avatars for all contacts in the background
-      this.contacts.forEach(contact => {
-        this.fetchAvatar(contact.id);
-      });
     } catch (err) {
       console.error('Failed to load contacts:', err);
     }
+  }
+
+  scheduleRenderContacts() {
+    if (this.contactsRenderTimer) return;
+
+    this.contactsRenderTimer = setTimeout(() => {
+      this.contactsRenderTimer = null;
+      this.renderContacts();
+    }, 50);
   }
 
   // Fetch avatar for a contact
@@ -729,7 +736,9 @@ class WhatsAppClient {
     this.avatarFetching.add(jid);
 
     try {
-      const response = await fetch(`/api/avatar/${encodeURIComponent(jid)}`);
+      const response = await fetch(`/api/avatar/${encodeURIComponent(jid)}`, {
+        headers: this.getAuthHeaders()
+      });
       const data = await response.json();
       
       if (data.url) {
@@ -879,6 +888,14 @@ class WhatsAppClient {
         </div>
       `;
     }).join('');
+
+    // Fetch avatars lazily for just the visible contact rows after the list renders.
+    const visibleContacts = Array.from(container.querySelectorAll('.contact-item[data-contact-id]'))
+      .slice(0, 24)
+      .map(el => el.dataset.contactId)
+      .filter(Boolean);
+
+    visibleContacts.forEach(contactId => this.fetchAvatar(contactId));
   }
 
   // Get message preview text
@@ -968,7 +985,7 @@ class WhatsAppClient {
       this.fetchConversationUsage(contactId);
       
       // Re-render contacts to update active state and unread
-      this.renderContacts();
+      this.scheduleRenderContacts();
       
       // Update send button state and focus input (only on desktop)
       this.updateSendButton();
@@ -984,7 +1001,9 @@ class WhatsAppClient {
   async loadMessages(contactId) {
     try {
       this.messagesLoading.set(contactId, true);
-      const response = await fetch(`/api/messages/${encodeURIComponent(contactId)}`);
+      const response = await fetch(`/api/messages/${encodeURIComponent(contactId)}`, {
+        headers: this.getAuthHeaders()
+      });
       const data = await response.json();
       
       // Handle both old format (array) and new format (object with messages/hasMore)
@@ -1021,7 +1040,10 @@ class WhatsAppClient {
       this.showLoadingIndicator();
       
       const response = await fetch(
-        `/api/messages/${encodeURIComponent(contactId)}?before=${oldestTimestamp}&limit=50`
+        `/api/messages/${encodeURIComponent(contactId)}?before=${oldestTimestamp}&limit=50`,
+        {
+          headers: this.getAuthHeaders()
+        }
       );
       const data = await response.json();
       

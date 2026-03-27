@@ -285,10 +285,13 @@ impl TranslationService {
         }
 
         let instructions = format!(
-            "Return JSON only. Detect the language of the provided text and respond with a JSON object in this exact shape: {{\"language\":\"Language Name\",\"isTargetLanguage\":true}}. Set isTargetLanguage to true only if the text is already written primarily in {}.",
+            "Detect the language of the provided text. Set isTargetLanguage to true only if the text is already written primarily in {}.",
             target_language
         );
-        let input_text = format!("Text: {}", text.chars().take(500).collect::<String>());
+        let input_text = format!(
+            "Return JSON only. Respond with a JSON object in this exact shape: {{\"language\":\"Language Name\",\"isTargetLanguage\":true}}.\n\nText: {}",
+            text.chars().take(500).collect::<String>()
+        );
 
         let (content, usage) = self
             .request_text_output(

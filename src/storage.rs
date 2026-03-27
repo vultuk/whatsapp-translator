@@ -165,7 +165,8 @@ impl MessageStore {
                 phone TEXT,
                 type TEXT,
                 last_message_time INTEGER DEFAULT 0,
-                unread_count INTEGER DEFAULT 0
+                unread_count INTEGER DEFAULT 0,
+                last_message_preview TEXT
             );
 
             -- Messages table
@@ -280,6 +281,9 @@ impl MessageStore {
         // Add pinned_at column for pinning contacts
         self.migrate_add_pinned_column(&conn)?;
 
+        // Add last_message_preview column and backfill it for faster contact list loads
+        self.migrate_add_last_message_preview_column(&conn)?;
+
         // Add style_profiles table for AI reply generation
         self.migrate_add_style_profiles_table(&conn)?;
 
@@ -360,6 +364,65 @@ impl MessageStore {
             info!("Migrating database: adding pinned_at column...");
             conn.execute("ALTER TABLE contacts ADD COLUMN pinned_at INTEGER", [])?;
             info!("Database migration complete: added pinned_at column");
+        }
+
+        Ok(())
+    }
+
+    /// Add last_message_preview column and backfill previews for existing contacts
+    fn migrate_add_last_message_preview_column(&self, conn: &Connection) -> Result<()> {
+        let has_last_message_preview: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('contacts') WHERE name = 'last_message_preview'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        if !has_last_message_preview {
+            info!("Migrating database: adding last_message_preview column...");
+            conn.execute(
+                "ALTER TABLE contacts ADD COLUMN last_message_preview TEXT",
+                [],
+            )?;
+
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT 
+                    c.id,
+                    m.content_json,
+                    m.content_type,
+                    m.is_from_me
+                FROM contacts c
+                LEFT JOIN (
+                    SELECT contact_id, content_json, content_type, is_from_me,
+                           ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY timestamp DESC, rowid DESC) as rn
+                    FROM messages
+                ) m ON m.contact_id = c.id AND m.rn = 1
+                "#,
+            )?;
+
+            let rows: Vec<(String, Option<String>, Option<String>, Option<bool>)> = stmt
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            for (contact_id, content_json, content_type, is_from_me) in rows {
+                let preview = Self::generate_message_preview(
+                    content_json.as_deref(),
+                    content_type.as_deref(),
+                    is_from_me.unwrap_or(false),
+                );
+                conn.execute(
+                    "UPDATE contacts SET last_message_preview = ? WHERE id = ?",
+                    params![preview, contact_id],
+                )?;
+            }
+
+            info!("Database migration complete: added last_message_preview");
         }
 
         Ok(())
@@ -511,6 +574,11 @@ impl MessageStore {
     /// Add a message to the store
     pub fn add_message(&self, msg: &StoredMessage) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        let preview = Self::generate_message_preview(
+            Some(&msg.content_json),
+            Some(&msg.content_type),
+            msg.is_from_me,
+        );
 
         conn.execute(
             r#"
@@ -536,6 +604,16 @@ impl MessageStore {
                 msg.source_language,
                 msg.is_translated,
             ],
+        )?;
+
+        conn.execute(
+            r#"
+            UPDATE contacts
+            SET last_message_time = MAX(last_message_time, ?2),
+                last_message_preview = ?3
+            WHERE id = ?1
+            "#,
+            params![msg.contact_id, msg.timestamp, preview],
         )?;
 
         Ok(())
@@ -566,38 +644,20 @@ impl MessageStore {
     pub fn get_contacts(&self) -> Result<Vec<StoredContact>> {
         let conn = self.conn.lock().unwrap();
 
-        // Use a subquery to get the last message for each contact
-        // The inner subquery ensures we only get one message per contact (the latest by rowid)
         let mut stmt = conn.prepare(
             r#"
-            SELECT 
-                c.id, c.name, c.phone, c.type, c.last_message_time, c.unread_count, c.pinned_at,
-                m.content_json, m.content_type, m.is_from_me
-            FROM contacts c
-            LEFT JOIN (
-                SELECT contact_id, content_json, content_type, is_from_me, timestamp,
-                       ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY timestamp DESC, rowid DESC) as rn
-                FROM messages
-            ) m ON m.contact_id = c.id AND m.rn = 1
+            SELECT
+                id, name, phone, type, last_message_time, unread_count, pinned_at, last_message_preview
+            FROM contacts
             ORDER BY 
-                CASE WHEN c.pinned_at IS NOT NULL THEN 0 ELSE 1 END,
-                c.pinned_at ASC,
-                c.last_message_time DESC
+                CASE WHEN pinned_at IS NOT NULL THEN 0 ELSE 1 END,
+                pinned_at ASC,
+                last_message_time DESC
             "#,
         )?;
 
         let contacts = stmt
             .query_map([], |row| {
-                let content_json: Option<String> = row.get(7)?;
-                let content_type: Option<String> = row.get(8)?;
-                let is_from_me: Option<bool> = row.get(9)?;
-
-                let preview = Self::generate_message_preview(
-                    content_json.as_deref(),
-                    content_type.as_deref(),
-                    is_from_me.unwrap_or(false),
-                );
-
                 Ok(StoredContact {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -606,7 +666,7 @@ impl MessageStore {
                     last_message_time: row.get(4)?,
                     unread_count: row.get(5)?,
                     pinned_at: row.get(6)?,
-                    last_message_preview: preview,
+                    last_message_preview: row.get(7)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -1000,31 +1060,15 @@ impl MessageStore {
 
         let mut stmt = conn.prepare(
             r#"
-            SELECT 
-                c.id, c.name, c.phone, c.type, c.last_message_time, c.unread_count, c.pinned_at,
-                m.content_json, m.content_type, m.is_from_me
-            FROM contacts c
-            LEFT JOIN (
-                SELECT contact_id, content_json, content_type, is_from_me,
-                       ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY timestamp DESC, rowid DESC) as rn
-                FROM messages
-            ) m ON m.contact_id = c.id AND m.rn = 1
-            WHERE c.id = ?
+            SELECT
+                id, name, phone, type, last_message_time, unread_count, pinned_at, last_message_preview
+            FROM contacts
+            WHERE id = ?
             "#,
         )?;
 
         let contact = stmt
             .query_row(params![contact_id], |row| {
-                let content_json: Option<String> = row.get(7)?;
-                let content_type: Option<String> = row.get(8)?;
-                let is_from_me: Option<bool> = row.get(9)?;
-
-                let preview = Self::generate_message_preview(
-                    content_json.as_deref(),
-                    content_type.as_deref(),
-                    is_from_me.unwrap_or(false),
-                );
-
                 Ok(StoredContact {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -1033,7 +1077,7 @@ impl MessageStore {
                     last_message_time: row.get(4)?,
                     unread_count: row.get(5)?,
                     pinned_at: row.get(6)?,
-                    last_message_preview: preview,
+                    last_message_preview: row.get(7)?,
                 })
             })
             .ok();
