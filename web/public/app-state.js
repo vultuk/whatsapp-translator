@@ -2,6 +2,8 @@ const DEFAULT_FILTERS = {
   unreadOnly: false,
   groupsOnly: false,
   draftsOnly: false,
+  pinnedOnly: false,
+  notesOnly: false,
 };
 
 function normalizeText(value) {
@@ -122,7 +124,11 @@ export function filterMessagesByQuery(messages, query, options = {}) {
   });
 }
 
-function contactMatchesSearch(contact, draftPreview, messagePreview, normalizedQuery) {
+function getMetadata(metadataByContact, contactId) {
+  return metadataByContact?.[contactId] || {};
+}
+
+function contactMatchesSearch(contact, draftPreview, messagePreview, metadata, normalizedQuery) {
   if (!normalizedQuery) return true;
 
   const haystack = [
@@ -131,6 +137,8 @@ function contactMatchesSearch(contact, draftPreview, messagePreview, normalizedQ
     contact?.id,
     draftPreview,
     messagePreview,
+    metadata?.notes,
+    metadata?.notePreview,
   ]
     .filter(Boolean)
     .join(' ')
@@ -145,6 +153,7 @@ export function getVisibleContacts({
   searchQuery = '',
   filters = DEFAULT_FILTERS,
   messagePreviewByContact = {},
+  metadataByContact = {},
 }) {
   const normalizedQuery = normalizeText(searchQuery);
   const mergedFilters = { ...DEFAULT_FILTERS, ...(filters || {}) };
@@ -152,6 +161,9 @@ export function getVisibleContacts({
   return (contacts || []).filter((contact) => {
     const draftPreview = getDraftPreview(drafts, contact.id);
     const hasDraft = Boolean(draftPreview);
+    const metadata = getMetadata(metadataByContact, contact.id);
+    const isPinned = metadata?.pinnedAt != null || contact?.pinnedAt != null;
+    const hasNotes = Boolean(normalizeText(metadata?.notes || metadata?.notePreview));
 
     if (mergedFilters.unreadOnly && !(contact.unreadCount > 0)) {
       return false;
@@ -165,10 +177,19 @@ export function getVisibleContacts({
       return false;
     }
 
+    if (mergedFilters.pinnedOnly && !isPinned) {
+      return false;
+    }
+
+    if (mergedFilters.notesOnly && !hasNotes) {
+      return false;
+    }
+
     return contactMatchesSearch(
       contact,
       draftPreview,
       messagePreviewByContact?.[contact.id] || '',
+      metadata,
       normalizedQuery,
     );
   });

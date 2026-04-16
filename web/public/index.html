@@ -84,6 +84,23 @@
             </button>
           </div>
         </header>
+
+        <section class="inbox-toolbar">
+          <label class="inbox-search" for="inbox-search-input">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16a6.47 6.47 0 0 0 4.23-1.57l.27.28v.79L20 21.5 21.5 20l-6-6zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/>
+            </svg>
+            <input id="inbox-search-input" type="search" placeholder="Search chats, drafts, or notes">
+          </label>
+          <div class="inbox-filter-row">
+            <button class="inbox-filter-chip" data-inbox-filter="unreadOnly" type="button">Unread</button>
+            <button class="inbox-filter-chip" data-inbox-filter="groupsOnly" type="button">Groups</button>
+            <button class="inbox-filter-chip" data-inbox-filter="draftsOnly" type="button">Drafts</button>
+            <button class="inbox-filter-chip" data-inbox-filter="pinnedOnly" type="button">Pinned</button>
+            <button class="inbox-filter-chip" data-inbox-filter="notesOnly" type="button">Notes</button>
+            <button id="inbox-clear-button" class="inbox-filter-clear" type="button">Clear</button>
+          </div>
+        </section>
         
         <div id="contacts-list" class="contacts-list">
           <div class="empty-state">
@@ -127,6 +144,7 @@
             <div class="chat-info">
               <span id="chat-name" class="chat-name">Contact Name</span>
               <span id="chat-phone" class="chat-phone"></span>
+              <span id="chat-note-indicator" class="chat-note-indicator hidden"></span>
               <span id="typing-indicator" class="typing-indicator hidden">typing...</span>
             </div>
             <div class="chat-actions">
@@ -279,6 +297,15 @@
             <input type="text" id="translation-style" placeholder="e.g., formal, informal, family, geek">
             <p class="form-hint">Leave empty for standard translation. This affects how the translation is phrased.</p>
           </div>
+          <div class="form-group">
+            <label for="conversation-notes">Private Notes</label>
+            <textarea id="conversation-notes" rows="4" placeholder="Remember the follow-up, tone, or next step for this conversation"></textarea>
+            <p class="form-hint">Visible only in this browser. Great for visitor-style context you don't want to send by accident.</p>
+          </div>
+          <label class="checkbox-row" for="settings-pinned">
+            <input type="checkbox" id="settings-pinned">
+            <span>Pin this conversation to the top of the inbox</span>
+          </label>
         </div>
         <div class="modal-footer">
           <button class="modal-button secondary" id="settings-cancel">Cancel</button>
