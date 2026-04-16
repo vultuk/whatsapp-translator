@@ -81,6 +81,7 @@ test('getVisibleContacts prioritizes drafts, unread filter, and search matching'
     searchQuery: 'travel',
     filters: { unreadOnly: false, groupsOnly: false, draftsOnly: false },
     messagePreviewByContact: {},
+    metadataByContact: {},
   }).map(contact => contact.id);
 
   assert.deepEqual(visibleWithSearch, ['alice']);
@@ -91,6 +92,7 @@ test('getVisibleContacts prioritizes drafts, unread filter, and search matching'
     searchQuery: '',
     filters: { unreadOnly: true, groupsOnly: false, draftsOnly: false },
     messagePreviewByContact: {},
+    metadataByContact: {},
   }).map(contact => contact.id);
 
   assert.deepEqual(unreadOnly, ['project']);
@@ -101,7 +103,56 @@ test('getVisibleContacts prioritizes drafts, unread filter, and search matching'
     searchQuery: '',
     filters: { unreadOnly: false, groupsOnly: false, draftsOnly: true },
     messagePreviewByContact: {},
+    metadataByContact: {},
   }).map(contact => contact.id);
 
   assert.deepEqual(draftsOnly, ['alice']);
+});
+
+test('getVisibleContacts supports pinned and notes-only inbox filters', () => {
+  const contacts = [
+    { id: 'vip', name: 'VIP Client', phone: '555', type: 'private', unreadCount: 0, lastMessageTime: 30 },
+    { id: 'family', name: 'Family', phone: '777', type: 'group', unreadCount: 2, lastMessageTime: 40 },
+  ];
+
+  const metadataByContact = {
+    vip: { pinnedAt: 100, notes: 'Needs the pricing recap before Friday' },
+    family: { pinnedAt: null, notes: '' },
+  };
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: '',
+      filters: { pinnedOnly: true },
+      messagePreviewByContact: {},
+      metadataByContact,
+    }).map(contact => contact.id),
+    ['vip'],
+  );
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: '',
+      filters: { notesOnly: true },
+      messagePreviewByContact: {},
+      metadataByContact,
+    }).map(contact => contact.id),
+    ['vip'],
+  );
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: 'pricing recap',
+      filters: {},
+      messagePreviewByContact: {},
+      metadataByContact,
+    }).map(contact => contact.id),
+    ['vip'],
+  );
 });

@@ -5,6 +5,7 @@ import {
   filterMessagesByQuery,
   getDraftPreview,
   getDraftText,
+  getVisibleContacts,
   isMessageStarred,
   toggleStarredMessage,
   upsertDraft,
@@ -16,6 +17,7 @@ class WhatsAppClient {
     this.connected = false;
     this.contacts = [];
     this.currentContactId = null;
+    this.settingsContactId = null;
     this.initialMessageLimit = 30;
     this.messageCacheLimit = 200;
     this.notificationsReadyAt = 0;
@@ -41,8 +43,20 @@ class WhatsAppClient {
     this.currentEmojiCategory = 'recent';
     this.draftsStorageKey = 'wa_chat_drafts';
     this.starredStorageKey = 'wa_starred_messages';
+    this.contactMetadataStorageKey = 'wa_contact_metadata';
+    this.inboxPreferencesStorageKey = 'wa_inbox_preferences';
     this.drafts = this.loadStoredJson(this.draftsStorageKey);
     this.starredMessages = this.loadStoredJson(this.starredStorageKey);
+    this.contactMetadata = this.loadStoredJson(this.contactMetadataStorageKey);
+    const storedInboxPreferences = this.loadStoredJson(this.inboxPreferencesStorageKey);
+    this.sidebarSearchQuery = typeof storedInboxPreferences.searchQuery === 'string' ? storedInboxPreferences.searchQuery : '';
+    this.contactFilters = {
+      unreadOnly: Boolean(storedInboxPreferences.unreadOnly),
+      groupsOnly: Boolean(storedInboxPreferences.groupsOnly),
+      draftsOnly: Boolean(storedInboxPreferences.draftsOnly),
+      pinnedOnly: Boolean(storedInboxPreferences.pinnedOnly),
+      notesOnly: Boolean(storedInboxPreferences.notesOnly),
+    };
     this.messageSearchQuery = '';
     this.starredOnly = false;
     this.fullyLoadedContacts = new Set();
@@ -99,6 +113,7 @@ class WhatsAppClient {
     this.updateDraftBanner();
     this.updateStarredToggleUI();
     this.updateChatSearchUI();
+    this.syncInboxControls();
   }
 
   loadStoredJson(key) {
@@ -120,6 +135,123 @@ class WhatsAppClient {
 
   persistStarredMessages() {
     this.saveStoredJson(this.starredStorageKey, this.starredMessages);
+  }
+
+  persistContactMetadata() {
+    this.saveStoredJson(this.contactMetadataStorageKey, this.contactMetadata);
+  }
+
+  persistInboxPreferences() {
+    this.saveStoredJson(this.inboxPreferencesStorageKey, {
+      searchQuery: this.sidebarSearchQuery,
+      ...this.contactFilters,
+    });
+  }
+
+  getContactMetadata(contactId) {
+    return this.contactMetadata?.[contactId] || {};
+  }
+
+  getContactNotePreview(contactId, maxLength = 64) {
+    const notes = String(this.getContactMetadata(contactId).notes || '').trim();
+    if (!notes) return '';
+    return notes.length > maxLength ? `${notes.slice(0, maxLength - 1)}…` : notes;
+  }
+
+  updateContactMetadata(contactId, updates = {}) {
+    if (!contactId) return {};
+
+    const current = this.getContactMetadata(contactId);
+    const next = { ...current };
+    for (const [key, value] of Object.entries(updates)) {
+      if (value === null || value === undefined || value === '') {
+        delete next[key];
+      } else {
+        next[key] = value;
+      }
+    }
+
+    if (Object.keys(next).length === 0) {
+      delete this.contactMetadata[contactId];
+    } else {
+      this.contactMetadata[contactId] = next;
+    }
+
+    this.persistContactMetadata();
+    return this.getContactMetadata(contactId);
+  }
+
+  applyStoredContactMetadata(contact) {
+    if (!contact?.id) return contact;
+    return { ...contact, ...this.getContactMetadata(contact.id) };
+  }
+
+  syncInboxControls() {
+    const searchInput = document.getElementById('inbox-search-input');
+    if (searchInput && searchInput.value !== this.sidebarSearchQuery) {
+      searchInput.value = this.sidebarSearchQuery;
+    }
+
+    document.querySelectorAll('[data-inbox-filter]').forEach((button) => {
+      const key = button.dataset.inboxFilter;
+      button.classList.toggle('active', Boolean(this.contactFilters[key]));
+    });
+  }
+
+  setInboxSearchQuery(value) {
+    this.sidebarSearchQuery = String(value || '').trimStart();
+    this.persistInboxPreferences();
+    this.renderContacts();
+  }
+
+  toggleInboxFilter(filterName) {
+    if (!(filterName in this.contactFilters)) return;
+    this.contactFilters[filterName] = !this.contactFilters[filterName];
+    this.persistInboxPreferences();
+    this.syncInboxControls();
+    this.renderContacts();
+  }
+
+  clearInboxFilters() {
+    this.sidebarSearchQuery = '';
+    for (const key of Object.keys(this.contactFilters)) {
+      this.contactFilters[key] = false;
+    }
+    this.persistInboxPreferences();
+    this.syncInboxControls();
+    this.renderContacts();
+  }
+
+  buildMessagePreviewLookup() {
+    const previewByContact = {};
+    for (const contact of this.contacts) {
+      const messages = this.messages.get(contact.id) || [];
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage) {
+        previewByContact[contact.id] = this.getMessagePreview(lastMessage);
+      } else if (contact.lastMessagePreview) {
+        previewByContact[contact.id] = contact.lastMessagePreview;
+      }
+    }
+    return previewByContact;
+  }
+
+  getFilteredContacts() {
+    return getVisibleContacts({
+      contacts: this.contacts,
+      drafts: this.drafts,
+      searchQuery: this.sidebarSearchQuery,
+      filters: this.contactFilters,
+      messagePreviewByContact: this.buildMessagePreviewLookup(),
+      metadataByContact: this.contactMetadata,
+    }).sort((a, b) => {
+      const aPinned = a.pinnedAt != null;
+      const bPinned = b.pinnedAt != null;
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+      if (aPinned && bPinned) return a.pinnedAt - b.pinnedAt;
+      return (b.lastMessageTime || 0) - (a.lastMessageTime || 0);
+    });
   }
 
   // Fix for iOS/iPad keyboard suggestion bar causing layout issues
@@ -388,26 +520,13 @@ class WhatsAppClient {
 
   // Toggle pin status for a contact
   async togglePin(contactId) {
-    try {
-      const response = await fetch(`/api/contacts/${encodeURIComponent(contactId)}/pin`, {
-        method: 'POST'
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to toggle pin');
-      }
-      
-      const result = await response.json();
-      
-      // Update local contact
-      const contact = this.contacts.find(c => c.id === contactId);
-      if (contact) {
-        contact.pinnedAt = result.pinned ? Date.now() : null;
-        this.scheduleRenderContacts();
-      }
-    } catch (err) {
-      console.error('Failed to toggle pin:', err);
-    }
+    const contact = this.contacts.find(c => c.id === contactId);
+    if (!contact) return;
+
+    const nextPinnedAt = contact.pinnedAt != null ? null : Date.now();
+    contact.pinnedAt = nextPinnedAt;
+    this.updateContactMetadata(contactId, { pinnedAt: nextPinnedAt });
+    this.scheduleRenderContacts();
   }
 
   // Handle status update
@@ -961,13 +1080,8 @@ class WhatsAppClient {
       const response = await fetch('/api/contacts', {
         headers: this.getAuthHeaders()
       });
-      this.contacts = await response.json();
-      
-      // Debug: log contacts with their types
-      console.log('Loaded contacts:', this.contacts.length);
-      const groups = this.contacts.filter(c => c.type === 'group');
-      console.log('Groups found:', groups.length, groups.map(g => ({ id: g.id, name: g.name, type: g.type })));
-      
+      this.contacts = (await response.json()).map(contact => this.applyStoredContactMetadata(contact));
+      this.syncInboxControls();
       this.renderContacts();
     } catch (err) {
       console.error('Failed to load contacts:', err);
@@ -1048,21 +1162,21 @@ class WhatsAppClient {
       `;
       return;
     }
-    
-    // Contacts are already sorted by the backend (pinned first, then by last message time)
-    // But we'll sort locally too to ensure proper ordering when updates happen
-    const sorted = [...this.contacts].sort((a, b) => {
-      // Pinned items first
-      const aPinned = a.pinnedAt != null;
-      const bPinned = b.pinnedAt != null;
-      if (aPinned && !bPinned) return -1;
-      if (!aPinned && bPinned) return 1;
-      // Both pinned: sort by pin time (earlier pinned = higher)
-      if (aPinned && bPinned) return a.pinnedAt - b.pinnedAt;
-      // Both unpinned: sort by last message time
-      return b.lastMessageTime - a.lastMessageTime;
-    });
-    
+
+    this.syncInboxControls();
+    const sorted = this.getFilteredContacts();
+    if (sorted.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <p>No conversations match this inbox view</p>
+          <p class="hint">Try a different search or clear a few filters.</p>
+          <button id="inbox-reset-empty" class="sidebar-reset-button">Reset inbox filters</button>
+        </div>
+      `;
+      document.getElementById('inbox-reset-empty')?.addEventListener('click', () => this.clearInboxFilters());
+      return;
+    }
+
     container.innerHTML = sorted.map(contact => {
       const isGroup = contact.type === 'group';
       const isPinned = contact.pinnedAt != null;
@@ -1082,6 +1196,8 @@ class WhatsAppClient {
       const isActive = contact.id === this.currentContactId;
       const unread = contact.unreadCount > 0 ? 
         `<span class="unread-badge">${contact.unreadCount}</span>` : '';
+      const notePreview = this.getContactNotePreview(contact.id);
+      const noteBadge = notePreview ? '<span class="contact-meta-chip">Note</span>' : '';
       
       // Get last message preview - prefer saved drafts, then cached messages, then backend preview
       const messages = this.messages.get(contact.id) || [];
@@ -1138,7 +1254,10 @@ class WhatsAppClient {
           </div>
           <div class="contact-details">
             <div class="contact-header">
-              <span class="contact-name">${this.escapeHtml(displayName)}</span>
+              <div class="contact-title">
+                <span class="contact-name">${this.escapeHtml(displayName)}</span>
+                ${noteBadge}
+              </div>
               <span class="contact-time">${time}</span>
             </div>
             <div class="contact-preview">
@@ -1275,6 +1394,7 @@ class WhatsAppClient {
       // Update chat header
       if (contact) {
         document.getElementById('chat-name').textContent = contact.name || contact.phone || 'Unknown';
+        this.updateChatHeaderNote();
         document.getElementById('chat-phone').textContent = contact.phone ? '+' + contact.phone : '';
         
         const initial = (contact.name || contact.phone || '?').charAt(0).toUpperCase();
@@ -3037,6 +3157,18 @@ class WhatsAppClient {
       this.handleLogout();
     });
 
+    document.getElementById('inbox-search-input')?.addEventListener('input', (event) => {
+      this.setInboxSearchQuery(event.target.value);
+    });
+
+    document.getElementById('inbox-clear-button')?.addEventListener('click', () => {
+      this.clearInboxFilters();
+    });
+
+    document.querySelectorAll('[data-inbox-filter]').forEach((button) => {
+      button.addEventListener('click', () => this.toggleInboxFilter(button.dataset.inboxFilter));
+    });
+
     // Contact click
     document.getElementById('contacts-list').addEventListener('click', (e) => {
       const contactItem = e.target.closest('.contact-item');
@@ -3235,8 +3367,7 @@ class WhatsAppClient {
       if (action === 'pin') {
         this.togglePin(contactId);
       } else if (action === 'settings') {
-        this.currentContactId = contactId;
-        this.openSettingsModal();
+        this.openSettingsModal(contactId);
       }
 
       this.hideContactContextMenu();
@@ -3826,8 +3957,8 @@ class WhatsAppClient {
   }
 
   // Open settings modal for current contact
-  async openSettingsModal() {
-    if (!this.currentContactId) {
+  async openSettingsModal(contactId = this.currentContactId) {
+    if (!contactId) {
       console.warn('No contact selected');
       return;
     }
@@ -3835,25 +3966,54 @@ class WhatsAppClient {
     const modal = document.getElementById('settings-modal');
     if (!modal) return;
 
-    // Fetch current settings
+    this.settingsContactId = contactId;
+    let settings = {};
     try {
-      const response = await fetch(`/api/contacts/${encodeURIComponent(this.currentContactId)}/settings`);
-      const settings = await response.json();
-
-      // Populate form fields
-      document.getElementById('language-override').value = settings.languageOverride || '';
-      document.getElementById('translation-style').value = settings.translationStyle || '';
-
-      // Show modal
-      modal.classList.remove('hidden');
+      const response = await fetch(`/api/contacts/${encodeURIComponent(contactId)}/settings`, {
+        headers: this.getAuthHeaders()
+      });
+      if (response.ok) {
+        settings = await response.json();
+      }
     } catch (err) {
-      console.error('Failed to fetch conversation settings:', err);
-      alert('Failed to load settings. Please try again.');
+      console.warn('Failed to fetch conversation settings, falling back to local settings only:', err);
+    }
+
+    const localSettings = this.getContactMetadata(contactId);
+    const mergedSettings = {
+      ...settings,
+      ...localSettings,
+      notes: localSettings.notes || '',
+      pinnedAt: localSettings.pinnedAt || null,
+    };
+
+    document.getElementById('language-override').value = mergedSettings.languageOverride || '';
+    document.getElementById('translation-style').value = mergedSettings.translationStyle || '';
+    document.getElementById('conversation-notes').value = mergedSettings.notes || '';
+    const pinToggle = document.getElementById('settings-pinned');
+    if (pinToggle) {
+      pinToggle.checked = Boolean(mergedSettings.pinnedAt);
+    }
+
+    modal.classList.remove('hidden');
+  }
+
+  updateChatHeaderNote() {
+    const noteEl = document.getElementById('chat-note-indicator');
+    if (!noteEl) return;
+    const preview = this.currentContactId ? this.getContactNotePreview(this.currentContactId, 96) : '';
+    if (preview) {
+      noteEl.textContent = `Private note: ${preview}`;
+      noteEl.classList.remove('hidden');
+    } else {
+      noteEl.textContent = '';
+      noteEl.classList.add('hidden');
     }
   }
 
   // Close settings modal
   closeSettingsModal() {
+    this.settingsContactId = null;
     const modal = document.getElementById('settings-modal');
     if (modal) {
       modal.classList.add('hidden');
@@ -3862,13 +4022,30 @@ class WhatsAppClient {
 
   // Save conversation settings
   async saveConversationSettings() {
-    if (!this.currentContactId) return;
+    const targetContactId = this.settingsContactId || this.currentContactId;
+    if (!targetContactId) return;
 
     const languageOverride = document.getElementById('language-override')?.value?.trim() || null;
     const translationStyle = document.getElementById('translation-style')?.value?.trim() || null;
+    const notes = document.getElementById('conversation-notes')?.value?.trim() || null;
+    const pinned = Boolean(document.getElementById('settings-pinned')?.checked);
+    const pinnedAt = pinned ? (this.getContactMetadata(targetContactId).pinnedAt || Date.now()) : null;
+
+    this.updateContactMetadata(targetContactId, {
+      notes,
+      notePreview: notes || null,
+      pinnedAt,
+    });
+
+    const contact = this.contacts.find(item => item.id === targetContactId);
+    if (contact) {
+      contact.notes = notes;
+      contact.notePreview = notes || null;
+      contact.pinnedAt = pinnedAt;
+    }
 
     try {
-      const response = await fetch(`/api/contacts/${encodeURIComponent(this.currentContactId)}/settings`, {
+      const response = await fetch(`/api/contacts/${encodeURIComponent(targetContactId)}/settings`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -3884,18 +4061,20 @@ class WhatsAppClient {
         throw new Error('Failed to save settings');
       }
 
-      const result = await response.json();
-      console.log('Settings saved:', result);
-
-      // Close modal
-      this.closeSettingsModal();
-
-      // Show success feedback (optional)
-      // You could add a toast notification here
+      if (contact) {
+        contact.languageOverride = languageOverride;
+        contact.translationStyle = translationStyle;
+      }
     } catch (err) {
       console.error('Failed to save conversation settings:', err);
-      alert('Failed to save settings. Please try again.');
+      alert('Saved local notes and pin state, but failed to save translation settings. Please try again.');
+      return;
     }
+
+    this.closeSettingsModal();
+    this.syncInboxControls();
+    this.renderContacts();
+    this.updateChatHeaderNote();
   }
 }
 
