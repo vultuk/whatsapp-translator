@@ -3,16 +3,20 @@
 import {
   countMatchingMessages,
   filterMessagesByQuery,
+  getContactDisplayName,
   getContactLabels,
   getDraftPreview,
   getDraftText,
   getReminderStatus,
+  getReplyState,
   getVisibleContacts,
   isContactSnoozed,
   isMessageStarred,
   parseLabelsInput,
+  removeQuickReply,
   toggleStarredMessage,
   upsertDraft,
+  upsertQuickReply,
 } from './app-state.js';
 
 class WhatsAppClient {
@@ -50,9 +54,11 @@ class WhatsAppClient {
     this.starredStorageKey = 'wa_starred_messages';
     this.contactMetadataStorageKey = 'wa_contact_metadata';
     this.inboxPreferencesStorageKey = 'wa_inbox_preferences';
+    this.quickRepliesStorageKey = 'wa_quick_replies';
     this.drafts = this.loadStoredJson(this.draftsStorageKey);
     this.starredMessages = this.loadStoredJson(this.starredStorageKey);
     this.contactMetadata = this.loadStoredJson(this.contactMetadataStorageKey);
+    this.quickReplies = this.loadStoredArray(this.quickRepliesStorageKey);
     const storedInboxPreferences = this.loadStoredJson(this.inboxPreferencesStorageKey);
     this.sidebarSearchQuery = typeof storedInboxPreferences.searchQuery === 'string' ? storedInboxPreferences.searchQuery : '';
     this.contactFilters = {
@@ -64,6 +70,7 @@ class WhatsAppClient {
       dueRemindersOnly: Boolean(storedInboxPreferences.dueRemindersOnly),
       labelsOnly: Boolean(storedInboxPreferences.labelsOnly),
       snoozedOnly: Boolean(storedInboxPreferences.snoozedOnly),
+      needsReplyOnly: Boolean(storedInboxPreferences.needsReplyOnly),
     };
     this.messageSearchQuery = '';
     this.starredOnly = false;
@@ -119,6 +126,7 @@ class WhatsAppClient {
     this.updateNotificationPrompt();
     this.setupNotificationPermissionRequest();
     this.updateDraftBanner();
+    this.renderQuickReplies();
     this.updateStarredToggleUI();
     this.updateChatSearchUI();
     this.syncInboxControls();
@@ -133,8 +141,22 @@ class WhatsAppClient {
     }
   }
 
+  loadStoredArray(key) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      console.warn(`Failed to load local array state for ${key}:`, err);
+      return [];
+    }
+  }
+
   saveStoredJson(key, value) {
     localStorage.setItem(key, JSON.stringify(value || {}));
+  }
+
+  saveStoredArray(key, value) {
+    localStorage.setItem(key, JSON.stringify(Array.isArray(value) ? value : []));
   }
 
   persistDrafts() {
@@ -147,6 +169,10 @@ class WhatsAppClient {
 
   persistContactMetadata() {
     this.saveStoredJson(this.contactMetadataStorageKey, this.contactMetadata);
+  }
+
+  persistQuickReplies() {
+    this.saveStoredArray(this.quickRepliesStorageKey, this.quickReplies);
   }
 
   persistInboxPreferences() {
@@ -168,6 +194,30 @@ class WhatsAppClient {
 
   getContactLabels(contactId) {
     return getContactLabels(this.getContactMetadata(contactId));
+  }
+
+  getContactDisplayName(contact) {
+    return getContactDisplayName(contact, this.getContactMetadata(contact?.id));
+  }
+
+  getReplyState(contactId, now = Date.now()) {
+    const contact = this.contacts.find(entry => entry.id === contactId) || { id: contactId };
+    return getReplyState({
+      contact,
+      messages: this.messages.get(contactId) || [],
+      drafts: this.drafts,
+      metadata: this.getContactMetadata(contactId),
+      contactId,
+      now,
+    });
+  }
+
+  getReplySummary(contactId, now = Date.now()) {
+    const replyState = this.getReplyState(contactId, now);
+    if (replyState === 'drafting') return 'Draft reply saved';
+    if (replyState === 'needs-reply') return 'Awaiting your reply';
+    if (replyState === 'waiting') return 'Waiting for their response';
+    return '';
   }
 
   getReminderSummary(contactId, now = Date.now()) {
@@ -192,6 +242,15 @@ class WhatsAppClient {
     const metadata = this.getContactMetadata(contactId);
     const badges = [];
     const reminderStatus = getReminderStatus(metadata, now);
+    const replyState = this.getReplyState(contactId, now);
+    if (replyState === 'needs-reply') {
+      badges.push('<span class="contact-meta-chip reply">Reply</span>');
+    } else if (replyState === 'drafting') {
+      badges.push('<span class="contact-meta-chip drafting">Drafting</span>');
+    } else if (replyState === 'waiting') {
+      badges.push('<span class="contact-meta-chip waiting">Waiting</span>');
+    }
+
     if (reminderStatus === 'due') {
       badges.push('<span class="contact-meta-chip due">Due</span>');
     } else if (reminderStatus === 'upcoming') {
@@ -217,6 +276,16 @@ class WhatsAppClient {
     if (!contactId) return '';
 
     const pieces = [];
+    const metadata = this.getContactMetadata(contactId);
+    if (metadata.alias) {
+      pieces.push(`Alias: ${metadata.alias}`);
+    }
+
+    const replySummary = this.getReplySummary(contactId, now);
+    if (replySummary) {
+      pieces.push(replySummary);
+    }
+
     const notePreview = this.getContactNotePreview(contactId, 96);
     if (notePreview) {
       pieces.push(`Private note: ${notePreview}`);
@@ -347,6 +416,7 @@ class WhatsAppClient {
 
   getFilteredContacts() {
     const now = Date.now();
+    const messagesByContact = Object.fromEntries(this.messages.entries());
     return getVisibleContacts({
       contacts: this.contacts,
       drafts: this.drafts,
@@ -354,6 +424,7 @@ class WhatsAppClient {
       filters: this.contactFilters,
       messagePreviewByContact: this.buildMessagePreviewLookup(),
       metadataByContact: this.contactMetadata,
+      messagesByContact,
       now,
     }).sort((a, b) => {
       const aMeta = this.getContactMetadata(a.id);
@@ -370,6 +441,11 @@ class WhatsAppClient {
       if (aReminder !== 'due' && bReminder === 'due') return 1;
       if (aReminder === 'upcoming' && bReminder === 'none') return -1;
       if (aReminder === 'none' && bReminder === 'upcoming') return 1;
+
+      const replyRank = { drafting: 0, 'needs-reply': 1, waiting: 2, idle: 3, snoozed: 4 };
+      const aReplyRank = replyRank[this.getReplyState(a.id, now)] ?? 99;
+      const bReplyRank = replyRank[this.getReplyState(b.id, now)] ?? 99;
+      if (aReplyRank !== bReplyRank) return aReplyRank - bReplyRank;
 
       const aDraft = getDraftText(this.drafts, a.id);
       const bDraft = getDraftText(this.drafts, b.id);
@@ -1311,17 +1387,7 @@ class WhatsAppClient {
       const isPinned = contact.pinnedAt != null;
       const reminderStatus = getReminderStatus(this.getContactMetadata(contact.id));
       const isSnoozed = isContactSnoozed(this.getContactMetadata(contact.id));
-      // Better display name logic
-      let displayName = contact.name;
-      if (!displayName && contact.phone) {
-        displayName = '+' + contact.phone;
-      } else if (!displayName && isGroup) {
-        displayName = 'Group Chat';
-      } else if (!displayName) {
-        // Extract phone from JID if available
-        const phoneFromJid = contact.id?.split('@')[0];
-        displayName = phoneFromJid ? '+' + phoneFromJid : 'Unknown';
-      }
+      const displayName = this.getContactDisplayName(contact);
       const initial = (displayName || '?').charAt(0).toUpperCase();
       const time = this.formatTime(contact.lastMessageTime);
       const isActive = contact.id === this.currentContactId;
@@ -1532,11 +1598,14 @@ class WhatsAppClient {
       
       // Update chat header
       if (contact) {
-        document.getElementById('chat-name').textContent = contact.name || contact.phone || 'Unknown';
+        const displayName = this.getContactDisplayName(contact);
+        document.getElementById('chat-name').textContent = displayName;
         this.updateChatHeaderNote();
-        document.getElementById('chat-phone').textContent = contact.phone ? '+' + contact.phone : '';
+        const originalName = contact.name && contact.name !== displayName ? contact.name : '';
+        const phoneText = contact.phone ? '+' + contact.phone : '';
+        document.getElementById('chat-phone').textContent = [originalName, phoneText].filter(Boolean).join(' · ');
         
-        const initial = (contact.name || contact.phone || '?').charAt(0).toUpperCase();
+        const initial = (displayName || '?').charAt(0).toUpperCase();
         // Get avatar container - it's the .avatar element in .chat-header
         const avatarContainer = document.querySelector('.chat-header .avatar');
         const avatarUrl = this.avatarCache.get(contactId);
@@ -1577,6 +1646,7 @@ class WhatsAppClient {
       this.scheduleRenderContacts();
       this.restoreDraftForCurrentContact();
       this.updateDraftBanner();
+      this.renderQuickReplies();
       document.getElementById('chat-search-bar')?.classList.add('hidden');
       const chatSearchInput = document.getElementById('chat-search-input');
       if (chatSearchInput) chatSearchInput.value = '';
@@ -2458,6 +2528,7 @@ class WhatsAppClient {
     this.drafts = upsertDraft(this.drafts, this.currentContactId, input?.value || '');
     this.persistDrafts();
     this.updateDraftBanner();
+    this.renderQuickReplies();
     this.scheduleRenderContacts();
   }
 
@@ -2474,6 +2545,7 @@ class WhatsAppClient {
     }
 
     this.updateDraftBanner();
+    this.renderQuickReplies();
     this.updateSendButton();
     this.scheduleRenderContacts();
   }
@@ -2491,6 +2563,65 @@ class WhatsAppClient {
 
     text.textContent = `${preview} · Restored automatically when you return.`;
     banner.classList.remove('hidden');
+  }
+
+  renderQuickReplies() {
+    const container = document.getElementById('quick-replies-list');
+    const saveButton = document.getElementById('quick-reply-save');
+    const draftText = this.currentContactId ? getDraftText(this.drafts, this.currentContactId) : '';
+
+    if (saveButton) {
+      saveButton.disabled = !this.currentContactId || !draftText;
+    }
+
+    if (!container) return;
+
+    if (!this.currentContactId) {
+      container.innerHTML = '<span class="quick-replies-empty">Choose a conversation to use saved replies.</span>';
+      return;
+    }
+
+    if (!Array.isArray(this.quickReplies) || this.quickReplies.length === 0) {
+      container.innerHTML = '<span class="quick-replies-empty">Save your best replies once and reuse them here.</span>';
+      return;
+    }
+
+    container.innerHTML = this.quickReplies.map((reply) => `
+      <button class="quick-reply-chip" type="button" data-quick-reply-id="${reply.id}" title="Insert saved reply">
+        <span class="quick-reply-text">${this.escapeHtml(reply.text)}</span>
+        <span class="quick-reply-remove" data-quick-reply-remove="${reply.id}" title="Remove saved reply">×</span>
+      </button>
+    `).join('');
+  }
+
+  saveCurrentDraftAsQuickReply() {
+    if (!this.currentContactId) return;
+    const draftText = getDraftText(this.drafts, this.currentContactId);
+    if (!draftText) return;
+
+    this.quickReplies = upsertQuickReply(this.quickReplies, draftText);
+    this.persistQuickReplies();
+    this.renderQuickReplies();
+  }
+
+  applyQuickReply(quickReplyId) {
+    const quickReply = (this.quickReplies || []).find((entry) => entry.id === quickReplyId);
+    if (!quickReply) return;
+
+    const input = document.getElementById('message-input');
+    if (!input) return;
+
+    input.value = quickReply.text;
+    this.autoResizeTextarea(input);
+    this.updateSendButton();
+    this.handleDraftInput();
+    input.focus();
+  }
+
+  deleteQuickReply(quickReplyId) {
+    this.quickReplies = removeQuickReply(this.quickReplies, quickReplyId);
+    this.persistQuickReplies();
+    this.renderQuickReplies();
   }
 
   toggleMessageStar(messageId) {
@@ -2652,6 +2783,7 @@ class WhatsAppClient {
       this.drafts = upsertDraft(this.drafts, this.currentContactId, '');
       this.persistDrafts();
       this.updateDraftBanner();
+      this.renderQuickReplies();
       this.clearReply();
       this.updateSendButton();
       this.autoResizeTextarea(input);
@@ -3464,6 +3596,24 @@ class WhatsAppClient {
       this.clearCurrentDraft();
     });
 
+    document.getElementById('quick-reply-save')?.addEventListener('click', () => {
+      this.saveCurrentDraftAsQuickReply();
+    });
+
+    document.getElementById('quick-replies-list')?.addEventListener('click', (event) => {
+      const removeTarget = event.target.closest('[data-quick-reply-remove]');
+      if (removeTarget) {
+        event.stopPropagation();
+        this.deleteQuickReply(removeTarget.dataset.quickReplyRemove);
+        return;
+      }
+
+      const quickReplyButton = event.target.closest('[data-quick-reply-id]');
+      if (quickReplyButton) {
+        this.applyQuickReply(quickReplyButton.dataset.quickReplyId);
+      }
+    });
+
     document.getElementById('chat-search-toggle')?.addEventListener('click', () => {
       this.toggleChatSearch();
     });
@@ -3566,6 +3716,7 @@ class WhatsAppClient {
     document.getElementById('chat-view').classList.add('hidden');
     document.getElementById('no-chat-selected').classList.remove('hidden');
     this.updateDraftBanner();
+    this.renderQuickReplies();
     this.updateStarredToggleUI();
     this.updateChatSearchUI();
     this.renderContacts();
@@ -4165,6 +4316,7 @@ class WhatsAppClient {
     const mergedSettings = {
       ...settings,
       ...localSettings,
+      alias: localSettings.alias || '',
       notes: localSettings.notes || '',
       pinnedAt: localSettings.pinnedAt || null,
       reminderText: localSettings.reminderText || '',
@@ -4173,6 +4325,7 @@ class WhatsAppClient {
       labels: this.getContactLabels(contactId),
     };
 
+    document.getElementById('contact-alias').value = mergedSettings.alias || '';
     document.getElementById('language-override').value = mergedSettings.languageOverride || '';
     document.getElementById('translation-style').value = mergedSettings.translationStyle || '';
     document.getElementById('conversation-notes').value = mergedSettings.notes || '';
@@ -4217,6 +4370,7 @@ class WhatsAppClient {
 
     const languageOverride = document.getElementById('language-override')?.value?.trim() || null;
     const translationStyle = document.getElementById('translation-style')?.value?.trim() || null;
+    const alias = document.getElementById('contact-alias')?.value?.trim() || null;
     const notes = document.getElementById('conversation-notes')?.value?.trim() || null;
     const labels = parseLabelsInput(document.getElementById('conversation-labels')?.value || '');
     const reminderText = document.getElementById('conversation-reminder-text')?.value?.trim() || null;
@@ -4230,6 +4384,7 @@ class WhatsAppClient {
     const pinnedAt = pinned ? (this.getContactMetadata(targetContactId).pinnedAt || Date.now()) : null;
 
     this.updateContactMetadata(targetContactId, {
+      alias,
       notes,
       notePreview: notes || null,
       pinnedAt,
@@ -4242,6 +4397,7 @@ class WhatsAppClient {
 
     const contact = this.contacts.find(item => item.id === targetContactId);
     if (contact) {
+      contact.alias = alias;
       contact.notes = notes;
       contact.notePreview = notes || null;
       contact.pinnedAt = pinnedAt;
@@ -4285,5 +4441,5 @@ class WhatsAppClient {
   }
 }
 
-// Initialize app
+/* Initialize app */
 window.app = new WhatsAppClient();

@@ -2702,6 +2702,106 @@ body {
   margin-bottom: 8px;
 }
 
+.contact-meta-chip.reply {
+  background: rgba(0, 168, 132, 0.18);
+  color: #7df1d5;
+}
+
+.contact-meta-chip.drafting {
+  background: rgba(255, 193, 7, 0.18);
+  color: #ffd76a;
+}
+
+.contact-meta-chip.waiting {
+  background: rgba(124, 77, 255, 0.2);
+  color: #cfb5ff;
+}
+
+.quick-replies-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 0;
+}
+
+.quick-replies-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quick-replies-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.quick-reply-save {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: rgba(0, 168, 132, 0.14);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.quick-reply-save:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.quick-replies-list {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.quick-replies-empty {
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 2px 0 6px;
+}
+
+.quick-reply-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 280px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.quick-reply-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-reply-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+}
+
 @media (max-width: 768px) {
   .compact-grid {
     grid-template-columns: 1fr;
@@ -2709,5 +2809,14 @@ body {
 
   .chat-note-indicator {
     max-width: 100%;
+  }
+
+  .quick-replies-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .quick-reply-chip {
+    max-width: 220px;
   }
 }

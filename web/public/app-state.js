@@ -7,6 +7,7 @@ const DEFAULT_FILTERS = {
   dueRemindersOnly: false,
   labelsOnly: false,
   snoozedOnly: false,
+  needsReplyOnly: false,
 };
 
 function normalizeText(value) {
@@ -21,6 +22,18 @@ function normalizeTimestamp(value) {
   if (value === null || value === undefined || value === '') return null;
   const timestamp = Number(value);
   return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+export function getContactDisplayName(contact = {}, metadata = {}) {
+  const alias = String(metadata?.alias || '').trim();
+  if (alias) return alias;
+
+  if (contact?.name) return contact.name;
+  if (contact?.phone) return `+${contact.phone}`;
+  if (contact?.type === 'group') return 'Group Chat';
+
+  const phoneFromJid = String(contact?.id || '').split('@')[0];
+  return phoneFromJid ? `+${phoneFromJid}` : 'Unknown';
 }
 
 export function parseLabelsInput(value) {
@@ -87,6 +100,70 @@ export function getDraftPreview(drafts, contactId, maxLength = 48) {
 
   const preview = draft.length > maxLength ? `${draft.slice(0, maxLength - 1)}…` : draft;
   return `Draft: ${preview}`;
+}
+
+export function getReplyState({
+  contact = {},
+  messages = [],
+  drafts = {},
+  metadata = {},
+  contactId = contact?.id,
+  now = Date.now(),
+} = {}) {
+  if (isContactSnoozed(metadata, now)) {
+    return 'snoozed';
+  }
+
+  if (getDraftText(drafts, contactId)) {
+    return 'drafting';
+  }
+
+  const latestMessage = Array.isArray(messages) && messages.length > 0
+    ? messages[messages.length - 1]
+    : null;
+
+  if (latestMessage) {
+    return latestMessage.isFromMe || latestMessage.is_from_me ? 'waiting' : 'needs-reply';
+  }
+
+  if ((contact?.unreadCount || 0) > 0) {
+    return 'needs-reply';
+  }
+
+  return 'idle';
+}
+
+function createQuickReplyId(text, updatedAt) {
+  const slug = String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24) || 'quick-reply';
+  return `${slug}-${updatedAt}`;
+}
+
+export function upsertQuickReply(quickReplies, text, updatedAt = Date.now(), maxItems = 8) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return Array.isArray(quickReplies) ? [...quickReplies] : [];
+
+  const normalized = trimmed.toLowerCase();
+  const nextReplies = (Array.isArray(quickReplies) ? quickReplies : [])
+    .filter(reply => normalizeText(reply?.text) !== normalized)
+    .map(reply => ({ ...reply }));
+
+  nextReplies.unshift({
+    id: createQuickReplyId(trimmed, updatedAt),
+    text: trimmed,
+    updatedAt,
+  });
+
+  return nextReplies.slice(0, Math.max(1, maxItems));
+}
+
+export function removeQuickReply(quickReplies, quickReplyId) {
+  return (Array.isArray(quickReplies) ? quickReplies : [])
+    .filter(reply => reply?.id !== quickReplyId)
+    .map(reply => ({ ...reply }));
 }
 
 function messageSnippet(message, maxLength = 140) {
@@ -177,6 +254,7 @@ function contactMatchesSearch(contact, draftPreview, messagePreview, metadata, n
     contact?.name,
     contact?.phone,
     contact?.id,
+    metadata?.alias,
     draftPreview,
     messagePreview,
     metadata?.notes,
@@ -199,6 +277,7 @@ export function getVisibleContacts({
   filters = DEFAULT_FILTERS,
   messagePreviewByContact = {},
   metadataByContact = {},
+  messagesByContact = {},
   now = Date.now(),
 }) {
   const normalizedQuery = normalizeText(searchQuery);
@@ -214,6 +293,14 @@ export function getVisibleContacts({
     const hasLabels = labels.length > 0;
     const reminderStatus = getReminderStatus(metadata, now);
     const isSnoozed = isContactSnoozed(metadata, now);
+    const replyState = getReplyState({
+      contact,
+      messages: messagesByContact?.[contact.id] || [],
+      drafts,
+      metadata,
+      contactId: contact.id,
+      now,
+    });
 
     if (isSnoozed && !mergedFilters.snoozedOnly) {
       return false;
@@ -248,6 +335,10 @@ export function getVisibleContacts({
     }
 
     if (mergedFilters.snoozedOnly && !isSnoozed) {
+      return false;
+    }
+
+    if (mergedFilters.needsReplyOnly && !['needs-reply', 'drafting'].includes(replyState)) {
       return false;
     }
 

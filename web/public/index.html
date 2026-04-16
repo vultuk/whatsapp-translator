@@ -90,10 +90,11 @@
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
               <path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16a6.47 6.47 0 0 0 4.23-1.57l.27.28v.79L20 21.5 21.5 20l-6-6zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/>
             </svg>
-            <input id="inbox-search-input" type="search" placeholder="Search chats, drafts, or notes">
+            <input id="inbox-search-input" type="search" placeholder="Search chats, aliases, drafts, or notes">
           </label>
           <div class="inbox-filter-row">
             <button class="inbox-filter-chip" data-inbox-filter="unreadOnly" type="button">Unread</button>
+            <button class="inbox-filter-chip" data-inbox-filter="needsReplyOnly" type="button">Needs reply</button>
             <button class="inbox-filter-chip" data-inbox-filter="groupsOnly" type="button">Groups</button>
             <button class="inbox-filter-chip" data-inbox-filter="draftsOnly" type="button">Drafts</button>
             <button class="inbox-filter-chip" data-inbox-filter="pinnedOnly" type="button">Pinned</button>
@@ -196,6 +197,13 @@
               <span id="draft-banner-text">Draft saved for this conversation</span>
               <button id="draft-clear-button" class="draft-clear-button" title="Discard draft">Discard draft</button>
             </div>
+            <div class="quick-replies-bar">
+              <div class="quick-replies-header">
+                <span class="quick-replies-label">Quick replies</span>
+                <button id="quick-reply-save" class="quick-reply-save" type="button">Save current draft</button>
+              </div>
+              <div id="quick-replies-list" class="quick-replies-list"></div>
+            </div>
             <div class="input-container">
               <input type="file" id="image-input" accept="image/*" style="display: none;">
               <div class="emoji-button-container">
@@ -290,6 +298,11 @@
           </button>
         </div>
         <div class="modal-body">
+          <div class="form-group">
+            <label for="contact-alias">Nickname / Alias</label>
+            <input type="text" id="contact-alias" placeholder="e.g., Madrid Airbnb host, plumber, Zoe from yoga">
+            <p class="form-hint">Rename chats locally so your inbox is recognizable at a glance.</p>
+          </div>
           <div class="form-group">
             <label for="language-override">Language Override</label>
             <input type="text" id="language-override" placeholder="e.g., Spanish, French, Japanese">

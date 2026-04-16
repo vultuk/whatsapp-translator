@@ -8,8 +8,12 @@ import {
   filterMessagesByQuery,
   getVisibleContacts,
   getReminderStatus,
+  getReplyState,
+  getContactDisplayName,
   isContactSnoozed,
   parseLabelsInput,
+  removeQuickReply,
+  upsertQuickReply,
 } from '../public/app-state.js';
 
 test('upsertDraft stores trimmed text and removes empty drafts', () => {
@@ -266,4 +270,80 @@ test('getVisibleContacts supports reminder and label-focused triage views', () =
     }).map(contact => contact.id),
     ['vip'],
   );
+});
+
+test('getReplyState identifies reply queues, drafts, and waiting states', () => {
+  const now = 1_710_000_000_000;
+  const incomingMessage = { id: 'm1', timestamp: now - 10_000, isFromMe: false, content: { type: 'text', body: 'Can you confirm?' } };
+  const outgoingMessage = { id: 'm2', timestamp: now - 5_000, isFromMe: true, content: { type: 'text', body: 'On it' } };
+
+  assert.equal(getReplyState({ contact: { id: 'vip', unreadCount: 0 }, messages: [incomingMessage], drafts: {} }), 'needs-reply');
+  assert.equal(getReplyState({ contact: { id: 'vip', unreadCount: 0 }, messages: [outgoingMessage], drafts: {} }), 'waiting');
+  assert.equal(getReplyState({ contact: { id: 'vip', unreadCount: 0 }, messages: [incomingMessage], drafts: { vip: { text: 'Draft reply', updatedAt: now } } }), 'drafting');
+  assert.equal(getReplyState({ contact: { id: 'vip', unreadCount: 4 }, messages: [], drafts: {} }), 'needs-reply');
+  assert.equal(getReplyState({ contact: { id: 'vip', unreadCount: 4 }, messages: [], drafts: {}, metadata: { snoozedUntil: now + 60_000 }, now }), 'snoozed');
+});
+
+test('getVisibleContacts supports alias search and reply queue filters', () => {
+  const now = 1_710_000_000_000;
+  const contacts = [
+    { id: 'host', name: 'Maria Lopez', phone: '111', type: 'private', unreadCount: 1, lastMessageTime: 30 },
+    { id: 'vendor', name: 'Office Vendor', phone: '222', type: 'private', unreadCount: 0, lastMessageTime: 40 },
+  ];
+  const metadataByContact = {
+    host: { alias: 'Madrid Airbnb host' },
+    vendor: { alias: 'Printer supplier' },
+  };
+
+  assert.equal(getContactDisplayName(contacts[0], metadataByContact.host), 'Madrid Airbnb host');
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: 'airbnb madrid',
+      filters: {},
+      messagePreviewByContact: {},
+      metadataByContact,
+      messagesByContact: {
+        host: [{ id: 'host-1', isFromMe: false, timestamp: now - 1_000, content: { type: 'text', body: 'Can you send the check-in code?' } }],
+        vendor: [{ id: 'vendor-1', isFromMe: true, timestamp: now - 2_000, content: { type: 'text', body: 'Invoice paid, thanks' } }],
+      },
+      now,
+    }).map(contact => contact.id),
+    ['host'],
+  );
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: '',
+      filters: { needsReplyOnly: true },
+      messagePreviewByContact: {},
+      metadataByContact,
+      messagesByContact: {
+        host: [{ id: 'host-1', isFromMe: false, timestamp: now - 1_000, content: { type: 'text', body: 'Can you send the check-in code?' } }],
+        vendor: [{ id: 'vendor-1', isFromMe: true, timestamp: now - 2_000, content: { type: 'text', body: 'Invoice paid, thanks' } }],
+      },
+      now,
+    }).map(contact => contact.id),
+    ['host'],
+  );
+});
+
+test('upsertQuickReply deduplicates snippets and removeQuickReply deletes by id', () => {
+  const initial = upsertQuickReply([], '  On my way now  ', 100);
+  assert.equal(initial.length, 1);
+  assert.equal(initial[0].text, 'On my way now');
+
+  const deduped = upsertQuickReply(initial, 'on my way now', 200);
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0].updatedAt, 200);
+
+  const expanded = upsertQuickReply(deduped, 'Thanks — I will send it shortly.', 300, 2);
+  const trimmed = upsertQuickReply(expanded, 'Got it, thank you!', 400, 2);
+  assert.deepEqual(trimmed.map(reply => reply.text), ['Got it, thank you!', 'Thanks — I will send it shortly.']);
+
+  assert.deepEqual(removeQuickReply(trimmed, trimmed[0].id), [trimmed[1]]);
 });
