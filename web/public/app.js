@@ -24,6 +24,7 @@ import {
   upsertDraft,
   upsertQuickReply,
 } from './app-state.js';
+import { calculateViewportLayout } from './viewport.js';
 
 class WhatsAppClient {
   constructor() {
@@ -609,10 +610,9 @@ class WhatsAppClient {
   }
 
   // Keep the app height aligned with iOS Safari's real usable screen area.
-  // When the keyboard is closed we prefer the layout viewport so the app can
-  // extend underneath iOS chrome/home-indicator space instead of leaving a
-  // dead band at the bottom. When the keyboard opens we switch to the visual
-  // viewport so the composer stays attached to the visible edge.
+  // We only apply a JS viewport override while the keyboard is open. When the
+  // keyboard is closed we fall back to CSS large-viewport sizing so the app can
+  // occupy the full screen instead of stopping above Safari's bottom chrome.
   setupVisualViewport() {
     const root = document.documentElement;
     let frame = null;
@@ -624,14 +624,18 @@ class WhatsAppClient {
 
       frame = requestAnimationFrame(() => {
         const viewport = window.visualViewport;
-        const layoutHeight = Math.round(window.innerHeight);
-        const visualHeight = viewport ? Math.round(viewport.height + viewport.offsetTop) : layoutHeight;
-        const keyboardOffset = Math.max(0, layoutHeight - visualHeight);
-        const keyboardOpen = keyboardOffset > 120;
-        const effectiveHeight = keyboardOpen ? visualHeight : layoutHeight;
+        const layout = calculateViewportLayout({
+          innerHeight: window.innerHeight,
+          viewportHeight: viewport?.height,
+          viewportOffsetTop: viewport?.offsetTop,
+        });
 
-        root.style.setProperty('--viewport-height', `${effectiveHeight}px`);
-        root.style.setProperty('--keyboard-offset', `${keyboardOffset}px`);
+        if (layout.effectiveHeight === null) {
+          root.style.removeProperty('--viewport-height');
+        } else {
+          root.style.setProperty('--viewport-height', `${layout.effectiveHeight}px`);
+        }
+        root.style.setProperty('--keyboard-offset', `${layout.keyboardOffset}px`);
         frame = null;
       });
     };
