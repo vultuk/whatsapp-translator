@@ -20,6 +20,7 @@ import {
   getChecklistSummary,
   getPriorityInfo,
   getTimezoneInfo,
+  resolveAppearanceTheme,
 } from '../public/app-state.js';
 
 test('upsertDraft stores trimmed text and removes empty drafts', () => {
@@ -486,6 +487,44 @@ test('getVisibleContacts supports open-task inbox triage and checklist search', 
       metadataByContact,
     }).map(contact => contact.id),
     ['trip'],
+  );
+});
+
+test('resolveAppearanceTheme falls back safely and honors system dark mode', () => {
+  assert.deepEqual(
+    resolveAppearanceTheme({ theme: 'unknown', mode: 'maybe' }, { systemMode: 'dark' }),
+    {
+      theme: 'whatsapp',
+      mode: 'system',
+      resolvedMode: 'dark',
+      definition: {
+        label: 'WhatsApp',
+        themeColor: '#111b21',
+        accentColor: '#00a884',
+        surfaceColor: '#202c33',
+        textColor: '#e9edef',
+      },
+      dataTheme: 'whatsapp-dark',
+    },
+  );
+});
+
+test('resolveAppearanceTheme returns the selected light theme variant explicitly', () => {
+  assert.deepEqual(
+    resolveAppearanceTheme({ theme: 'ocean', mode: 'light' }, { systemMode: 'dark' }),
+    {
+      theme: 'ocean',
+      mode: 'light',
+      resolvedMode: 'light',
+      definition: {
+        label: 'Ocean',
+        themeColor: '#f4f7fb',
+        accentColor: '#0f6cbd',
+        surfaceColor: '#ffffff',
+        textColor: '#102a43',
+      },
+      dataTheme: 'ocean-light',
+    },
   );
 });
 

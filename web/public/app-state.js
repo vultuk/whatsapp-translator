@@ -19,6 +19,60 @@ const PRIORITY_CONFIG = {
   low: { value: 'low', label: 'Low', rank: 3, isImportant: false },
 };
 
+const APPEARANCE_THEME_CONFIG = {
+  whatsapp: {
+    label: 'WhatsApp',
+    light: {
+      label: 'WhatsApp',
+      themeColor: '#f7f5f2',
+      accentColor: '#128c7e',
+      surfaceColor: '#ffffff',
+      textColor: '#111b21',
+    },
+    dark: {
+      label: 'WhatsApp',
+      themeColor: '#111b21',
+      accentColor: '#00a884',
+      surfaceColor: '#202c33',
+      textColor: '#e9edef',
+    },
+  },
+  ocean: {
+    label: 'Ocean',
+    light: {
+      label: 'Ocean',
+      themeColor: '#f4f7fb',
+      accentColor: '#0f6cbd',
+      surfaceColor: '#ffffff',
+      textColor: '#102a43',
+    },
+    dark: {
+      label: 'Ocean',
+      themeColor: '#0f172a',
+      accentColor: '#38bdf8',
+      surfaceColor: '#162033',
+      textColor: '#e0f2fe',
+    },
+  },
+  sunset: {
+    label: 'Sunset',
+    light: {
+      label: 'Sunset',
+      themeColor: '#fff6ef',
+      accentColor: '#dd6b20',
+      surfaceColor: '#ffffff',
+      textColor: '#4a2c1d',
+    },
+    dark: {
+      label: 'Sunset',
+      themeColor: '#1f1720',
+      accentColor: '#f97316',
+      surfaceColor: '#2a1f2d',
+      textColor: '#fde7d8',
+    },
+  },
+};
+
 function normalizeText(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -36,6 +90,24 @@ function normalizeTimestamp(value) {
 function normalizePriority(value) {
   const normalized = normalizeText(value);
   return PRIORITY_CONFIG[normalized] ? normalized : 'normal';
+}
+
+export function resolveAppearanceTheme(preferences = {}, options = {}) {
+  const requestedTheme = normalizeText(preferences?.theme);
+  const theme = APPEARANCE_THEME_CONFIG[requestedTheme] ? requestedTheme : 'whatsapp';
+  const requestedMode = normalizeText(preferences?.mode);
+  const mode = ['light', 'dark', 'system'].includes(requestedMode) ? requestedMode : 'system';
+  const systemMode = normalizeText(options?.systemMode) === 'dark' ? 'dark' : 'light';
+  const resolvedMode = mode === 'system' ? systemMode : mode;
+  const definition = { ...APPEARANCE_THEME_CONFIG[theme][resolvedMode] };
+
+  return {
+    theme,
+    mode,
+    resolvedMode,
+    definition,
+    dataTheme: `${theme}-${resolvedMode}`,
+  };
 }
 
 function createChecklistId(text, updatedAt, index = 0) {

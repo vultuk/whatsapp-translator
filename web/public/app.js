@@ -17,6 +17,7 @@ import {
   isMessageStarred,
   parseLabelsInput,
   removeQuickReply,
+  resolveAppearanceTheme,
   toggleChecklistItem,
   toggleStarredMessage,
   upsertChecklistItems,
@@ -60,10 +61,17 @@ class WhatsAppClient {
     this.contactMetadataStorageKey = 'wa_contact_metadata';
     this.inboxPreferencesStorageKey = 'wa_inbox_preferences';
     this.quickRepliesStorageKey = 'wa_quick_replies';
+    this.appearanceStorageKey = 'wa_appearance_preferences';
     this.drafts = this.loadStoredJson(this.draftsStorageKey);
     this.starredMessages = this.loadStoredJson(this.starredStorageKey);
     this.contactMetadata = this.loadStoredJson(this.contactMetadataStorageKey);
     this.quickReplies = this.loadStoredArray(this.quickRepliesStorageKey);
+    this.appearancePreferences = this.loadStoredJson(this.appearanceStorageKey);
+    this.appearanceState = resolveAppearanceTheme(this.appearancePreferences, {
+      systemMode: this.getSystemAppearanceMode(),
+    });
+    this.systemAppearanceQuery = null;
+    this.handleSystemAppearanceChange = this.handleSystemAppearanceChange.bind(this);
     const storedInboxPreferences = this.loadStoredJson(this.inboxPreferencesStorageKey);
     this.sidebarSearchQuery = typeof storedInboxPreferences.searchQuery === 'string' ? storedInboxPreferences.searchQuery : '';
     this.contactFilters = {
@@ -95,6 +103,8 @@ class WhatsAppClient {
       symbols: ['✨', '⭐', '🌟', '💫', '⚡', '🔥', '💥', '☄️', '🌈', '☀️', '🌤️', '⛅', '🌥️', '☁️', '🌦️', '🌧️', '⛈️', '🌩️', '🌨️', '❄️', '☃️', '⛄', '🌬️', '💨', '🌪️', '🌫️', '🌊', '💧', '💦', '☔', '🎵', '🎶', '🎼', '🎤', '🎧', '📻', '🎷', '🪗', '🎸', '🎹', '🎺', '🎻', '🪕', '🥁', '🪘', '⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍', '🏏', '🪃', '🥅', '⛳', '🪁', '🏹', '🎣', '🤿', '🥊', '🥋', '🎽', '🛷', '⛸️', '🥌', '🎿', '⛷️', '🏂', '🪂', '🏋️', '🎯', '🎮', '🕹️', '🎰', '🧩', '♠️', '♥️', '♦️', '♣️', '🃏', '🀄', '🎴', '🎭', '🎨']
     };
     
+    this.setupAppearanceSync();
+    this.applyAppearanceTheme();
     this.init();
   }
 
@@ -138,6 +148,7 @@ class WhatsAppClient {
     this.updateStarredToggleUI();
     this.updateChatSearchUI();
     this.syncInboxControls();
+    this.syncAppearanceControls();
   }
 
   loadStoredJson(key) {
@@ -165,6 +176,90 @@ class WhatsAppClient {
 
   saveStoredArray(key, value) {
     localStorage.setItem(key, JSON.stringify(Array.isArray(value) ? value : []));
+  }
+
+  getSystemAppearanceMode() {
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+
+  setupAppearanceSync() {
+    if (!window.matchMedia) return;
+    this.systemAppearanceQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    if (typeof this.systemAppearanceQuery.addEventListener === 'function') {
+      this.systemAppearanceQuery.addEventListener('change', this.handleSystemAppearanceChange);
+    } else if (typeof this.systemAppearanceQuery.addListener === 'function') {
+      this.systemAppearanceQuery.addListener(this.handleSystemAppearanceChange);
+    }
+  }
+
+  handleSystemAppearanceChange() {
+    if ((this.appearancePreferences?.mode || 'system') === 'system') {
+      this.applyAppearanceTheme();
+    }
+  }
+
+  persistAppearancePreferences() {
+    this.saveStoredJson(this.appearanceStorageKey, this.appearancePreferences);
+  }
+
+  syncAppearanceControls(preferences = this.appearancePreferences) {
+    const themeSelect = document.getElementById('appearance-theme-select');
+    const modeSelect = document.getElementById('appearance-mode-select');
+    const preview = document.getElementById('appearance-preview-text');
+    const previewState = resolveAppearanceTheme(preferences, {
+      systemMode: this.getSystemAppearanceMode(),
+    });
+    const theme = previewState.theme;
+    const mode = previewState.mode;
+    const resolvedMode = previewState.resolvedMode;
+    const label = previewState.definition.label || 'WhatsApp';
+
+    if (themeSelect) themeSelect.value = theme;
+    if (modeSelect) modeSelect.value = mode;
+    if (preview) {
+      const modeLabel = resolvedMode === 'dark' ? 'Dark' : 'Light';
+      const sourceLabel = mode === 'system' ? 'following system' : `${mode} mode`;
+      preview.textContent = `${label} · ${modeLabel} variant (${sourceLabel})`;
+    }
+  }
+
+  applyAppearanceTheme() {
+    this.appearanceState = resolveAppearanceTheme(this.appearancePreferences, {
+      systemMode: this.getSystemAppearanceMode(),
+    });
+
+    const root = document.documentElement;
+    if (root) {
+      root.dataset.theme = this.appearanceState.dataTheme;
+      root.style.colorScheme = this.appearanceState.resolvedMode;
+    }
+
+    const themeMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeMeta) {
+      themeMeta.setAttribute('content', this.appearanceState.definition.themeColor);
+    }
+
+    this.syncAppearanceControls();
+  }
+
+  openAppearanceModal() {
+    const modal = document.getElementById('appearance-modal');
+    if (!modal) return;
+    this.syncAppearanceControls();
+    modal.classList.remove('hidden');
+  }
+
+  closeAppearanceModal() {
+    document.getElementById('appearance-modal')?.classList.add('hidden');
+  }
+
+  saveAppearanceSettings() {
+    const theme = document.getElementById('appearance-theme-select')?.value || 'whatsapp';
+    const mode = document.getElementById('appearance-mode-select')?.value || 'system';
+    this.appearancePreferences = { theme, mode };
+    this.persistAppearancePreferences();
+    this.applyAppearanceTheme();
+    this.closeAppearanceModal();
   }
 
   persistDrafts() {
@@ -3758,6 +3853,10 @@ class WhatsAppClient {
       }
     });
 
+    document.getElementById('app-appearance-button')?.addEventListener('click', () => {
+      this.openAppearanceModal();
+    });
+
     document.getElementById('visitor-workspace-edit')?.addEventListener('click', () => {
       this.openSettingsModal();
     });
@@ -3833,6 +3932,36 @@ class WhatsAppClient {
       this.closeSettingsModal();
     });
 
+    document.querySelector('#appearance-modal .modal-close')?.addEventListener('click', () => {
+      this.closeAppearanceModal();
+    });
+
+    document.querySelector('#appearance-modal .modal-backdrop')?.addEventListener('click', () => {
+      this.closeAppearanceModal();
+    });
+
+    document.getElementById('appearance-cancel')?.addEventListener('click', () => {
+      this.closeAppearanceModal();
+    });
+
+    document.getElementById('appearance-save')?.addEventListener('click', () => {
+      this.saveAppearanceSettings();
+    });
+
+    document.getElementById('appearance-theme-select')?.addEventListener('change', () => {
+      this.syncAppearanceControls({
+        theme: document.getElementById('appearance-theme-select')?.value,
+        mode: document.getElementById('appearance-mode-select')?.value,
+      });
+    });
+
+    document.getElementById('appearance-mode-select')?.addEventListener('change', () => {
+      this.syncAppearanceControls({
+        theme: document.getElementById('appearance-theme-select')?.value,
+        mode: document.getElementById('appearance-mode-select')?.value,
+      });
+    });
+
     document.getElementById('settings-cancel')?.addEventListener('click', () => {
       this.closeSettingsModal();
     });
@@ -3845,6 +3974,7 @@ class WhatsAppClient {
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         this.closeSettingsModal();
+        this.closeAppearanceModal();
         this.hideContactContextMenu();
         if (!document.getElementById('chat-search-bar')?.classList.contains('hidden')) {
           this.toggleChatSearch();

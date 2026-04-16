@@ -9,6 +9,36 @@
   <meta name="theme-color" content="#111b21">
   <meta name="mobile-web-app-capable" content="yes">
   <title>WhatsApp Translator</title>
+  <script>
+    (() => {
+      try {
+        const stored = JSON.parse(localStorage.getItem('wa_appearance_preferences') || '{}');
+        const theme = ['whatsapp', 'ocean', 'sunset'].includes(String(stored.theme || '').toLowerCase())
+          ? String(stored.theme).toLowerCase()
+          : 'whatsapp';
+        const requestedMode = String(stored.mode || '').toLowerCase();
+        const mode = ['light', 'dark', 'system'].includes(requestedMode) ? requestedMode : 'system';
+        const resolvedMode = mode === 'system'
+          ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+          : mode;
+        const themeColorMap = {
+          'whatsapp-light': '#f7f5f2',
+          'whatsapp-dark': '#111b21',
+          'ocean-light': '#f4f7fb',
+          'ocean-dark': '#0f172a',
+          'sunset-light': '#fff6ef',
+          'sunset-dark': '#1f1720',
+        };
+        const dataTheme = `${theme}-${resolvedMode}`;
+        document.documentElement.dataset.theme = dataTheme;
+        document.documentElement.style.colorScheme = resolvedMode;
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeColorMap[dataTheme] || '#111b21');
+      } catch {
+        document.documentElement.dataset.theme = 'whatsapp-dark';
+        document.documentElement.style.colorScheme = 'dark';
+      }
+    })();
+  </script>
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
@@ -77,6 +107,11 @@
               <span class="status-dot connected"></span>
               <span>Connected</span>
             </div>
+            <button id="app-appearance-button" class="header-icon-button" title="Appearance and themes">
+              <svg viewBox="0 0 24 24" width="20" height="20">
+                <path fill="currentColor" d="M12 3a9 9 0 1 0 9 9c0-.34-.02-.68-.06-1.01a1 1 0 0 0-1.34-.8A6.5 6.5 0 1 1 13.81 4.4 1 1 0 0 0 13 3.06 9.26 9.26 0 0 0 12 3z"/>
+              </svg>
+            </button>
             <button id="logout-button" class="logout-button" title="Logout and clear all data">
               <svg viewBox="0 0 24 24" width="20" height="20">
                 <path fill="currentColor" d="M16 17v-3H9v-4h7V7l5 5-5 5M14 2a2 2 0 0 1 2 2v2h-2V4H5v16h9v-2h2v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9z"/>
@@ -382,6 +417,48 @@
         <div class="modal-footer">
           <button class="modal-button secondary" id="settings-cancel">Cancel</button>
           <button class="modal-button primary" id="settings-save">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="appearance-modal" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content appearance-modal-content">
+        <div class="modal-header">
+          <h3>Appearance</h3>
+          <button class="modal-close" aria-label="Close appearance settings">
+            <svg viewBox="0 0 24 24" width="20" height="20">
+              <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="appearance-theme-select">Theme</label>
+            <select id="appearance-theme-select">
+              <option value="whatsapp">WhatsApp</option>
+              <option value="ocean">Ocean</option>
+              <option value="sunset">Sunset</option>
+            </select>
+            <p class="form-hint">Every theme includes both light and dark variants.</p>
+          </div>
+          <div class="form-group">
+            <label for="appearance-mode-select">Mode</label>
+            <select id="appearance-mode-select">
+              <option value="system">Follow system</option>
+              <option value="light">Always light</option>
+              <option value="dark">Always dark</option>
+            </select>
+            <p class="form-hint">Choose whether the app should always stay light, always stay dark, or switch with your device.</p>
+          </div>
+          <div class="appearance-preview-card">
+            <span class="appearance-preview-label">Preview</span>
+            <strong id="appearance-preview-text">WhatsApp · Dark variant (following system)</strong>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="modal-button secondary" id="appearance-cancel">Cancel</button>
+          <button class="modal-button primary" id="appearance-save">Apply</button>
         </div>
       </div>
     </div>
