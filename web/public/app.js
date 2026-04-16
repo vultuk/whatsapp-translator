@@ -608,32 +608,40 @@ class WhatsAppClient {
     });
   }
 
-  // Fix for iOS/iPad keyboard suggestion bar causing layout issues
+  // Keep the app height locked to the live visual viewport on iOS.
+  // Using 100dvh alone can leave a visible gap beneath the composer when
+  // Safari's bottom chrome or keyboard changes the usable viewport.
   setupVisualViewport() {
-    if (!window.visualViewport) return;
-    
-    // Store the initial viewport height (without keyboard)
-    const initialHeight = window.visualViewport.height;
-    
+    const root = document.documentElement;
+    let frame = null;
+
     const updateViewportHeight = () => {
-      const vh = window.visualViewport.height;
-      const heightDiff = initialHeight - vh;
-      
-      // Only apply the fix when keyboard is likely open (height reduced by more than 100px)
-      // This prevents the fix from affecting normal layout
-      if (heightDiff > 100) {
-        document.documentElement.style.setProperty('--viewport-height', `${vh}px`);
-        document.documentElement.style.setProperty('--keyboard-offset', `${heightDiff}px`);
-      } else {
-        // Reset to default when keyboard is closed
-        document.documentElement.style.setProperty('--viewport-height', '100dvh');
-        document.documentElement.style.setProperty('--keyboard-offset', '0px');
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
       }
+
+      frame = requestAnimationFrame(() => {
+        const viewport = window.visualViewport;
+        const viewportHeight = viewport ? viewport.height : window.innerHeight;
+        const viewportOffsetTop = viewport ? viewport.offsetTop : 0;
+        const effectiveHeight = Math.round(viewportHeight + viewportOffsetTop);
+        const keyboardOffset = Math.max(0, Math.round(window.innerHeight - effectiveHeight));
+
+        root.style.setProperty('--viewport-height', `${effectiveHeight}px`);
+        root.style.setProperty('--keyboard-offset', `${keyboardOffset}px`);
+        frame = null;
+      });
     };
-    
-    // Update on viewport resize (keyboard open/close)
-    window.visualViewport.addEventListener('resize', updateViewportHeight);
-    window.visualViewport.addEventListener('scroll', updateViewportHeight);
+
+    updateViewportHeight();
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateViewportHeight);
+      window.visualViewport.addEventListener('scroll', updateViewportHeight);
+    }
+
+    window.addEventListener('orientationchange', updateViewportHeight);
+    window.addEventListener('pageshow', updateViewportHeight);
   }
 
   async checkAuth() {
