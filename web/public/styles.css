@@ -2442,3 +2442,94 @@ body {
     max-height: calc(80vh - 140px);
   }
 }
+
+.chat-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.chat-search-bar input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.chat-search-bar input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.chat-search-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.chat-search-clear,
+.draft-clear-button {
+  border: none;
+  background: transparent;
+  color: var(--accent-color);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chat-settings-button.active,
+.star-toggle.active {
+  color: #f6c445;
+}
+
+.draft-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(0, 168, 132, 0.12);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.preview-text.draft-preview {
+  color: #ffb547;
+  font-style: italic;
+}
+
+.message-starred-badge {
+  color: #f6c445;
+  margin-left: 6px;
+  font-size: 13px;
+}
+
+.message-action-btn.star-toggle.active {
+  color: #f6c445;
+}
+
+@media (max-width: 768px) {
+  .chat-search-bar {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .chat-search-count {
+    order: 3;
+    width: 100%;
+  }
+
+  .draft-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
