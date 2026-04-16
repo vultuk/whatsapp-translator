@@ -608,9 +608,11 @@ class WhatsAppClient {
     });
   }
 
-  // Keep the app height locked to the live visual viewport on iOS.
-  // Using 100dvh alone can leave a visible gap beneath the composer when
-  // Safari's bottom chrome or keyboard changes the usable viewport.
+  // Keep the app height aligned with iOS Safari's real usable screen area.
+  // When the keyboard is closed we prefer the layout viewport so the app can
+  // extend underneath iOS chrome/home-indicator space instead of leaving a
+  // dead band at the bottom. When the keyboard opens we switch to the visual
+  // viewport so the composer stays attached to the visible edge.
   setupVisualViewport() {
     const root = document.documentElement;
     let frame = null;
@@ -622,10 +624,11 @@ class WhatsAppClient {
 
       frame = requestAnimationFrame(() => {
         const viewport = window.visualViewport;
-        const viewportHeight = viewport ? viewport.height : window.innerHeight;
-        const viewportOffsetTop = viewport ? viewport.offsetTop : 0;
-        const effectiveHeight = Math.round(viewportHeight + viewportOffsetTop);
-        const keyboardOffset = Math.max(0, Math.round(window.innerHeight - effectiveHeight));
+        const layoutHeight = Math.round(window.innerHeight);
+        const visualHeight = viewport ? Math.round(viewport.height + viewport.offsetTop) : layoutHeight;
+        const keyboardOffset = Math.max(0, layoutHeight - visualHeight);
+        const keyboardOpen = keyboardOffset > 120;
+        const effectiveHeight = keyboardOpen ? visualHeight : layoutHeight;
 
         root.style.setProperty('--viewport-height', `${effectiveHeight}px`);
         root.style.setProperty('--keyboard-offset', `${keyboardOffset}px`);
@@ -640,6 +643,7 @@ class WhatsAppClient {
       window.visualViewport.addEventListener('scroll', updateViewportHeight);
     }
 
+    window.addEventListener('resize', updateViewportHeight);
     window.addEventListener('orientationchange', updateViewportHeight);
     window.addEventListener('pageshow', updateViewportHeight);
   }
