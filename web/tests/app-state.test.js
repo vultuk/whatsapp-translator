@@ -7,6 +7,9 @@ import {
   isMessageStarred,
   filterMessagesByQuery,
   getVisibleContacts,
+  getReminderStatus,
+  isContactSnoozed,
+  parseLabelsInput,
 } from '../public/app-state.js';
 
 test('upsertDraft stores trimmed text and removes empty drafts', () => {
@@ -152,6 +155,114 @@ test('getVisibleContacts supports pinned and notes-only inbox filters', () => {
       filters: {},
       messagePreviewByContact: {},
       metadataByContact,
+    }).map(contact => contact.id),
+    ['vip'],
+  );
+});
+
+test('parseLabelsInput trims, deduplicates, and preserves visitor-defined labels', () => {
+  assert.deepEqual(
+    parseLabelsInput(' VIP, travel plans, vip,   Family  , , follow-up '),
+    ['VIP', 'travel plans', 'Family', 'follow-up'],
+  );
+});
+
+test('snoozed conversations stay out of the default inbox until the snooze expires', () => {
+  const now = 1_710_000_000_000;
+  const contacts = [
+    { id: 'snoozed', name: 'Later', phone: '111', type: 'private', unreadCount: 0, lastMessageTime: 20 },
+    { id: 'active', name: 'Now', phone: '222', type: 'private', unreadCount: 1, lastMessageTime: 30 },
+  ];
+  const metadataByContact = {
+    snoozed: { snoozedUntil: now + 60_000 },
+  };
+
+  assert.equal(isContactSnoozed(metadataByContact.snoozed, now), true);
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: '',
+      filters: {},
+      messagePreviewByContact: {},
+      metadataByContact,
+      now,
+    }).map(contact => contact.id),
+    ['active'],
+  );
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: '',
+      filters: { snoozedOnly: true },
+      messagePreviewByContact: {},
+      metadataByContact,
+      now,
+    }).map(contact => contact.id),
+    ['snoozed'],
+  );
+});
+
+test('getVisibleContacts supports reminder and label-focused triage views', () => {
+  const now = 1_710_000_000_000;
+  const contacts = [
+    { id: 'vip', name: 'VIP Client', phone: '555', type: 'private', unreadCount: 0, lastMessageTime: 30 },
+    { id: 'trip', name: 'Trip Planner', phone: '777', type: 'private', unreadCount: 2, lastMessageTime: 40 },
+  ];
+  const metadataByContact = {
+    vip: {
+      reminderText: 'Send the pricing breakdown',
+      reminderAt: now - 5_000,
+      labels: ['VIP', 'follow-up'],
+    },
+    trip: {
+      reminderText: 'Share the itinerary tomorrow',
+      reminderAt: now + 86_400_000,
+      labels: ['travel'],
+    },
+  };
+
+  assert.equal(getReminderStatus(metadataByContact.vip, now), 'due');
+  assert.equal(getReminderStatus(metadataByContact.trip, now), 'upcoming');
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: '',
+      filters: { dueRemindersOnly: true },
+      messagePreviewByContact: {},
+      metadataByContact,
+      now,
+    }).map(contact => contact.id),
+    ['vip'],
+  );
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: '',
+      filters: { labelsOnly: true },
+      messagePreviewByContact: {},
+      metadataByContact,
+      now,
+    }).map(contact => contact.id),
+    ['vip', 'trip'],
+  );
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: 'pricing breakdown vip',
+      filters: {},
+      messagePreviewByContact: {},
+      metadataByContact,
+      now,
     }).map(contact => contact.id),
     ['vip'],
   );

@@ -98,6 +98,9 @@
             <button class="inbox-filter-chip" data-inbox-filter="draftsOnly" type="button">Drafts</button>
             <button class="inbox-filter-chip" data-inbox-filter="pinnedOnly" type="button">Pinned</button>
             <button class="inbox-filter-chip" data-inbox-filter="notesOnly" type="button">Notes</button>
+            <button class="inbox-filter-chip" data-inbox-filter="dueRemindersOnly" type="button">Due</button>
+            <button class="inbox-filter-chip" data-inbox-filter="labelsOnly" type="button">Labels</button>
+            <button class="inbox-filter-chip" data-inbox-filter="snoozedOnly" type="button">Snoozed</button>
             <button id="inbox-clear-button" class="inbox-filter-clear" type="button">Clear</button>
           </div>
         </section>
@@ -301,6 +304,26 @@
             <label for="conversation-notes">Private Notes</label>
             <textarea id="conversation-notes" rows="4" placeholder="Remember the follow-up, tone, or next step for this conversation"></textarea>
             <p class="form-hint">Visible only in this browser. Great for visitor-style context you don't want to send by accident.</p>
+          </div>
+          <div class="form-group">
+            <label for="conversation-labels">Labels</label>
+            <input type="text" id="conversation-labels" placeholder="e.g., VIP, travel, follow-up">
+            <p class="form-hint">Comma-separated labels make it easy to search and triage this conversation later.</p>
+          </div>
+          <div class="form-group">
+            <label for="conversation-reminder-text">Follow-up Reminder</label>
+            <input type="text" id="conversation-reminder-text" placeholder="What do you need to remember?">
+            <p class="form-hint">Keep yourself honest about the next action you wanted to take.</p>
+          </div>
+          <div class="form-group compact-grid">
+            <div>
+              <label for="conversation-reminder-at">Reminder time</label>
+              <input type="datetime-local" id="conversation-reminder-at">
+            </div>
+            <div>
+              <label for="conversation-snooze-until">Snooze until</label>
+              <input type="datetime-local" id="conversation-snooze-until">
+            </div>
           </div>
           <label class="checkbox-row" for="settings-pinned">
             <input type="checkbox" id="settings-pinned">

@@ -4,6 +4,9 @@ const DEFAULT_FILTERS = {
   draftsOnly: false,
   pinnedOnly: false,
   notesOnly: false,
+  dueRemindersOnly: false,
+  labelsOnly: false,
+  snoozedOnly: false,
 };
 
 function normalizeText(value) {
@@ -12,6 +15,45 @@ function normalizeText(value) {
 
 function cloneObject(value) {
   return { ...(value || {}) };
+}
+
+function normalizeTimestamp(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+export function parseLabelsInput(value) {
+  const seen = new Set();
+  return String(value || '')
+    .split(/[\n,]/)
+    .map(label => label.trim())
+    .filter(Boolean)
+    .filter((label) => {
+      const key = label.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+export function getContactLabels(metadata = {}) {
+  if (Array.isArray(metadata?.labels)) {
+    return parseLabelsInput(metadata.labels.join(','));
+  }
+  return parseLabelsInput(metadata?.labelsText || metadata?.labels || '');
+}
+
+export function isContactSnoozed(metadata = {}, now = Date.now()) {
+  const snoozedUntil = normalizeTimestamp(metadata?.snoozedUntil);
+  return Boolean(snoozedUntil && snoozedUntil > now);
+}
+
+export function getReminderStatus(metadata = {}, now = Date.now()) {
+  const reminderAt = normalizeTimestamp(metadata?.reminderAt);
+  const reminderText = normalizeText(metadata?.reminderText);
+  if (!reminderAt || !reminderText) return 'none';
+  return reminderAt <= now ? 'due' : 'upcoming';
 }
 
 export function getDraftText(drafts, contactId) {
@@ -139,12 +181,15 @@ function contactMatchesSearch(contact, draftPreview, messagePreview, metadata, n
     messagePreview,
     metadata?.notes,
     metadata?.notePreview,
+    metadata?.reminderText,
+    getContactLabels(metadata).join(' '),
   ]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
 
-  return haystack.includes(normalizedQuery);
+  const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  return tokens.every(token => haystack.includes(token));
 }
 
 export function getVisibleContacts({
@@ -154,6 +199,7 @@ export function getVisibleContacts({
   filters = DEFAULT_FILTERS,
   messagePreviewByContact = {},
   metadataByContact = {},
+  now = Date.now(),
 }) {
   const normalizedQuery = normalizeText(searchQuery);
   const mergedFilters = { ...DEFAULT_FILTERS, ...(filters || {}) };
@@ -164,6 +210,14 @@ export function getVisibleContacts({
     const metadata = getMetadata(metadataByContact, contact.id);
     const isPinned = metadata?.pinnedAt != null || contact?.pinnedAt != null;
     const hasNotes = Boolean(normalizeText(metadata?.notes || metadata?.notePreview));
+    const labels = getContactLabels(metadata);
+    const hasLabels = labels.length > 0;
+    const reminderStatus = getReminderStatus(metadata, now);
+    const isSnoozed = isContactSnoozed(metadata, now);
+
+    if (isSnoozed && !mergedFilters.snoozedOnly) {
+      return false;
+    }
 
     if (mergedFilters.unreadOnly && !(contact.unreadCount > 0)) {
       return false;
@@ -182,6 +236,18 @@ export function getVisibleContacts({
     }
 
     if (mergedFilters.notesOnly && !hasNotes) {
+      return false;
+    }
+
+    if (mergedFilters.dueRemindersOnly && reminderStatus !== 'due') {
+      return false;
+    }
+
+    if (mergedFilters.labelsOnly && !hasLabels) {
+      return false;
+    }
+
+    if (mergedFilters.snoozedOnly && !isSnoozed) {
       return false;
     }
 
