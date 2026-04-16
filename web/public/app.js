@@ -1,5 +1,15 @@
 // WhatsApp Translator Web Client
 
+import {
+  countMatchingMessages,
+  filterMessagesByQuery,
+  getDraftPreview,
+  getDraftText,
+  isMessageStarred,
+  toggleStarredMessage,
+  upsertDraft,
+} from './app-state.js';
+
 class WhatsAppClient {
   constructor() {
     this.ws = null;
@@ -29,6 +39,13 @@ class WhatsAppClient {
     this.authToken = localStorage.getItem('wa_auth_token'); // Auth token for API requests
     this.recentEmojis = JSON.parse(localStorage.getItem('wa_recent_emojis') || '[]');
     this.currentEmojiCategory = 'recent';
+    this.draftsStorageKey = 'wa_chat_drafts';
+    this.starredStorageKey = 'wa_starred_messages';
+    this.drafts = this.loadStoredJson(this.draftsStorageKey);
+    this.starredMessages = this.loadStoredJson(this.starredStorageKey);
+    this.messageSearchQuery = '';
+    this.starredOnly = false;
+    this.fullyLoadedContacts = new Set();
     
     // Emoji data organized by category
     this.emojiData = {
@@ -79,6 +96,30 @@ class WhatsAppClient {
     this.setupVisualViewport();
     this.updateNotificationPrompt();
     this.setupNotificationPermissionRequest();
+    this.updateDraftBanner();
+    this.updateStarredToggleUI();
+    this.updateChatSearchUI();
+  }
+
+  loadStoredJson(key) {
+    try {
+      return JSON.parse(localStorage.getItem(key) || '{}');
+    } catch (err) {
+      console.warn(`Failed to load local state for ${key}:`, err);
+      return {};
+    }
+  }
+
+  saveStoredJson(key, value) {
+    localStorage.setItem(key, JSON.stringify(value || {}));
+  }
+
+  persistDrafts() {
+    this.saveStoredJson(this.draftsStorageKey, this.drafts);
+  }
+
+  persistStarredMessages() {
+    this.saveStoredJson(this.starredStorageKey, this.starredMessages);
   }
 
   // Fix for iOS/iPad keyboard suggestion bar causing layout issues
@@ -514,7 +555,7 @@ class WhatsAppClient {
       if (!message.isFromMe && !message.is_from_me) {
         this.markConversationRead(message.contactId, message);
       }
-      this.appendMessage(message);
+      this.refreshCurrentConversationView();
       this.scrollToBottom();
     }
     
@@ -1042,12 +1083,16 @@ class WhatsAppClient {
       const unread = contact.unreadCount > 0 ? 
         `<span class="unread-badge">${contact.unreadCount}</span>` : '';
       
-      // Get last message preview - prefer cached messages, fall back to contact.lastMessagePreview
+      // Get last message preview - prefer saved drafts, then cached messages, then backend preview
       const messages = this.messages.get(contact.id) || [];
       const lastMessage = messages[messages.length - 1];
+      const draftPreview = getDraftPreview(this.drafts, contact.id);
       let preview = '';
+      let previewClass = draftPreview ? 'preview-text draft-preview' : 'preview-text';
       
-      if (lastMessage) {
+      if (draftPreview) {
+        preview = draftPreview;
+      } else if (lastMessage) {
         // Use locally cached message for preview
         preview = this.getMessagePreview(lastMessage);
         // For groups, prefix with sender name if not from me
@@ -1097,7 +1142,7 @@ class WhatsAppClient {
               <span class="contact-time">${time}</span>
             </div>
             <div class="contact-preview">
-              <span class="preview-text">${this.escapeHtml(preview)}</span>
+              <span class="${previewClass}">${this.escapeHtml(preview)}</span>
               ${unread}
             </div>
           </div>
@@ -1202,6 +1247,8 @@ class WhatsAppClient {
   async selectContact(contactId) {
     try {
       this.currentContactId = contactId;
+      this.messageSearchQuery = '';
+      this.starredOnly = false;
       
       // Clear any pending reply from previous chat
       this.clearReply();
@@ -1269,6 +1316,13 @@ class WhatsAppClient {
       
       // Re-render contacts to update active state and unread
       this.scheduleRenderContacts();
+      this.restoreDraftForCurrentContact();
+      this.updateDraftBanner();
+      document.getElementById('chat-search-bar')?.classList.add('hidden');
+      const chatSearchInput = document.getElementById('chat-search-input');
+      if (chatSearchInput) chatSearchInput.value = '';
+      this.updateChatSearchUI();
+      this.updateStarredToggleUI();
       
       // Update send button state and focus input (only on desktop)
       this.updateSendButton();
@@ -1390,8 +1444,13 @@ class WhatsAppClient {
       
       this.messages.set(contactId, messages);
       this.messagesHasMore.set(contactId, hasMore);
+      if (hasMore) {
+        this.fullyLoadedContacts.delete(contactId);
+      } else {
+        this.fullyLoadedContacts.add(contactId);
+      }
       if (contactId === this.currentContactId) {
-        this.renderMessages(messages);
+        this.renderMessages(this.getVisibleMessagesForCurrentConversation());
       }
       
       // Set up scroll handler for infinite scroll
@@ -1400,6 +1459,38 @@ class WhatsAppClient {
       }
     } catch (err) {
       console.error('Failed to load messages:', err);
+    } finally {
+      this.messagesLoading.set(contactId, false);
+    }
+  }
+
+  async ensureFullConversationLoaded(contactId = this.currentContactId) {
+    if (!contactId || this.fullyLoadedContacts.has(contactId)) {
+      return;
+    }
+
+    try {
+      this.messagesLoading.set(contactId, true);
+      const response = await fetch(`/api/messages/${encodeURIComponent(contactId)}?limit=0`, {
+        headers: this.getAuthHeaders()
+      });
+      const data = await response.json();
+      const messages = Array.isArray(data) ? data : data.messages;
+
+      messages.forEach(message => {
+        if (!message.senderJid) {
+          message.senderJid = this.getMessageSenderJid(message);
+        }
+        if (!message.replyContext && message.content?.reply_context) {
+          message.replyContext = message.content.reply_context;
+        }
+      });
+
+      this.messages.set(contactId, messages);
+      this.messagesHasMore.set(contactId, false);
+      this.fullyLoadedContacts.add(contactId);
+    } catch (err) {
+      console.error('Failed to load the full conversation:', err);
     } finally {
       this.messagesLoading.set(contactId, false);
     }
@@ -1446,11 +1537,19 @@ class WhatsAppClient {
         const allMessages = [...olderMessages, ...existingMessages];
         this.messages.set(contactId, allMessages);
         this.messagesHasMore.set(contactId, hasMore);
+        if (!hasMore) {
+          this.fullyLoadedContacts.add(contactId);
+        }
         
         // Re-render and maintain scroll position
-        this.prependMessages(olderMessages);
+        if (this.messageSearchQuery || this.starredOnly) {
+          this.refreshCurrentConversationView();
+        } else {
+          this.prependMessages(olderMessages);
+        }
       } else {
         this.messagesHasMore.set(contactId, false);
+        this.fullyLoadedContacts.add(contactId);
       }
     } catch (err) {
       console.error('Failed to load older messages:', err);
@@ -1551,7 +1650,11 @@ class WhatsAppClient {
     const container = document.getElementById('messages-list');
     
     if (messages.length === 0) {
-      container.innerHTML = '<div class="empty-state"><p>No messages yet</p></div>';
+      const emptyMessage = this.messageSearchQuery
+        ? 'No messages match your search yet'
+        : (this.starredOnly ? 'No starred messages in this conversation yet' : 'No messages yet');
+      container.innerHTML = `<div class="empty-state"><p>${this.escapeHtml(emptyMessage)}</p></div>`;
+      this.updateChatSearchUI();
       return;
     }
     
@@ -1574,6 +1677,7 @@ class WhatsAppClient {
     
     // Defer previews until after the first paint.
     this.scheduleLinkPreviewLoad(container);
+    this.updateChatSearchUI();
   }
 
   // Load link previews for messages near the viewport.
@@ -1661,6 +1765,7 @@ class WhatsAppClient {
     const messageId = message.id;
     const senderJid = this.getMessageSenderJid(message);
     const contactId = message.contactId || message.contact_id || this.currentContactId;
+    const starred = isMessageStarred(this.starredMessages, messageId);
     
     // Check if message can be translated (incoming, has text, not already translated)
     const hasText = message.content && (message.content.body || message.content.caption || message.content.text);
@@ -1711,6 +1816,14 @@ class WhatsAppClient {
         </div>
       </div>
     `;
+
+    const starButton = `
+      <button class="message-action-btn star-toggle ${starred ? 'active' : ''}"
+              onclick="event.stopPropagation(); app.toggleMessageStar('${messageId}')"
+              title="${starred ? 'Remove star' : 'Star message'}">
+        <svg viewBox="0 0 24 24"><path fill="currentColor" d="m12 17.27 6.18 3.73-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+      </button>
+    `;
     
     // Quoted message (reply context)
     let quotedMessage = '';
@@ -1726,6 +1839,7 @@ class WhatsAppClient {
     
     // Reactions display
     const reactionsHtml = this.renderReactions(message.reactions);
+    const starredBadge = starred ? '<span class="message-starred-badge" title="Starred">★</span>' : '';
     
     return `
       <div class="message ${isOutgoing ? 'outgoing' : 'incoming'}" data-message-id="${messageId}">
@@ -1736,11 +1850,13 @@ class WhatsAppClient {
         ${reactionsHtml}
         <div class="message-footer">
           <span class="message-time">${time}</span>
+          ${starredBadge}
           ${translationIndicator}
           <div class="message-actions">
             ${translateButton}
             ${replyButton}
             ${aiReplyButton}
+            ${starButton}
             ${reactionButton}
           </div>
         </div>
@@ -2068,6 +2184,165 @@ class WhatsAppClient {
     container.scrollTop = container.scrollHeight;
   }
 
+  restoreDraftForCurrentContact() {
+    const input = document.getElementById('message-input');
+    if (!input || !this.currentContactId) return;
+
+    input.value = getDraftText(this.drafts, this.currentContactId);
+    this.autoResizeTextarea(input);
+  }
+
+  handleDraftInput() {
+    if (!this.currentContactId) return;
+
+    const input = document.getElementById('message-input');
+    this.drafts = upsertDraft(this.drafts, this.currentContactId, input?.value || '');
+    this.persistDrafts();
+    this.updateDraftBanner();
+    this.scheduleRenderContacts();
+  }
+
+  clearCurrentDraft() {
+    if (!this.currentContactId) return;
+
+    this.drafts = upsertDraft(this.drafts, this.currentContactId, '');
+    this.persistDrafts();
+
+    const input = document.getElementById('message-input');
+    if (input) {
+      input.value = '';
+      this.autoResizeTextarea(input);
+    }
+
+    this.updateDraftBanner();
+    this.updateSendButton();
+    this.scheduleRenderContacts();
+  }
+
+  updateDraftBanner() {
+    const banner = document.getElementById('draft-banner');
+    const text = document.getElementById('draft-banner-text');
+    if (!banner || !text) return;
+
+    const preview = this.currentContactId ? getDraftPreview(this.drafts, this.currentContactId, 80) : '';
+    if (!preview) {
+      banner.classList.add('hidden');
+      return;
+    }
+
+    text.textContent = `${preview} · Restored automatically when you return.`;
+    banner.classList.remove('hidden');
+  }
+
+  toggleMessageStar(messageId) {
+    if (!this.currentContactId) return;
+
+    const messages = this.messages.get(this.currentContactId) || [];
+    const message = messages.find((entry) => entry.id === messageId);
+    if (!message) return;
+
+    this.starredMessages = toggleStarredMessage(this.starredMessages, message);
+    this.persistStarredMessages();
+    this.updateStarredToggleUI();
+
+    const visibleMessages = this.getVisibleMessagesForCurrentConversation();
+    this.renderMessages(visibleMessages);
+  }
+
+  async toggleStarredOnly() {
+    this.starredOnly = !this.starredOnly;
+    if (this.starredOnly) {
+      await this.ensureFullConversationLoaded();
+    }
+    this.updateStarredToggleUI();
+    this.refreshCurrentConversationView();
+  }
+
+  toggleChatSearch() {
+    const searchBar = document.getElementById('chat-search-bar');
+    const input = document.getElementById('chat-search-input');
+    if (!searchBar || !input) return;
+
+    const shouldShow = searchBar.classList.contains('hidden');
+    searchBar.classList.toggle('hidden', !shouldShow);
+
+    if (shouldShow) {
+      input.focus();
+      input.select();
+    } else {
+      this.messageSearchQuery = '';
+      input.value = '';
+      this.updateChatSearchUI();
+      this.refreshCurrentConversationView();
+    }
+  }
+
+  clearChatSearch() {
+    this.messageSearchQuery = '';
+    const input = document.getElementById('chat-search-input');
+    if (input) input.value = '';
+    this.updateChatSearchUI();
+    this.refreshCurrentConversationView();
+  }
+
+  async setChatSearchQuery(query) {
+    this.messageSearchQuery = query || '';
+    if (this.messageSearchQuery) {
+      await this.ensureFullConversationLoaded();
+    }
+    this.updateChatSearchUI();
+    this.refreshCurrentConversationView();
+  }
+
+  updateChatSearchUI() {
+    const countEl = document.getElementById('chat-search-count');
+    const toggleButton = document.getElementById('chat-search-toggle');
+    if (toggleButton) {
+      toggleButton.classList.toggle('active', Boolean(this.messageSearchQuery));
+    }
+    if (!countEl) return;
+
+    const visibleMessages = this.getVisibleMessagesForCurrentConversation();
+    const count = countMatchingMessages(
+      this.messages.get(this.currentContactId) || [],
+      this.messageSearchQuery,
+      { starredOnly: this.starredOnly, starredLookup: this.starredMessages },
+    );
+
+    if (!this.currentContactId) {
+      countEl.textContent = 'No chat selected';
+    } else if (!this.messageSearchQuery) {
+      countEl.textContent = this.starredOnly
+        ? `${visibleMessages.length} starred shown`
+        : `${visibleMessages.length} messages`;
+    } else {
+      countEl.textContent = `${count} match${count === 1 ? '' : 'es'}`;
+    }
+  }
+
+  updateStarredToggleUI() {
+    const button = document.getElementById('chat-starred-toggle');
+    if (!button) return;
+
+    button.classList.toggle('active', this.starredOnly);
+    button.title = this.starredOnly ? 'Show all messages' : 'Show starred messages only';
+  }
+
+  getVisibleMessagesForCurrentConversation() {
+    const messages = this.messages.get(this.currentContactId) || [];
+    return filterMessagesByQuery(messages, this.messageSearchQuery, {
+      starredOnly: this.starredOnly,
+      starredLookup: this.starredMessages,
+    });
+  }
+
+  refreshCurrentConversationView() {
+    if (!this.currentContactId) return;
+
+    this.renderMessages(this.getVisibleMessagesForCurrentConversation());
+    this.updateChatSearchUI();
+  }
+
   // Send a message
   async sendMessage() {
     const input = document.getElementById('message-input');
@@ -2115,9 +2390,13 @@ class WhatsAppClient {
       
       // Clear input and reply state on success
       input.value = '';
+      this.drafts = upsertDraft(this.drafts, this.currentContactId, '');
+      this.persistDrafts();
+      this.updateDraftBanner();
       this.clearReply();
       this.updateSendButton();
       this.autoResizeTextarea(input);
+      this.scheduleRenderContacts();
       
       // Create a local message representation with translation info from response
       const localMessage = {
@@ -2145,7 +2424,7 @@ class WhatsAppClient {
       const messages = this.messages.get(this.currentContactId);
       if (!messages.some(m => m.id === localMessage.id)) {
         messages.push(localMessage);
-        this.appendMessage(localMessage);
+        this.refreshCurrentConversationView();
         this.scrollToBottom();
       }
       
@@ -2254,7 +2533,7 @@ class WhatsAppClient {
       const messages = this.messages.get(this.currentContactId);
       if (!messages.some(m => m.id === localMessage.id)) {
         messages.push(localMessage);
-        this.appendMessage(localMessage);
+        this.refreshCurrentConversationView();
         this.scrollToBottom();
       }
 
@@ -2690,6 +2969,7 @@ class WhatsAppClient {
       input.value = result.replyText;
       this.autoResizeTextarea(input);
       this.updateSendButton();
+      this.handleDraftInput();
       input.focus();
       
       // Log cost for debugging
@@ -2787,6 +3067,7 @@ class WhatsAppClient {
     input.addEventListener('input', () => {
       this.updateSendButton();
       this.autoResizeTextarea(input);
+      this.handleDraftInput();
     });
 
     // Send on Cmd+Enter (Mac) or Ctrl+Enter (Windows/Linux)
@@ -2908,6 +3189,26 @@ class WhatsAppClient {
       this.sendWithAI();
     });
 
+    document.getElementById('draft-clear-button')?.addEventListener('click', () => {
+      this.clearCurrentDraft();
+    });
+
+    document.getElementById('chat-search-toggle')?.addEventListener('click', () => {
+      this.toggleChatSearch();
+    });
+
+    document.getElementById('chat-search-clear')?.addEventListener('click', () => {
+      this.clearChatSearch();
+    });
+
+    document.getElementById('chat-search-input')?.addEventListener('input', (event) => {
+      this.setChatSearchQuery(event.target.value);
+    });
+
+    document.getElementById('chat-starred-toggle')?.addEventListener('click', () => {
+      this.toggleStarredOnly();
+    });
+
     // Chat settings button in header
     document.getElementById('chat-settings-button')?.addEventListener('click', () => {
       this.openSettingsModal();
@@ -2970,6 +3271,9 @@ class WhatsAppClient {
       if (e.key === 'Escape') {
         this.closeSettingsModal();
         this.hideContactContextMenu();
+        if (!document.getElementById('chat-search-bar')?.classList.contains('hidden')) {
+          this.toggleChatSearch();
+        }
       }
     });
   }
@@ -2982,10 +3286,18 @@ class WhatsAppClient {
   // Close chat view (mobile)
   closeChat() {
     this.currentContactId = null;
+    this.messageSearchQuery = '';
+    this.starredOnly = false;
     this.clearReply();
+    document.getElementById('chat-view').querySelector('#chat-search-bar')?.classList.add('hidden');
+    const chatSearchInput = document.getElementById('chat-search-input');
+    if (chatSearchInput) chatSearchInput.value = '';
     document.getElementById('main-container').classList.remove('chat-open');
     document.getElementById('chat-view').classList.add('hidden');
     document.getElementById('no-chat-selected').classList.remove('hidden');
+    this.updateDraftBanner();
+    this.updateStarredToggleUI();
+    this.updateChatSearchUI();
     this.renderContacts();
     
     // Update URL without chat parameter
@@ -3588,4 +3900,4 @@ class WhatsAppClient {
 }
 
 // Initialize app
-const app = new WhatsAppClient();
+window.app = new WhatsAppClient();
