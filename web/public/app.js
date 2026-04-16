@@ -3,6 +3,7 @@
 import {
   countMatchingMessages,
   filterMessagesByQuery,
+  getAppearanceThemeCatalog,
   getChecklistSummary,
   getContactDisplayName,
   getContactLabels,
@@ -214,7 +215,16 @@ class WhatsAppClient {
     const resolvedMode = previewState.resolvedMode;
     const label = previewState.definition.label || 'WhatsApp';
 
-    if (themeSelect) themeSelect.value = theme;
+    if (themeSelect) {
+      const currentOptions = Array.from(themeSelect.options).map(option => option.value);
+      const expectedOptions = getAppearanceThemeCatalog().map(themeOption => themeOption.id);
+      if (currentOptions.join('|') !== expectedOptions.join('|')) {
+        themeSelect.innerHTML = getAppearanceThemeCatalog()
+          .map(themeOption => `<option value="${themeOption.id}">${themeOption.label}</option>`)
+          .join('');
+      }
+      themeSelect.value = theme;
+    }
     if (modeSelect) modeSelect.value = mode;
     if (preview) {
       const modeLabel = resolvedMode === 'dark' ? 'Dark' : 'Light';

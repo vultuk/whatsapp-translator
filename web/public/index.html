@@ -13,7 +13,7 @@
     (() => {
       try {
         const stored = JSON.parse(localStorage.getItem('wa_appearance_preferences') || '{}');
-        const theme = ['whatsapp', 'ocean', 'sunset'].includes(String(stored.theme || '').toLowerCase())
+        const theme = ['whatsapp', 'ocean', 'sunset', 'github', 'dracula', 'nord', 'linear', 'vercel'].includes(String(stored.theme || '').toLowerCase())
           ? String(stored.theme).toLowerCase()
           : 'whatsapp';
         const requestedMode = String(stored.mode || '').toLowerCase();
@@ -28,6 +28,16 @@
           'ocean-dark': '#0f172a',
           'sunset-light': '#fff6ef',
           'sunset-dark': '#1f1720',
+          'github-light': '#f6f8fa',
+          'github-dark': '#0d1117',
+          'dracula-light': '#f7f4ff',
+          'dracula-dark': '#282a36',
+          'nord-light': '#eceff4',
+          'nord-dark': '#2e3440',
+          'linear-light': '#f7f8f8',
+          'linear-dark': '#08090a',
+          'vercel-light': '#ffffff',
+          'vercel-dark': '#000000',
         };
         const dataTheme = `${theme}-${resolvedMode}`;
         document.documentElement.dataset.theme = dataTheme;
@@ -439,8 +449,13 @@
               <option value="whatsapp">WhatsApp</option>
               <option value="ocean">Ocean</option>
               <option value="sunset">Sunset</option>
+              <option value="github">GitHub</option>
+              <option value="dracula">Dracula</option>
+              <option value="nord">Nord</option>
+              <option value="linear">Linear</option>
+              <option value="vercel">Vercel</option>
             </select>
-            <p class="form-hint">Every theme includes both light and dark variants.</p>
+            <p class="form-hint">Every theme includes both light and dark variants, and each palette is tuned to keep text readable on both the page and elevated surfaces.</p>
           </div>
           <div class="form-group">
             <label for="appearance-mode-select">Mode</label>

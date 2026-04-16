@@ -20,6 +20,8 @@ import {
   getChecklistSummary,
   getPriorityInfo,
   getTimezoneInfo,
+  getAppearanceThemeCatalog,
+  getContrastRatio,
   resolveAppearanceTheme,
 } from '../public/app-state.js';
 
@@ -526,6 +528,32 @@ test('resolveAppearanceTheme returns the selected light theme variant explicitly
       dataTheme: 'ocean-light',
     },
   );
+});
+
+test('appearance theme catalog includes additional recognizable developer themes', () => {
+  const catalog = getAppearanceThemeCatalog();
+  assert.deepEqual(
+    catalog.map(theme => theme.id),
+    ['whatsapp', 'ocean', 'sunset', 'github', 'dracula', 'nord', 'linear', 'vercel'],
+  );
+});
+
+test('all appearance theme variants meet a readable text contrast threshold', () => {
+  const catalog = getAppearanceThemeCatalog();
+
+  for (const theme of catalog) {
+    for (const mode of ['light', 'dark']) {
+      const variant = theme[mode];
+      assert.ok(
+        getContrastRatio(variant.textColor, variant.surfaceColor) >= 4.5,
+        `${theme.id}-${mode} surface contrast should be at least 4.5`,
+      );
+      assert.ok(
+        getContrastRatio(variant.textColor, variant.themeColor) >= 4.5,
+        `${theme.id}-${mode} page contrast should be at least 4.5`,
+      );
+    }
+  }
 });
 
 test('timezone info surfaces visitor-friendly local time and quiet hours context', () => {
