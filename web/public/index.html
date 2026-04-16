@@ -97,6 +97,8 @@
             <button class="inbox-filter-chip" data-inbox-filter="needsReplyOnly" type="button">Needs reply</button>
             <button class="inbox-filter-chip" data-inbox-filter="groupsOnly" type="button">Groups</button>
             <button class="inbox-filter-chip" data-inbox-filter="draftsOnly" type="button">Drafts</button>
+            <button class="inbox-filter-chip" data-inbox-filter="importantOnly" type="button">Important</button>
+            <button class="inbox-filter-chip" data-inbox-filter="tasksOnly" type="button">Tasks</button>
             <button class="inbox-filter-chip" data-inbox-filter="pinnedOnly" type="button">Pinned</button>
             <button class="inbox-filter-chip" data-inbox-filter="notesOnly" type="button">Notes</button>
             <button class="inbox-filter-chip" data-inbox-filter="dueRemindersOnly" type="button">Due</button>
@@ -176,6 +178,18 @@
             <span id="chat-search-count" class="chat-search-count">0 matches</span>
             <button id="chat-search-clear" class="chat-search-clear" title="Clear search">Clear</button>
           </div>
+
+          <section id="visitor-workspace-card" class="visitor-workspace-card hidden">
+            <div class="visitor-workspace-header">
+              <div>
+                <span class="visitor-workspace-kicker">Visitor workspace</span>
+                <h3>Keep the important context in one place</h3>
+              </div>
+              <button id="visitor-workspace-edit" class="visitor-workspace-edit" type="button">Edit</button>
+            </div>
+            <div id="visitor-workspace-summary" class="visitor-workspace-summary"></div>
+            <div id="visitor-workspace-checklist" class="visitor-workspace-checklist"></div>
+          </section>
 
           <div id="messages-list" class="messages-list">
             <!-- Messages will be inserted here -->
@@ -303,6 +317,23 @@
             <input type="text" id="contact-alias" placeholder="e.g., Madrid Airbnb host, plumber, Zoe from yoga">
             <p class="form-hint">Rename chats locally so your inbox is recognizable at a glance.</p>
           </div>
+          <div class="form-group compact-grid compact-grid-visitor-meta">
+            <div>
+              <label for="conversation-priority">Priority</label>
+              <select id="conversation-priority">
+                <option value="normal">Normal</option>
+                <option value="urgent">Urgent</option>
+                <option value="high">High</option>
+                <option value="low">Low</option>
+              </select>
+              <p class="form-hint">Use this to bubble the conversations that matter most to the top.</p>
+            </div>
+            <div>
+              <label for="conversation-timezone">Contact timezone</label>
+              <input type="text" id="conversation-timezone" placeholder="e.g., Europe/Madrid, America/Los_Angeles">
+              <p class="form-hint">Show their local time so you do not message people at awkward hours.</p>
+            </div>
+          </div>
           <div class="form-group">
             <label for="language-override">Language Override</label>
             <input type="text" id="language-override" placeholder="e.g., Spanish, French, Japanese">
@@ -317,6 +348,11 @@
             <label for="conversation-notes">Private Notes</label>
             <textarea id="conversation-notes" rows="4" placeholder="Remember the follow-up, tone, or next step for this conversation"></textarea>
             <p class="form-hint">Visible only in this browser. Great for visitor-style context you don't want to send by accident.</p>
+          </div>
+          <div class="form-group">
+            <label for="conversation-checklist">Checklist</label>
+            <textarea id="conversation-checklist" rows="5" placeholder="- [ ] Confirm the check-in code&#10;- [ ] Book the airport taxi&#10;- [x] Save the reservation link"></textarea>
+            <p class="form-hint">Keep a simple per-conversation task list. These tasks also show up in the chat workspace card.</p>
           </div>
           <div class="form-group">
             <label for="conversation-labels">Labels</label>

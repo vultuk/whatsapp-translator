@@ -11,9 +11,15 @@ import {
   getReplyState,
   getContactDisplayName,
   isContactSnoozed,
+  parseChecklistInput,
   parseLabelsInput,
   removeQuickReply,
+  toggleChecklistItem,
+  upsertChecklistItems,
   upsertQuickReply,
+  getChecklistSummary,
+  getPriorityInfo,
+  getTimezoneInfo,
 } from '../public/app-state.js';
 
 test('upsertDraft stores trimmed text and removes empty drafts', () => {
@@ -346,4 +352,168 @@ test('upsertQuickReply deduplicates snippets and removeQuickReply deletes by id'
   assert.deepEqual(trimmed.map(reply => reply.text), ['Got it, thank you!', 'Thanks — I will send it shortly.']);
 
   assert.deepEqual(removeQuickReply(trimmed, trimmed[0].id), [trimmed[1]]);
+});
+
+test('priority info normalizes visitor triage preferences and surfaces important conversations', () => {
+  assert.deepEqual(getPriorityInfo({ priority: 'URGENT' }), {
+    value: 'urgent',
+    label: 'Urgent',
+    rank: 0,
+    isImportant: true,
+  });
+
+  assert.deepEqual(getPriorityInfo({ priority: 'low' }), {
+    value: 'low',
+    label: 'Low',
+    rank: 3,
+    isImportant: false,
+  });
+
+  assert.deepEqual(getPriorityInfo({}), {
+    value: 'normal',
+    label: 'Normal',
+    rank: 2,
+    isImportant: false,
+  });
+});
+
+test('getVisibleContacts supports important-only inbox triage and priority-aware search', () => {
+  const contacts = [
+    { id: 'host', name: 'Airport host', phone: '111', type: 'private', unreadCount: 0, lastMessageTime: 20 },
+    { id: 'friend', name: 'Dinner plans', phone: '222', type: 'private', unreadCount: 0, lastMessageTime: 10 },
+  ];
+
+  const metadataByContact = {
+    host: { priority: 'urgent' },
+    friend: { priority: 'low' },
+  };
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: '',
+      filters: { importantOnly: true },
+      messagePreviewByContact: {},
+      metadataByContact,
+    }).map(contact => contact.id),
+    ['host'],
+  );
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: 'urgent airport',
+      filters: {},
+      messagePreviewByContact: {},
+      metadataByContact,
+    }).map(contact => contact.id),
+    ['host'],
+  );
+});
+
+test('checklists can be parsed from visitor notes, updated, and summarized', () => {
+  const parsed = parseChecklistInput('- [ ] Confirm check-in code\n- [x] Book taxi\nBring passport');
+  assert.deepEqual(parsed.map(item => ({ text: item.text, done: item.done })), [
+    { text: 'Confirm check-in code', done: false },
+    { text: 'Book taxi', done: true },
+    { text: 'Bring passport', done: false },
+  ]);
+
+  const initial = upsertChecklistItems([], '- [ ] Confirm check-in code\n- [x] Book taxi', 100);
+  assert.equal(initial.length, 2);
+  assert.equal(initial[0].done, false);
+  assert.equal(initial[1].done, true);
+
+  const toggled = toggleChecklistItem(initial, initial[0].id, 200);
+  assert.equal(toggled[0].done, true);
+  assert.equal(toggled[0].updatedAt, 200);
+
+  const updated = upsertChecklistItems(toggled, '- [ ] Confirm check-in code\nBring passport', 300);
+  assert.deepEqual(updated.map(item => ({ text: item.text, done: item.done })), [
+    { text: 'Confirm check-in code', done: false },
+    { text: 'Bring passport', done: false },
+  ]);
+
+  assert.deepEqual(getChecklistSummary({ checklist: updated }), {
+    total: 2,
+    completed: 0,
+    open: 2,
+    label: '2 open tasks',
+  });
+});
+
+test('getVisibleContacts supports open-task inbox triage and checklist search', () => {
+  const contacts = [
+    { id: 'trip', name: 'Trip planner', phone: '111', type: 'private', unreadCount: 0, lastMessageTime: 20 },
+    { id: 'done', name: 'Handled', phone: '222', type: 'private', unreadCount: 0, lastMessageTime: 10 },
+  ];
+
+  const metadataByContact = {
+    trip: {
+      checklist: [
+        { id: 'a', text: 'Send passport details', done: false },
+        { id: 'b', text: 'Confirm airport pickup', done: true },
+      ],
+    },
+    done: {
+      checklist: [
+        { id: 'c', text: 'Archive receipt', done: true },
+      ],
+    },
+  };
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: '',
+      filters: { tasksOnly: true },
+      messagePreviewByContact: {},
+      metadataByContact,
+    }).map(contact => contact.id),
+    ['trip'],
+  );
+
+  assert.deepEqual(
+    getVisibleContacts({
+      contacts,
+      drafts: {},
+      searchQuery: 'passport details',
+      filters: {},
+      messagePreviewByContact: {},
+      metadataByContact,
+    }).map(contact => contact.id),
+    ['trip'],
+  );
+});
+
+test('timezone info surfaces visitor-friendly local time and quiet hours context', () => {
+  const morningUtc = Date.parse('2026-04-16T07:30:00Z');
+  const quietUtc = Date.parse('2026-04-16T23:30:00Z');
+
+  assert.deepEqual(getTimezoneInfo({ timezone: 'Europe/Madrid' }, morningUtc), {
+    timezone: 'Europe/Madrid',
+    localTime: '09:30',
+    label: '09:30 local time',
+    status: 'working-hours',
+    statusLabel: 'Working hours',
+  });
+
+  assert.deepEqual(getTimezoneInfo({ timezone: 'America/Los_Angeles' }, quietUtc), {
+    timezone: 'America/Los_Angeles',
+    localTime: '16:30',
+    label: '16:30 local time',
+    status: 'working-hours',
+    statusLabel: 'Working hours',
+  });
+
+  assert.deepEqual(getTimezoneInfo({ timezone: 'Asia/Tokyo' }, quietUtc), {
+    timezone: 'Asia/Tokyo',
+    localTime: '08:30',
+    label: '08:30 local time',
+    status: 'morning',
+    statusLabel: 'Morning',
+  });
 });

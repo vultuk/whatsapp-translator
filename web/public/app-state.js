@@ -8,6 +8,15 @@ const DEFAULT_FILTERS = {
   labelsOnly: false,
   snoozedOnly: false,
   needsReplyOnly: false,
+  importantOnly: false,
+  tasksOnly: false,
+};
+
+const PRIORITY_CONFIG = {
+  urgent: { value: 'urgent', label: 'Urgent', rank: 0, isImportant: true },
+  high: { value: 'high', label: 'High', rank: 1, isImportant: true },
+  normal: { value: 'normal', label: 'Normal', rank: 2, isImportant: false },
+  low: { value: 'low', label: 'Low', rank: 3, isImportant: false },
 };
 
 function normalizeText(value) {
@@ -22,6 +31,47 @@ function normalizeTimestamp(value) {
   if (value === null || value === undefined || value === '') return null;
   const timestamp = Number(value);
   return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function normalizePriority(value) {
+  const normalized = normalizeText(value);
+  return PRIORITY_CONFIG[normalized] ? normalized : 'normal';
+}
+
+function createChecklistId(text, updatedAt, index = 0) {
+  const slug = String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32) || 'task';
+  return `${slug}-${updatedAt}-${index}`;
+}
+
+function normalizeChecklistText(value) {
+  return String(value || '')
+    .replace(/^[\-•*]\s*/, '')
+    .trim();
+}
+
+function parseChecklistLine(line) {
+  const raw = String(line || '').trim();
+  if (!raw) return null;
+
+  const match = raw.match(/^(?:[-*•]\s*)?\[( |x|X)\]\s*(.+)$/);
+  if (match) {
+    return {
+      text: normalizeChecklistText(match[2]),
+      done: match[1].toLowerCase() === 'x',
+    };
+  }
+
+  const plainText = normalizeChecklistText(raw);
+  if (!plainText) return null;
+  return { text: plainText, done: false };
+}
+
+function getChecklistItems(metadata = {}) {
+  return Array.isArray(metadata?.checklist) ? metadata.checklist : [];
 }
 
 export function getContactDisplayName(contact = {}, metadata = {}) {
@@ -48,6 +98,115 @@ export function parseLabelsInput(value) {
       seen.add(key);
       return true;
     });
+}
+
+export function getPriorityInfo(metadata = {}) {
+  const value = normalizePriority(metadata?.priority);
+  return { ...PRIORITY_CONFIG[value] };
+}
+
+export function parseChecklistInput(value) {
+  const seen = new Set();
+  return String(value || '')
+    .split(/\n+/)
+    .map(parseChecklistLine)
+    .filter(Boolean)
+    .filter((item) => {
+      const key = normalizeText(item.text);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+export function upsertChecklistItems(existingItems, text, updatedAt = Date.now()) {
+  const previous = Array.isArray(existingItems) ? existingItems : [];
+  const existingByText = new Map(
+    previous.map(item => [normalizeText(item?.text), { ...item }]).filter(([key]) => Boolean(key)),
+  );
+
+  return parseChecklistInput(text).map((item, index) => {
+    const key = normalizeText(item.text);
+    const previousItem = existingByText.get(key);
+    return {
+      id: previousItem?.id || createChecklistId(item.text, updatedAt, index),
+      text: item.text,
+      done: item.done,
+      updatedAt: previousItem?.updatedAt || updatedAt,
+    };
+  });
+}
+
+export function toggleChecklistItem(items, itemId, updatedAt = Date.now()) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    if (item?.id !== itemId) {
+      return { ...item };
+    }
+
+    return {
+      ...item,
+      done: !item.done,
+      updatedAt,
+    };
+  });
+}
+
+export function getChecklistSummary(metadata = {}) {
+  const checklist = getChecklistItems(metadata);
+  const total = checklist.length;
+  const completed = checklist.filter(item => item?.done).length;
+  const open = Math.max(0, total - completed);
+  let label = 'No tasks';
+  if (open > 0) {
+    label = `${open} open task${open === 1 ? '' : 's'}`;
+  } else if (total > 0) {
+    label = 'All tasks done';
+  }
+
+  return { total, completed, open, label };
+}
+
+export function getTimezoneInfo(metadata = {}, now = Date.now()) {
+  const timezone = String(metadata?.timezone || '').trim();
+  if (!timezone) return null;
+
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date(now));
+    const hour = Number(parts.find(part => part.type === 'hour')?.value ?? '0');
+    const minute = parts.find(part => part.type === 'minute')?.value ?? '00';
+    const localTime = `${String(hour).padStart(2, '0')}:${minute}`;
+
+    let status = 'daytime';
+    let statusLabel = 'Daytime';
+    if (hour >= 9 && hour < 18) {
+      status = 'working-hours';
+      statusLabel = 'Working hours';
+    } else if (hour >= 6 && hour < 9) {
+      status = 'morning';
+      statusLabel = 'Morning';
+    } else if (hour >= 18 && hour < 22) {
+      status = 'evening';
+      statusLabel = 'Evening';
+    } else {
+      status = 'quiet-hours';
+      statusLabel = 'Quiet hours';
+    }
+
+    return {
+      timezone,
+      localTime,
+      label: `${localTime} local time`,
+      status,
+      statusLabel,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function getContactLabels(metadata = {}) {
@@ -250,6 +409,14 @@ function getMetadata(metadataByContact, contactId) {
 function contactMatchesSearch(contact, draftPreview, messagePreview, metadata, normalizedQuery) {
   if (!normalizedQuery) return true;
 
+  const priority = getPriorityInfo(metadata);
+  const checklistSummary = getChecklistSummary(metadata);
+  const timezoneInfo = getTimezoneInfo(metadata);
+  const checklistSearchText = getChecklistItems(metadata)
+    .map(item => item?.text)
+    .filter(Boolean)
+    .join(' ');
+
   const haystack = [
     contact?.name,
     contact?.phone,
@@ -261,6 +428,12 @@ function contactMatchesSearch(contact, draftPreview, messagePreview, metadata, n
     metadata?.notePreview,
     metadata?.reminderText,
     getContactLabels(metadata).join(' '),
+    priority.label,
+    checklistSummary.label,
+    checklistSearchText,
+    timezoneInfo?.timezone,
+    timezoneInfo?.label,
+    timezoneInfo?.statusLabel,
   ]
     .filter(Boolean)
     .join(' ')
@@ -287,6 +460,8 @@ export function getVisibleContacts({
     const draftPreview = getDraftPreview(drafts, contact.id);
     const hasDraft = Boolean(draftPreview);
     const metadata = getMetadata(metadataByContact, contact.id);
+    const priority = getPriorityInfo(metadata);
+    const checklistSummary = getChecklistSummary(metadata);
     const isPinned = metadata?.pinnedAt != null || contact?.pinnedAt != null;
     const hasNotes = Boolean(normalizeText(metadata?.notes || metadata?.notePreview));
     const labels = getContactLabels(metadata);
@@ -339,6 +514,14 @@ export function getVisibleContacts({
     }
 
     if (mergedFilters.needsReplyOnly && !['needs-reply', 'drafting'].includes(replyState)) {
+      return false;
+    }
+
+    if (mergedFilters.importantOnly && !priority.isImportant) {
+      return false;
+    }
+
+    if (mergedFilters.tasksOnly && checklistSummary.open === 0) {
       return false;
     }
 
