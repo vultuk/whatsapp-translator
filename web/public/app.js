@@ -1761,10 +1761,6 @@ class WhatsAppClient {
       if (contact) {
         const displayName = this.getContactDisplayName(contact);
         document.getElementById('chat-name').textContent = displayName;
-        this.updateChatHeaderNote();
-        const originalName = contact.name && contact.name !== displayName ? contact.name : '';
-        const phoneText = contact.phone ? '+' + contact.phone : '';
-        document.getElementById('chat-phone').textContent = [originalName, phoneText].filter(Boolean).join(' · ');
         
         const initial = (displayName || '?').charAt(0).toUpperCase();
         // Get avatar container - it's the .avatar element in .chat-header

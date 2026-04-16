@@ -812,8 +812,6 @@ body {
 }
 
 .chat-name,
-.chat-phone,
-.chat-note-indicator,
 .typing-indicator {
   min-width: 0;
 }
@@ -821,11 +819,6 @@ body {
 .chat-name {
   font-weight: 500;
   font-size: 15px;
-}
-
-.chat-phone {
-  font-size: 13px;
-  color: var(--text-secondary);
 }
 
 /* Typing Indicator in Chat Header */
@@ -3062,15 +3055,6 @@ body {
   box-shadow: inset 3px 0 0 rgba(246, 196, 69, 0.8);
 }
 
-.chat-note-indicator {
-  font-size: 12px;
-  color: #9cd6ca;
-  max-width: 520px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 #conversation-notes,
 #conversation-checklist,
 #conversation-priority,
@@ -3224,10 +3208,6 @@ body {
 @media (max-width: 768px) {
   .compact-grid {
     grid-template-columns: 1fr;
-  }
-
-  .chat-note-indicator {
-    max-width: 100%;
   }
 
   .quick-replies-header {
