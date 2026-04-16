@@ -805,8 +805,17 @@ body {
 }
 
 .chat-info {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+.chat-name,
+.chat-phone,
+.chat-note-indicator,
+.typing-indicator {
+  min-width: 0;
 }
 
 .chat-name {
@@ -2487,9 +2496,17 @@ body {
 /* ==================== Chat Actions Menu ==================== */
 .chat-actions {
   position: relative;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+.chat-cost-badge {
+  flex-shrink: 0;
+  max-width: 88px;
+  white-space: nowrap;
 }
 
 .chat-settings-button {
@@ -2517,10 +2534,10 @@ body {
   right: 0;
   width: min(240px, calc(100vw - 32px));
   padding: 8px;
-  border: 1px solid var(--border-color);
+  border: 1px solid color-mix(in srgb, var(--border-color) 82%, white 18%);
   border-radius: 16px;
-  background: var(--surface-raised, var(--bg-secondary));
-  box-shadow: 0 16px 40px var(--shadow-color);
+  background: color-mix(in srgb, var(--bg-secondary) 92%, black 8%);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
   display: grid;
   gap: 4px;
   z-index: 20;

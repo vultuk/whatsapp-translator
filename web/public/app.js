@@ -4151,10 +4151,9 @@ class WhatsAppClient {
 
   // Update conversation usage display in chat header
   updateConversationUsageDisplay(usage) {
-    const costEl = document.getElementById('chat-cost');
-    if (costEl) {
+    document.querySelectorAll('[data-chat-cost]').forEach((costEl) => {
       costEl.textContent = this.formatCost(usage.costUsd || 0);
-    }
+    });
   }
 
   // Extract URLs from text
