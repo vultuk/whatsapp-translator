@@ -312,6 +312,7 @@ body {
 #app {
   height: 100vh;
   height: var(--viewport-height);
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -390,9 +391,9 @@ body {
 
 /* Main Container */
 #main-container {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  height: 100vh;
-  height: var(--viewport-height);
 }
 
 /* Contacts Panel */
@@ -1925,9 +1926,8 @@ body {
   
   #main-container {
     position: relative;
-    height: 100vh;
-    height: 100dvh; /* Dynamic viewport height for mobile browsers */
-    height: var(--viewport-height); /* Visual viewport - handles iOS keyboard + suggestion bar */
+    flex: 1;
+    min-height: 0;
   }
   
   #main-container.chat-open #contacts-panel {
