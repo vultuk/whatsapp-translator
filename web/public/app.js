@@ -3,18 +3,23 @@
 import {
   countMatchingMessages,
   filterMessagesByQuery,
+  getChecklistSummary,
   getContactDisplayName,
   getContactLabels,
   getDraftPreview,
   getDraftText,
+  getPriorityInfo,
   getReminderStatus,
   getReplyState,
+  getTimezoneInfo,
   getVisibleContacts,
   isContactSnoozed,
   isMessageStarred,
   parseLabelsInput,
   removeQuickReply,
+  toggleChecklistItem,
   toggleStarredMessage,
+  upsertChecklistItems,
   upsertDraft,
   upsertQuickReply,
 } from './app-state.js';
@@ -65,6 +70,8 @@ class WhatsAppClient {
       unreadOnly: Boolean(storedInboxPreferences.unreadOnly),
       groupsOnly: Boolean(storedInboxPreferences.groupsOnly),
       draftsOnly: Boolean(storedInboxPreferences.draftsOnly),
+      importantOnly: Boolean(storedInboxPreferences.importantOnly),
+      tasksOnly: Boolean(storedInboxPreferences.tasksOnly),
       pinnedOnly: Boolean(storedInboxPreferences.pinnedOnly),
       notesOnly: Boolean(storedInboxPreferences.notesOnly),
       dueRemindersOnly: Boolean(storedInboxPreferences.dueRemindersOnly),
@@ -127,6 +134,7 @@ class WhatsAppClient {
     this.setupNotificationPermissionRequest();
     this.updateDraftBanner();
     this.renderQuickReplies();
+    this.renderVisitorWorkspaceCard();
     this.updateStarredToggleUI();
     this.updateChatSearchUI();
     this.syncInboxControls();
@@ -200,6 +208,25 @@ class WhatsAppClient {
     return getContactDisplayName(contact, this.getContactMetadata(contact?.id));
   }
 
+  getPriorityInfo(contactId) {
+    return getPriorityInfo(this.getContactMetadata(contactId));
+  }
+
+  getChecklistSummary(contactId) {
+    return getChecklistSummary(this.getContactMetadata(contactId));
+  }
+
+  getTimezoneInfo(contactId, now = Date.now()) {
+    return getTimezoneInfo(this.getContactMetadata(contactId), now);
+  }
+
+  formatChecklistForTextarea(contactId) {
+    const checklist = this.getContactMetadata(contactId).checklist || [];
+    return checklist
+      .map(item => `- [${item.done ? 'x' : ' '}] ${item.text}`)
+      .join('\n');
+  }
+
   getReplyState(contactId, now = Date.now()) {
     const contact = this.contacts.find(entry => entry.id === contactId) || { id: contactId };
     return getReplyState({
@@ -241,14 +268,23 @@ class WhatsAppClient {
   buildContactBadgeMarkup(contactId, now = Date.now()) {
     const metadata = this.getContactMetadata(contactId);
     const badges = [];
+    const priority = this.getPriorityInfo(contactId);
+    const checklist = this.getChecklistSummary(contactId);
     const reminderStatus = getReminderStatus(metadata, now);
     const replyState = this.getReplyState(contactId, now);
+    if (priority.isImportant) {
+      badges.push(`<span class="contact-meta-chip priority ${priority.value}">${priority.label}</span>`);
+    }
     if (replyState === 'needs-reply') {
       badges.push('<span class="contact-meta-chip reply">Reply</span>');
     } else if (replyState === 'drafting') {
       badges.push('<span class="contact-meta-chip drafting">Drafting</span>');
     } else if (replyState === 'waiting') {
       badges.push('<span class="contact-meta-chip waiting">Waiting</span>');
+    }
+
+    if (checklist.open > 0) {
+      badges.push(`<span class="contact-meta-chip tasks">${checklist.open} task${checklist.open === 1 ? '' : 's'}</span>`);
     }
 
     if (reminderStatus === 'due') {
@@ -277,6 +313,12 @@ class WhatsAppClient {
 
     const pieces = [];
     const metadata = this.getContactMetadata(contactId);
+    const priority = this.getPriorityInfo(contactId);
+    const checklist = this.getChecklistSummary(contactId);
+    const timezoneInfo = this.getTimezoneInfo(contactId, now);
+    if (priority.value !== 'normal') {
+      pieces.push(`Priority: ${priority.label}`);
+    }
     if (metadata.alias) {
       pieces.push(`Alias: ${metadata.alias}`);
     }
@@ -284,6 +326,14 @@ class WhatsAppClient {
     const replySummary = this.getReplySummary(contactId, now);
     if (replySummary) {
       pieces.push(replySummary);
+    }
+
+    if (checklist.total > 0) {
+      pieces.push(`Checklist: ${checklist.label}`);
+    }
+
+    if (timezoneInfo) {
+      pieces.push(`${timezoneInfo.label} · ${timezoneInfo.statusLabel}`);
     }
 
     const notePreview = this.getContactNotePreview(contactId, 96);
@@ -434,6 +484,15 @@ class WhatsAppClient {
       if (aPinned && !bPinned) return -1;
       if (!aPinned && bPinned) return 1;
       if (aPinned && bPinned) return a.pinnedAt - b.pinnedAt;
+
+      const aPriority = this.getPriorityInfo(a.id);
+      const bPriority = this.getPriorityInfo(b.id);
+      if (aPriority.rank !== bPriority.rank) return aPriority.rank - bPriority.rank;
+
+      const aChecklist = this.getChecklistSummary(a.id);
+      const bChecklist = this.getChecklistSummary(b.id);
+      if (aChecklist.open > 0 && bChecklist.open === 0) return -1;
+      if (aChecklist.open === 0 && bChecklist.open > 0) return 1;
 
       const aReminder = getReminderStatus(aMeta, now);
       const bReminder = getReminderStatus(bMeta, now);
@@ -1387,6 +1446,9 @@ class WhatsAppClient {
       const isPinned = contact.pinnedAt != null;
       const reminderStatus = getReminderStatus(this.getContactMetadata(contact.id));
       const isSnoozed = isContactSnoozed(this.getContactMetadata(contact.id));
+      const priority = this.getPriorityInfo(contact.id);
+      const checklist = this.getChecklistSummary(contact.id);
+      const timezoneInfo = this.getTimezoneInfo(contact.id);
       const displayName = this.getContactDisplayName(contact);
       const initial = (displayName || '?').charAt(0).toUpperCase();
       const time = this.formatTime(contact.lastMessageTime);
@@ -1425,6 +1487,12 @@ class WhatsAppClient {
       } else if (contact.lastMessagePreview) {
         // Fall back to server-provided preview (used before messages are loaded)
         preview = contact.lastMessagePreview;
+      } else if (checklist.open > 0) {
+        preview = checklist.label;
+        previewClass = 'preview-text checklist-preview';
+      } else if (timezoneInfo) {
+        preview = `${timezoneInfo.label} · ${timezoneInfo.statusLabel}`;
+        previewClass = 'preview-text timezone-preview';
       }
       
       // Check for cached avatar
@@ -1448,7 +1516,7 @@ class WhatsAppClient {
       `;
       
       return `
-        <div class="contact-item ${isActive ? 'active' : ''} ${isGroup ? 'is-group' : ''} ${isPinned ? 'is-pinned' : ''} ${reminderStatus === 'due' ? 'has-due-reminder' : ''}" data-contact-id="${contact.id}">
+        <div class="contact-item ${isActive ? 'active' : ''} ${isGroup ? 'is-group' : ''} ${isPinned ? 'is-pinned' : ''} ${priority.isImportant ? 'is-important' : ''} ${reminderStatus === 'due' ? 'has-due-reminder' : ''}" data-contact-id="${contact.id}">
           <div class="avatar-container">
             <div class="avatar">
               ${avatarContent}
@@ -1647,6 +1715,7 @@ class WhatsAppClient {
       this.restoreDraftForCurrentContact();
       this.updateDraftBanner();
       this.renderQuickReplies();
+      this.renderVisitorWorkspaceCard();
       document.getElementById('chat-search-bar')?.classList.add('hidden');
       const chatSearchInput = document.getElementById('chat-search-input');
       if (chatSearchInput) chatSearchInput.value = '';
@@ -2563,6 +2632,81 @@ class WhatsAppClient {
 
     text.textContent = `${preview} · Restored automatically when you return.`;
     banner.classList.remove('hidden');
+  }
+
+  renderVisitorWorkspaceCard() {
+    const card = document.getElementById('visitor-workspace-card');
+    const summaryEl = document.getElementById('visitor-workspace-summary');
+    const checklistEl = document.getElementById('visitor-workspace-checklist');
+    if (!card || !summaryEl || !checklistEl) return;
+
+    if (!this.currentContactId) {
+      card.classList.add('hidden');
+      summaryEl.innerHTML = '';
+      checklistEl.innerHTML = '';
+      return;
+    }
+
+    const metadata = this.getContactMetadata(this.currentContactId);
+    const priority = this.getPriorityInfo(this.currentContactId);
+    const checklist = this.getChecklistSummary(this.currentContactId);
+    const timezoneInfo = this.getTimezoneInfo(this.currentContactId);
+    const summaryChips = [];
+
+    if (priority.value !== 'normal') {
+      summaryChips.push(`<span class="workspace-chip priority ${priority.value}">${priority.label} priority</span>`);
+    }
+    if (timezoneInfo) {
+      summaryChips.push(`<span class="workspace-chip timezone ${timezoneInfo.status}">${this.escapeHtml(timezoneInfo.label)} · ${this.escapeHtml(timezoneInfo.statusLabel)}</span>`);
+    }
+    if (checklist.total > 0) {
+      summaryChips.push(`<span class="workspace-chip tasks">${this.escapeHtml(checklist.label)}</span>`);
+    }
+    if (metadata.notes) {
+      summaryChips.push('<span class="workspace-chip">Private note saved</span>');
+    }
+
+    summaryEl.innerHTML = summaryChips.length > 0
+      ? summaryChips.join('')
+      : '<span class="workspace-empty">Add priority, timezone, or tasks to turn this into a visitor-ready workspace.</span>';
+
+    const checklistItems = Array.isArray(metadata.checklist) ? metadata.checklist : [];
+    if (checklistItems.length === 0) {
+      checklistEl.innerHTML = '<p class="workspace-empty">No checklist yet. Add one in conversation settings for all the tiny follow-ups you do not want to forget.</p>';
+    } else {
+      checklistEl.innerHTML = `
+        <div class="workspace-checklist-header">
+          <span>Conversation checklist</span>
+          <span>${this.escapeHtml(checklist.label)}</span>
+        </div>
+        <div class="workspace-checklist-items">
+          ${checklistItems.map(item => `
+            <label class="workspace-checklist-item ${item.done ? 'done' : ''}">
+              <input type="checkbox" data-workspace-checklist-toggle="${item.id}" ${item.done ? 'checked' : ''}>
+              <span>${this.escapeHtml(item.text)}</span>
+            </label>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    card.classList.remove('hidden');
+  }
+
+  toggleWorkspaceChecklistItem(itemId) {
+    if (!this.currentContactId || !itemId) return;
+    const metadata = this.getContactMetadata(this.currentContactId);
+    const nextChecklist = toggleChecklistItem(metadata.checklist || [], itemId);
+    this.updateContactMetadata(this.currentContactId, { checklist: nextChecklist });
+
+    const contact = this.contacts.find(item => item.id === this.currentContactId);
+    if (contact) {
+      contact.checklist = nextChecklist;
+    }
+
+    this.renderVisitorWorkspaceCard();
+    this.renderContacts();
+    this.updateChatHeaderNote();
   }
 
   renderQuickReplies() {
@@ -3614,6 +3758,17 @@ class WhatsAppClient {
       }
     });
 
+    document.getElementById('visitor-workspace-edit')?.addEventListener('click', () => {
+      this.openSettingsModal();
+    });
+
+    document.getElementById('visitor-workspace-checklist')?.addEventListener('change', (event) => {
+      const toggle = event.target.closest('[data-workspace-checklist-toggle]');
+      if (toggle) {
+        this.toggleWorkspaceChecklistItem(toggle.dataset.workspaceChecklistToggle);
+      }
+    });
+
     document.getElementById('chat-search-toggle')?.addEventListener('click', () => {
       this.toggleChatSearch();
     });
@@ -3717,6 +3872,7 @@ class WhatsAppClient {
     document.getElementById('no-chat-selected').classList.remove('hidden');
     this.updateDraftBanner();
     this.renderQuickReplies();
+    this.renderVisitorWorkspaceCard();
     this.updateStarredToggleUI();
     this.updateChatSearchUI();
     this.renderContacts();
@@ -4319,6 +4475,9 @@ class WhatsAppClient {
       alias: localSettings.alias || '',
       notes: localSettings.notes || '',
       pinnedAt: localSettings.pinnedAt || null,
+      priority: this.getPriorityInfo(contactId).value,
+      timezone: localSettings.timezone || '',
+      checklist: localSettings.checklist || [],
       reminderText: localSettings.reminderText || '',
       reminderAt: localSettings.reminderAt || null,
       snoozedUntil: localSettings.snoozedUntil || null,
@@ -4326,9 +4485,12 @@ class WhatsAppClient {
     };
 
     document.getElementById('contact-alias').value = mergedSettings.alias || '';
+    document.getElementById('conversation-priority').value = mergedSettings.priority || 'normal';
+    document.getElementById('conversation-timezone').value = mergedSettings.timezone || '';
     document.getElementById('language-override').value = mergedSettings.languageOverride || '';
     document.getElementById('translation-style').value = mergedSettings.translationStyle || '';
     document.getElementById('conversation-notes').value = mergedSettings.notes || '';
+    document.getElementById('conversation-checklist').value = this.formatChecklistForTextarea(contactId);
     document.getElementById('conversation-labels').value = (mergedSettings.labels || []).join(', ');
     document.getElementById('conversation-reminder-text').value = mergedSettings.reminderText || '';
     document.getElementById('conversation-reminder-at').value = mergedSettings.reminderAt ? this.toDateTimeLocalValue(mergedSettings.reminderAt) : '';
@@ -4371,7 +4533,12 @@ class WhatsAppClient {
     const languageOverride = document.getElementById('language-override')?.value?.trim() || null;
     const translationStyle = document.getElementById('translation-style')?.value?.trim() || null;
     const alias = document.getElementById('contact-alias')?.value?.trim() || null;
+    const priority = document.getElementById('conversation-priority')?.value || 'normal';
+    const timezone = document.getElementById('conversation-timezone')?.value?.trim() || null;
     const notes = document.getElementById('conversation-notes')?.value?.trim() || null;
+    const checklistText = document.getElementById('conversation-checklist')?.value || '';
+    const existingChecklist = this.getContactMetadata(targetContactId).checklist || [];
+    const checklist = upsertChecklistItems(existingChecklist, checklistText);
     const labels = parseLabelsInput(document.getElementById('conversation-labels')?.value || '');
     const reminderText = document.getElementById('conversation-reminder-text')?.value?.trim() || null;
     const reminderAt = this.parseDateTimeLocalValue(document.getElementById('conversation-reminder-at')?.value || '');
@@ -4385,9 +4552,12 @@ class WhatsAppClient {
 
     this.updateContactMetadata(targetContactId, {
       alias,
+      priority,
+      timezone,
       notes,
       notePreview: notes || null,
       pinnedAt,
+      checklist,
       labels,
       labelsText: labels.join(', '),
       reminderText: reminderText && reminderAt ? reminderText : null,
@@ -4398,9 +4568,12 @@ class WhatsAppClient {
     const contact = this.contacts.find(item => item.id === targetContactId);
     if (contact) {
       contact.alias = alias;
+      contact.priority = priority;
+      contact.timezone = timezone;
       contact.notes = notes;
       contact.notePreview = notes || null;
       contact.pinnedAt = pinnedAt;
+      contact.checklist = checklist;
       contact.labels = labels;
       contact.reminderText = reminderText && reminderAt ? reminderText : null;
       contact.reminderAt = reminderText && reminderAt ? reminderAt : null;
@@ -4437,6 +4610,7 @@ class WhatsAppClient {
     this.closeSettingsModal();
     this.syncInboxControls();
     this.renderContacts();
+    this.renderVisitorWorkspaceCard();
     this.updateChatHeaderNote();
   }
 }

@@ -2504,6 +2504,133 @@ body {
   font-size: 13px;
 }
 
+.visitor-workspace-card {
+  margin: 12px 16px 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(17, 27, 33, 0.92), rgba(24, 34, 40, 0.96));
+  display: grid;
+  gap: 14px;
+}
+
+.visitor-workspace-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.visitor-workspace-header h3 {
+  margin: 4px 0 0;
+  font-size: 15px;
+}
+
+.visitor-workspace-kicker {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.visitor-workspace-edit {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.visitor-workspace-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workspace-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.workspace-chip.priority.urgent {
+  background: rgba(255, 104, 104, 0.16);
+  color: #ff9c9c;
+}
+
+.workspace-chip.priority.high {
+  background: rgba(246, 196, 69, 0.16);
+  color: #ffd68a;
+}
+
+.workspace-chip.tasks {
+  background: rgba(79, 195, 247, 0.16);
+  color: #8bd3ff;
+}
+
+.workspace-chip.timezone.working-hours {
+  background: rgba(0, 168, 132, 0.14);
+  color: #8af0d1;
+}
+
+.workspace-chip.timezone.quiet-hours,
+.workspace-chip.timezone.evening {
+  background: rgba(115, 103, 240, 0.16);
+  color: #d0c8ff;
+}
+
+.workspace-chip.timezone.morning {
+  background: rgba(246, 196, 69, 0.16);
+  color: #ffd68a;
+}
+
+.visitor-workspace-checklist {
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-checklist-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workspace-checklist-items {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-checklist-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.workspace-checklist-item.done span {
+  text-decoration: line-through;
+  color: var(--text-secondary);
+}
+
+.workspace-checklist-item input {
+  accent-color: var(--accent-color);
+  margin-top: 2px;
+}
+
+.workspace-empty {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 .preview-text.draft-preview {
   color: #ffb547;
   font-style: italic;
@@ -2532,6 +2659,15 @@ body {
 
   .draft-banner {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .visitor-workspace-card {
+    margin: 10px 12px 0;
+  }
+
+  .visitor-workspace-header,
+  .workspace-checklist-header {
     flex-direction: column;
   }
 }
@@ -2638,12 +2774,39 @@ body {
   color: #c8c2ff;
 }
 
+.contact-meta-chip.priority.urgent {
+  background: rgba(255, 104, 104, 0.18);
+  color: #ff9c9c;
+}
+
+.contact-meta-chip.priority.high,
+.contact-item.is-important .contact-time {
+  color: #ffd68a;
+}
+
+.contact-meta-chip.priority.high {
+  background: rgba(246, 196, 69, 0.16);
+}
+
+.contact-meta-chip.tasks {
+  background: rgba(79, 195, 247, 0.16);
+  color: #8bd3ff;
+}
+
 .note-preview {
   color: #9cd6ca;
 }
 
 .preview-text.reminder-preview {
   color: #ffd68a;
+}
+
+.preview-text.checklist-preview {
+  color: #8bd3ff;
+}
+
+.preview-text.timezone-preview {
+  color: #cbbcff;
 }
 
 .preview-text.snooze-preview {
@@ -2664,13 +2827,20 @@ body {
   white-space: nowrap;
 }
 
-#conversation-notes {
+#conversation-notes,
+#conversation-checklist,
+#conversation-priority,
+#conversation-timezone {
   width: 100%;
   border-radius: 10px;
   border: 1px solid var(--border-color);
   background: var(--bg-primary);
   color: var(--text-primary);
   padding: 10px 12px;
+}
+
+#conversation-notes,
+#conversation-checklist {
   resize: vertical;
   min-height: 96px;
 }
@@ -2695,6 +2865,10 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.compact-grid-visitor-meta {
+  align-items: start;
 }
 
 .compact-grid label {
