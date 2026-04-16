@@ -2484,11 +2484,12 @@ body {
   }
 }
 
-/* ==================== Chat Settings Button ==================== */
+/* ==================== Chat Actions Menu ==================== */
 .chat-actions {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: flex-end;
 }
 
 .chat-settings-button {
@@ -2504,9 +2505,67 @@ body {
   transition: background-color 0.2s, color 0.2s;
 }
 
-.chat-settings-button:hover {
+.chat-settings-button:hover,
+.chat-settings-button.active {
   background: var(--hover-color);
   color: var(--text-primary);
+}
+
+.chat-actions-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(240px, calc(100vw - 32px));
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--surface-raised, var(--bg-secondary));
+  box-shadow: 0 16px 40px var(--shadow-color);
+  display: grid;
+  gap: 4px;
+  z-index: 20;
+}
+
+.chat-menu-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.chat-menu-item:hover,
+.chat-menu-item.active {
+  background: var(--hover-color);
+}
+
+.chat-menu-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-color);
+}
+
+.chat-menu-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px 4px;
+}
+
+.chat-menu-meta-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.chat-menu-cost {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-color);
 }
 
 /* ==================== Context Menu ==================== */
@@ -2791,7 +2850,6 @@ body {
   cursor: pointer;
 }
 
-.chat-settings-button.active,
 .star-toggle.active {
   color: #f6c445;
 }
@@ -2806,133 +2864,6 @@ body {
   border-radius: 12px;
   background: rgba(0, 168, 132, 0.12);
   color: var(--text-primary);
-  font-size: 13px;
-}
-
-.visitor-workspace-card {
-  margin: 12px 16px 0;
-  padding: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  background: linear-gradient(180deg, rgba(17, 27, 33, 0.92), rgba(24, 34, 40, 0.96));
-  display: grid;
-  gap: 14px;
-}
-
-.visitor-workspace-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.visitor-workspace-header h3 {
-  margin: 4px 0 0;
-  font-size: 15px;
-}
-
-.visitor-workspace-kicker {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-secondary);
-}
-
-.visitor-workspace-edit {
-  border: 1px solid var(--border-color);
-  background: transparent;
-  color: var(--text-primary);
-  border-radius: 999px;
-  padding: 8px 12px;
-  cursor: pointer;
-}
-
-.visitor-workspace-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.workspace-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: 999px;
-  padding: 7px 10px;
-  font-size: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary);
-}
-
-.workspace-chip.priority.urgent {
-  background: rgba(255, 104, 104, 0.16);
-  color: #ff9c9c;
-}
-
-.workspace-chip.priority.high {
-  background: rgba(246, 196, 69, 0.16);
-  color: #ffd68a;
-}
-
-.workspace-chip.tasks {
-  background: rgba(79, 195, 247, 0.16);
-  color: #8bd3ff;
-}
-
-.workspace-chip.timezone.working-hours {
-  background: rgba(0, 168, 132, 0.14);
-  color: #8af0d1;
-}
-
-.workspace-chip.timezone.quiet-hours,
-.workspace-chip.timezone.evening {
-  background: rgba(115, 103, 240, 0.16);
-  color: #d0c8ff;
-}
-
-.workspace-chip.timezone.morning {
-  background: rgba(246, 196, 69, 0.16);
-  color: #ffd68a;
-}
-
-.visitor-workspace-checklist {
-  display: grid;
-  gap: 10px;
-}
-
-.workspace-checklist-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.workspace-checklist-items {
-  display: grid;
-  gap: 8px;
-}
-
-.workspace-checklist-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-.workspace-checklist-item.done span {
-  text-decoration: line-through;
-  color: var(--text-secondary);
-}
-
-.workspace-checklist-item input {
-  accent-color: var(--accent-color);
-  margin-top: 2px;
-}
-
-.workspace-empty {
-  color: var(--text-secondary);
   font-size: 13px;
 }
 
@@ -2964,15 +2895,6 @@ body {
 
   .draft-banner {
     align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .visitor-workspace-card {
-    margin: 10px 12px 0;
-  }
-
-  .visitor-workspace-header,
-  .workspace-checklist-header {
     flex-direction: column;
   }
 }
@@ -3201,6 +3123,7 @@ body {
   flex-direction: column;
   gap: 8px;
   padding: 10px 14px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .quick-replies-header {
@@ -3221,8 +3144,8 @@ body {
 .quick-reply-save {
   border: 0;
   border-radius: 999px;
-  padding: 7px 12px;
-  background: rgba(0, 168, 132, 0.14);
+  padding: 6px 11px;
+  background: rgba(var(--accent-rgb), 0.12);
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 600;
@@ -3244,7 +3167,7 @@ body {
 
 .quick-replies-empty {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   padding: 2px 0 6px;
 }
 
@@ -3252,12 +3175,12 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: 280px;
+  max-width: 260px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
   background: var(--bg-secondary);
   color: var(--text-primary);
-  padding: 8px 12px;
+  padding: 7px 11px;
   cursor: pointer;
   flex-shrink: 0;
 }

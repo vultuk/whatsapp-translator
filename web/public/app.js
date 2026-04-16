@@ -19,7 +19,6 @@ import {
   parseLabelsInput,
   removeQuickReply,
   resolveAppearanceTheme,
-  toggleChecklistItem,
   toggleStarredMessage,
   upsertChecklistItems,
   upsertDraft,
@@ -145,7 +144,7 @@ class WhatsAppClient {
     this.setupNotificationPermissionRequest();
     this.updateDraftBanner();
     this.renderQuickReplies();
-    this.renderVisitorWorkspaceCard();
+    this.updateConversationMenuUI();
     this.updateStarredToggleUI();
     this.updateChatSearchUI();
     this.syncInboxControls();
@@ -421,11 +420,9 @@ class WhatsAppClient {
     const priority = this.getPriorityInfo(contactId);
     const checklist = this.getChecklistSummary(contactId);
     const timezoneInfo = this.getTimezoneInfo(contactId, now);
+
     if (priority.value !== 'normal') {
-      pieces.push(`Priority: ${priority.label}`);
-    }
-    if (metadata.alias) {
-      pieces.push(`Alias: ${metadata.alias}`);
+      pieces.push(`${priority.label} priority`);
     }
 
     const replySummary = this.getReplySummary(contactId, now);
@@ -433,35 +430,26 @@ class WhatsAppClient {
       pieces.push(replySummary);
     }
 
-    if (checklist.total > 0) {
-      pieces.push(`Checklist: ${checklist.label}`);
+    if (checklist.open > 0) {
+      pieces.push(`${checklist.open} open task${checklist.open === 1 ? '' : 's'}`);
+    }
+
+    const reminderStatus = getReminderStatus(metadata, now);
+    if (reminderStatus === 'due') {
+      pieces.push('Reminder due');
+    } else if (reminderStatus === 'upcoming') {
+      pieces.push('Reminder set');
+    }
+
+    if (isContactSnoozed(metadata, now)) {
+      pieces.push('Snoozed');
     }
 
     if (timezoneInfo) {
       pieces.push(`${timezoneInfo.label} · ${timezoneInfo.statusLabel}`);
     }
 
-    const notePreview = this.getContactNotePreview(contactId, 96);
-    if (notePreview) {
-      pieces.push(`Private note: ${notePreview}`);
-    }
-
-    const reminderSummary = this.getReminderSummary(contactId, now);
-    if (reminderSummary) {
-      pieces.push(reminderSummary);
-    }
-
-    const snoozeSummary = this.getSnoozeSummary(contactId, now);
-    if (snoozeSummary) {
-      pieces.push(snoozeSummary);
-    }
-
-    const labels = this.getContactLabels(contactId);
-    if (labels.length > 0) {
-      pieces.push(`Labels: ${labels.join(', ')}`);
-    }
-
-    return pieces.join(' • ');
+    return pieces.slice(0, 3).join(' • ');
   }
 
   scheduleMetadataRefresh() {
@@ -1820,7 +1808,7 @@ class WhatsAppClient {
       this.restoreDraftForCurrentContact();
       this.updateDraftBanner();
       this.renderQuickReplies();
-      this.renderVisitorWorkspaceCard();
+      this.closeConversationMenu();
       document.getElementById('chat-search-bar')?.classList.add('hidden');
       const chatSearchInput = document.getElementById('chat-search-input');
       if (chatSearchInput) chatSearchInput.value = '';
@@ -2739,99 +2727,72 @@ class WhatsAppClient {
     banner.classList.remove('hidden');
   }
 
-  renderVisitorWorkspaceCard() {
-    const card = document.getElementById('visitor-workspace-card');
-    const summaryEl = document.getElementById('visitor-workspace-summary');
-    const checklistEl = document.getElementById('visitor-workspace-checklist');
-    if (!card || !summaryEl || !checklistEl) return;
+  toggleConversationMenu() {
+    const menu = document.getElementById('chat-actions-menu');
+    if (!menu) return;
 
-    if (!this.currentContactId) {
-      card.classList.add('hidden');
-      summaryEl.innerHTML = '';
-      checklistEl.innerHTML = '';
-      return;
-    }
+    const shouldOpen = menu.classList.contains('hidden');
+    this.closeConversationMenu();
+    if (!shouldOpen) return;
 
-    const metadata = this.getContactMetadata(this.currentContactId);
-    const priority = this.getPriorityInfo(this.currentContactId);
-    const checklist = this.getChecklistSummary(this.currentContactId);
-    const timezoneInfo = this.getTimezoneInfo(this.currentContactId);
-    const summaryChips = [];
-
-    if (priority.value !== 'normal') {
-      summaryChips.push(`<span class="workspace-chip priority ${priority.value}">${priority.label} priority</span>`);
-    }
-    if (timezoneInfo) {
-      summaryChips.push(`<span class="workspace-chip timezone ${timezoneInfo.status}">${this.escapeHtml(timezoneInfo.label)} · ${this.escapeHtml(timezoneInfo.statusLabel)}</span>`);
-    }
-    if (checklist.total > 0) {
-      summaryChips.push(`<span class="workspace-chip tasks">${this.escapeHtml(checklist.label)}</span>`);
-    }
-    if (metadata.notes) {
-      summaryChips.push('<span class="workspace-chip">Private note saved</span>');
-    }
-
-    summaryEl.innerHTML = summaryChips.length > 0
-      ? summaryChips.join('')
-      : '<span class="workspace-empty">Add priority, timezone, or tasks to turn this into a visitor-ready workspace.</span>';
-
-    const checklistItems = Array.isArray(metadata.checklist) ? metadata.checklist : [];
-    if (checklistItems.length === 0) {
-      checklistEl.innerHTML = '<p class="workspace-empty">No checklist yet. Add one in conversation settings for all the tiny follow-ups you do not want to forget.</p>';
-    } else {
-      checklistEl.innerHTML = `
-        <div class="workspace-checklist-header">
-          <span>Conversation checklist</span>
-          <span>${this.escapeHtml(checklist.label)}</span>
-        </div>
-        <div class="workspace-checklist-items">
-          ${checklistItems.map(item => `
-            <label class="workspace-checklist-item ${item.done ? 'done' : ''}">
-              <input type="checkbox" data-workspace-checklist-toggle="${item.id}" ${item.done ? 'checked' : ''}>
-              <span>${this.escapeHtml(item.text)}</span>
-            </label>
-          `).join('')}
-        </div>
-      `;
-    }
-
-    card.classList.remove('hidden');
+    menu.classList.remove('hidden');
+    this.updateConversationMenuUI();
   }
 
-  toggleWorkspaceChecklistItem(itemId) {
-    if (!this.currentContactId || !itemId) return;
-    const metadata = this.getContactMetadata(this.currentContactId);
-    const nextChecklist = toggleChecklistItem(metadata.checklist || [], itemId);
-    this.updateContactMetadata(this.currentContactId, { checklist: nextChecklist });
+  closeConversationMenu() {
+    document.getElementById('chat-actions-menu')?.classList.add('hidden');
+    this.updateConversationMenuUI();
+  }
 
-    const contact = this.contacts.find(item => item.id === this.currentContactId);
-    if (contact) {
-      contact.checklist = nextChecklist;
+  updateConversationMenuUI() {
+    const button = document.getElementById('chat-menu-button');
+    const menu = document.getElementById('chat-actions-menu');
+    const searchButton = document.getElementById('chat-search-toggle');
+    const starredButton = document.getElementById('chat-starred-toggle');
+    const searchBarVisible = !document.getElementById('chat-search-bar')?.classList.contains('hidden');
+
+    if (button && menu) {
+      button.setAttribute('aria-expanded', String(!menu.classList.contains('hidden')));
+      button.classList.toggle('active', !menu.classList.contains('hidden'));
     }
 
-    this.renderVisitorWorkspaceCard();
-    this.renderContacts();
-    this.updateChatHeaderNote();
+    if (searchButton) {
+      searchButton.classList.toggle('active', searchBarVisible || Boolean(this.messageSearchQuery));
+      searchButton.textContent = searchBarVisible ? 'Hide search' : 'Search messages';
+    }
+
+    if (starredButton) {
+      starredButton.classList.toggle('active', this.starredOnly);
+      starredButton.textContent = this.starredOnly ? 'Show all messages' : 'Show starred messages only';
+    }
   }
 
   renderQuickReplies() {
+    const bar = document.querySelector('.quick-replies-bar');
     const container = document.getElementById('quick-replies-list');
     const saveButton = document.getElementById('quick-reply-save');
     const draftText = this.currentContactId ? getDraftText(this.drafts, this.currentContactId) : '';
+    const hasReplies = Array.isArray(this.quickReplies) && this.quickReplies.length > 0;
+    const shouldShowBar = Boolean(this.currentContactId) && (hasReplies || Boolean(draftText));
 
     if (saveButton) {
       saveButton.disabled = !this.currentContactId || !draftText;
+      saveButton.textContent = hasReplies ? 'Save draft' : 'Save this draft';
+    }
+
+    if (bar) {
+      bar.classList.toggle('hidden', !shouldShowBar);
     }
 
     if (!container) return;
 
-    if (!this.currentContactId) {
-      container.innerHTML = '<span class="quick-replies-empty">Choose a conversation to use saved replies.</span>';
+    if (!shouldShowBar) {
+      container.innerHTML = '';
       return;
     }
 
-    if (!Array.isArray(this.quickReplies) || this.quickReplies.length === 0) {
-      container.innerHTML = '<span class="quick-replies-empty">Save your best replies once and reuse them here.</span>';
+    if (!hasReplies) {
+      container.innerHTML = '<span class="quick-replies-empty">Saved replies will appear here once you keep one.</span>';
       return;
     }
 
@@ -2914,6 +2875,8 @@ class WhatsAppClient {
       this.updateChatSearchUI();
       this.refreshCurrentConversationView();
     }
+
+    this.updateConversationMenuUI();
   }
 
   clearChatSearch() {
@@ -2922,6 +2885,7 @@ class WhatsAppClient {
     if (input) input.value = '';
     this.updateChatSearchUI();
     this.refreshCurrentConversationView();
+    this.updateConversationMenuUI();
   }
 
   async setChatSearchQuery(query) {
@@ -2931,14 +2895,12 @@ class WhatsAppClient {
     }
     this.updateChatSearchUI();
     this.refreshCurrentConversationView();
+    this.updateConversationMenuUI();
   }
 
   updateChatSearchUI() {
     const countEl = document.getElementById('chat-search-count');
-    const toggleButton = document.getElementById('chat-search-toggle');
-    if (toggleButton) {
-      toggleButton.classList.toggle('active', Boolean(this.messageSearchQuery));
-    }
+    this.updateConversationMenuUI();
     if (!countEl) return;
 
     const visibleMessages = this.getVisibleMessagesForCurrentConversation();
@@ -2961,10 +2923,10 @@ class WhatsAppClient {
 
   updateStarredToggleUI() {
     const button = document.getElementById('chat-starred-toggle');
-    if (!button) return;
-
-    button.classList.toggle('active', this.starredOnly);
-    button.title = this.starredOnly ? 'Show all messages' : 'Show starred messages only';
+    if (button) {
+      button.title = this.starredOnly ? 'Show all messages' : 'Show starred messages only';
+    }
+    this.updateConversationMenuUI();
   }
 
   getVisibleMessagesForCurrentConversation() {
@@ -3789,6 +3751,10 @@ class WhatsAppClient {
       if (!e.target.closest('.emoji-button-container')) {
         document.getElementById('emoji-picker')?.classList.add('hidden');
       }
+      // Close conversation actions menu when clicking outside
+      if (!e.target.closest('.chat-actions')) {
+        this.closeConversationMenu();
+      }
     });
 
     // Emoji picker button
@@ -3867,19 +3833,14 @@ class WhatsAppClient {
       this.openAppearanceModal();
     });
 
-    document.getElementById('visitor-workspace-edit')?.addEventListener('click', () => {
-      this.openSettingsModal();
-    });
-
-    document.getElementById('visitor-workspace-checklist')?.addEventListener('change', (event) => {
-      const toggle = event.target.closest('[data-workspace-checklist-toggle]');
-      if (toggle) {
-        this.toggleWorkspaceChecklistItem(toggle.dataset.workspaceChecklistToggle);
-      }
+    document.getElementById('chat-menu-button')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.toggleConversationMenu();
     });
 
     document.getElementById('chat-search-toggle')?.addEventListener('click', () => {
       this.toggleChatSearch();
+      this.closeConversationMenu();
     });
 
     document.getElementById('chat-search-clear')?.addEventListener('click', () => {
@@ -3892,11 +3853,13 @@ class WhatsAppClient {
 
     document.getElementById('chat-starred-toggle')?.addEventListener('click', () => {
       this.toggleStarredOnly();
+      this.closeConversationMenu();
     });
 
     // Chat settings button in header
     document.getElementById('chat-settings-button')?.addEventListener('click', () => {
       this.openSettingsModal();
+      this.closeConversationMenu();
     });
 
     // Context menu for contacts (right-click)
@@ -4010,9 +3973,9 @@ class WhatsAppClient {
     document.getElementById('main-container').classList.remove('chat-open');
     document.getElementById('chat-view').classList.add('hidden');
     document.getElementById('no-chat-selected').classList.remove('hidden');
+    this.closeConversationMenu();
     this.updateDraftBanner();
     this.renderQuickReplies();
-    this.renderVisitorWorkspaceCard();
     this.updateStarredToggleUI();
     this.updateChatSearchUI();
     this.renderContacts();
@@ -4750,8 +4713,8 @@ class WhatsAppClient {
     this.closeSettingsModal();
     this.syncInboxControls();
     this.renderContacts();
-    this.renderVisitorWorkspaceCard();
     this.updateChatHeaderNote();
+    this.updateConversationMenuUI();
   }
 }
 
