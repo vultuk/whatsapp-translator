@@ -646,6 +646,41 @@ select {
   gap: 8px;
 }
 
+.user-info,
+.user-details,
+.status-indicator {
+  min-width: 0;
+}
+
+#user-name,
+.phone {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 1200px) {
+  .panel-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px 12px;
+  }
+
+  .user-info {
+    flex: 1 1 220px;
+  }
+
+  .header-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    padding-left: 54px;
+    gap: 6px;
+  }
+
+  .status-indicator {
+    margin-right: auto;
+  }
+}
+
 .header-icon-button,
 .logout-button {
   background: transparent;
@@ -1854,7 +1889,7 @@ select {
 .input-container {
   display: flex;
   align-items: flex-end;
-  gap: 12px;
+  gap: 10px;
   background: var(--bg-tertiary);
   border-radius: 8px;
   padding: 8px 12px;
@@ -1885,7 +1920,9 @@ select {
   background: transparent;
   border: none;
   cursor: pointer;
-  padding: 4px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   color: var(--text-secondary);
   border-radius: 50%;
   display: flex;
@@ -1916,6 +1953,7 @@ select {
   align-items: center;
   justify-content: center;
   transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
 }
 
 .send-button:hover:not(:disabled) {
@@ -1935,22 +1973,25 @@ select {
 /* Send button group with dropdown */
 .send-button-group {
   position: relative;
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
 .send-dropdown-toggle {
   background: transparent;
   border: none;
   cursor: pointer;
-  padding: 4px 2px;
+  min-width: 18px;
+  padding: 4px 3px;
   color: var(--text-secondary);
   border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: color 0.15s, background 0.15s;
-  margin-left: -4px;
+  flex-shrink: 0;
 }
 
 .send-dropdown-toggle:hover:not(:disabled) {
@@ -2542,12 +2583,18 @@ select {
 /* Emoji Picker Styles */
 .emoji-button-container {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .emoji-button {
   background: transparent;
   border: none;
-  padding: 4px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   cursor: pointer;
   color: var(--text-secondary);
   border-radius: 50%;
