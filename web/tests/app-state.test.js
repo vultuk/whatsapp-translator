@@ -21,7 +21,9 @@ import {
   getPriorityInfo,
   getTimezoneInfo,
   getAppearanceThemeCatalog,
+  getContactActionSnapshot,
   getContrastRatio,
+  buildVisitorDashboard,
   resolveAppearanceTheme,
 } from '../public/app-state.js';
 
@@ -490,6 +492,93 @@ test('getVisibleContacts supports open-task inbox triage and checklist search', 
     }).map(contact => contact.id),
     ['trip'],
   );
+});
+
+test('getContactActionSnapshot highlights the most urgent visitor context first', () => {
+  const now = 1_710_000_000_000;
+  const contact = {
+    id: 'vip',
+    name: 'VIP Client',
+    unreadCount: 2,
+    lastMessageTime: now - 5_000,
+  };
+
+  const snapshot = getContactActionSnapshot({
+    contact,
+    drafts: {
+      vip: { text: 'Need to send the contract recap', updatedAt: now - 2_000 },
+    },
+    metadata: {
+      priority: 'urgent',
+      reminderText: 'Send the contract recap',
+      reminderAt: now - 60_000,
+      checklist: [{ id: 'task-1', text: 'Share contract recap', done: false }],
+      labels: ['VIP'],
+    },
+    messages: [{ id: 'm1', timestamp: now - 5_000, isFromMe: false, content: { type: 'text', body: 'Can you send the recap?' } }],
+    now,
+  });
+
+  assert.equal(snapshot.headline, 'Reminder due');
+  assert.equal(snapshot.replyState, 'drafting');
+  assert.equal(snapshot.checklist.open, 1);
+  assert.equal(snapshot.priority.value, 'urgent');
+  assert.match(snapshot.summary, /Reminder due/);
+  assert.ok(snapshot.attentionScore > 150);
+});
+
+test('buildVisitorDashboard summarizes focus work, reminders, drafts, and open tasks', () => {
+  const now = 1_710_000_000_000;
+  const contacts = [
+    { id: 'vip', name: 'VIP Client', unreadCount: 1, lastMessageTime: now - 1_000 },
+    { id: 'trip', name: 'Trip Planner', unreadCount: 0, lastMessageTime: now - 10_000 },
+    { id: 'later', name: 'Later', unreadCount: 0, lastMessageTime: now - 20_000 },
+  ];
+
+  const dashboard = buildVisitorDashboard({
+    contacts,
+    drafts: {
+      vip: { text: 'Need to send the contract recap', updatedAt: now - 2_000 },
+    },
+    metadataByContact: {
+      vip: {
+        priority: 'urgent',
+        reminderText: 'Send the contract recap',
+        reminderAt: now - 60_000,
+        checklist: [{ id: 'task-1', text: 'Share contract recap', done: false }],
+      },
+      trip: {
+        reminderText: 'Share the itinerary',
+        reminderAt: now + 3_600_000,
+        checklist: [
+          { id: 'task-2', text: 'Book the taxi', done: false },
+          { id: 'task-3', text: 'Save passport copy', done: true },
+        ],
+      },
+      later: {
+        snoozedUntil: now + 86_400_000,
+        checklist: [{ id: 'task-4', text: 'Ignore while snoozed', done: false }],
+      },
+    },
+    messagesByContact: {
+      vip: [{ id: 'vip-1', timestamp: now - 1_000, isFromMe: false, content: { type: 'text', body: 'Can you send the recap?' } }],
+      trip: [{ id: 'trip-1', timestamp: now - 10_000, isFromMe: true, content: { type: 'text', body: 'Working on the itinerary now.' } }],
+    },
+    now,
+  });
+
+  assert.deepEqual(dashboard.stats, {
+    needsReply: 1,
+    dueReminders: 1,
+    drafts: 1,
+    openTasks: 2,
+  });
+  assert.equal(dashboard.focusContacts[0].contact.id, 'vip');
+  assert.deepEqual(
+    dashboard.upcomingReminders.map(entry => entry.contact.id),
+    ['trip'],
+  );
+  assert.equal(dashboard.snoozedContacts, 1);
 });
 
 test('resolveAppearanceTheme falls back safely and honors system dark mode', () => {

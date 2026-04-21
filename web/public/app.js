@@ -1,9 +1,11 @@
 // WhatsApp Translator Web Client
 
 import {
+  buildVisitorDashboard,
   countMatchingMessages,
   filterMessagesByQuery,
   getAppearanceThemeCatalog,
+  getContactActionSnapshot,
   getChecklistSummary,
   getContactDisplayName,
   getContactLabels,
@@ -19,6 +21,7 @@ import {
   parseLabelsInput,
   removeQuickReply,
   resolveAppearanceTheme,
+  toggleChecklistItem,
   toggleStarredMessage,
   upsertChecklistItems,
   upsertDraft,
@@ -91,6 +94,11 @@ class WhatsAppClient {
     this.messageSearchQuery = '';
     this.starredOnly = false;
     this.fullyLoadedContacts = new Set();
+    this.commandPaletteOpen = false;
+    this.commandPaletteQuery = '';
+    this.commandPaletteSelectionIndex = 0;
+    this.commandPaletteItems = [];
+    this.workspaceExpanded = !this.isMobile();
     
     // Emoji data organized by category
     this.emojiData = {
@@ -150,6 +158,8 @@ class WhatsAppClient {
     this.updateChatSearchUI();
     this.syncInboxControls();
     this.syncAppearanceControls();
+    this.updateWorkspaceUI();
+    this.renderVisitorDashboard();
   }
 
   loadStoredJson(key) {
@@ -475,6 +485,7 @@ class WhatsAppClient {
       this.metadataRefreshTimer = null;
       this.renderContacts();
       this.updateChatHeaderNote();
+      this.renderConversationWorkspace();
       this.scheduleMetadataRefresh();
     }, delay + 50);
   }
@@ -500,6 +511,8 @@ class WhatsAppClient {
 
     this.persistContactMetadata();
     this.scheduleMetadataRefresh();
+    this.renderVisitorDashboard();
+    this.renderConversationWorkspace();
     return this.getContactMetadata(contactId);
   }
 
@@ -607,6 +620,538 @@ class WhatsAppClient {
 
       return (b.lastMessageTime || 0) - (a.lastMessageTime || 0);
     });
+  }
+
+  getContactActionSnapshot(contactId, now = Date.now()) {
+    const contact = this.contacts.find(entry => entry.id === contactId) || { id: contactId };
+    return getContactActionSnapshot({
+      contact,
+      drafts: this.drafts,
+      metadata: this.getContactMetadata(contactId),
+      messages: this.messages.get(contactId) || [],
+      now,
+    });
+  }
+
+  getVisitorDashboardData(now = Date.now()) {
+    return buildVisitorDashboard({
+      contacts: this.contacts,
+      drafts: this.drafts,
+      metadataByContact: this.contactMetadata,
+      messagesByContact: Object.fromEntries(this.messages.entries()),
+      now,
+    });
+  }
+
+  applyInboxPreset(preset = 'all') {
+    this.sidebarSearchQuery = '';
+    for (const key of Object.keys(this.contactFilters)) {
+      this.contactFilters[key] = false;
+    }
+
+    const filterKeyByPreset = {
+      needsReply: 'needsReplyOnly',
+      dueReminders: 'dueRemindersOnly',
+      drafts: 'draftsOnly',
+      openTasks: 'tasksOnly',
+      pinned: 'pinnedOnly',
+    };
+
+    const filterKey = filterKeyByPreset[preset];
+    if (filterKey) {
+      this.contactFilters[filterKey] = true;
+    }
+
+    this.persistInboxPreferences();
+    this.syncInboxControls();
+    this.renderContacts();
+  }
+
+  renderVisitorDashboard() {
+    const container = document.getElementById('visitor-dashboard');
+    const statsEl = document.getElementById('visitor-dashboard-stats');
+    const focusEl = document.getElementById('visitor-dashboard-focus');
+    const remindersEl = document.getElementById('visitor-dashboard-reminders');
+    const focusCountEl = document.getElementById('visitor-dashboard-focus-count');
+    const reminderCountEl = document.getElementById('visitor-dashboard-reminder-count');
+    if (!container || !statsEl || !focusEl || !remindersEl) return;
+
+    if ((this.contacts || []).length === 0) {
+      container.classList.add('hidden');
+      return;
+    }
+
+    container.classList.remove('hidden');
+    const dashboard = this.getVisitorDashboardData();
+    const statCards = [
+      {
+        id: 'needsReply',
+        label: 'Needs reply',
+        value: dashboard.stats.needsReply,
+        description: 'Chats waiting on you',
+        active: this.contactFilters.needsReplyOnly,
+      },
+      {
+        id: 'dueReminders',
+        label: 'Due reminders',
+        value: dashboard.stats.dueReminders,
+        description: 'Follow-ups that are due now',
+        active: this.contactFilters.dueRemindersOnly,
+      },
+      {
+        id: 'drafts',
+        label: 'Saved drafts',
+        value: dashboard.stats.drafts,
+        description: 'Replies you already started',
+        active: this.contactFilters.draftsOnly,
+      },
+      {
+        id: 'openTasks',
+        label: 'Open tasks',
+        value: dashboard.stats.openTasks,
+        description: 'Checklist items still open',
+        active: this.contactFilters.tasksOnly,
+      },
+    ];
+
+    statsEl.innerHTML = statCards.map(card => `
+      <button
+        class="visitor-stat-card ${card.active ? 'active' : ''}"
+        type="button"
+        data-dashboard-preset="${card.id}"
+      >
+        <span class="visitor-stat-value">${card.value}</span>
+        <span class="visitor-stat-label">${card.label}</span>
+        <span class="visitor-stat-description">${card.description}</span>
+      </button>
+    `).join('');
+
+    focusCountEl.textContent = `${dashboard.focusContacts.length} active`;
+    reminderCountEl.textContent = `${dashboard.upcomingReminders.length} scheduled`;
+
+    if (dashboard.focusContacts.length === 0) {
+      focusEl.innerHTML = `
+        <div class="visitor-dashboard-empty">
+          <strong>Your inbox is in good shape.</strong>
+          <span>No replies, reminders, or open tasks are asking for attention right now.</span>
+        </div>
+      `;
+    } else {
+      focusEl.innerHTML = dashboard.focusContacts.map(({ contact, snapshot }) => `
+        <button class="visitor-focus-item" type="button" data-dashboard-contact="${contact.id}">
+          <div class="visitor-focus-copy">
+            <span class="visitor-focus-name">${this.escapeHtml(this.getContactDisplayName(contact))}</span>
+            <span class="visitor-focus-summary">${this.escapeHtml(snapshot.summary || snapshot.headline)}</span>
+          </div>
+          <div class="visitor-focus-meta">
+            <span class="visitor-focus-time">${this.escapeHtml(snapshot.lastMessageTime ? this.formatTime(snapshot.lastMessageTime) : 'No recent activity')}</span>
+          </div>
+        </button>
+      `).join('');
+    }
+
+    if (dashboard.upcomingReminders.length === 0) {
+      remindersEl.innerHTML = `
+        <div class="visitor-dashboard-empty">
+          <strong>No upcoming reminders yet.</strong>
+          <span>Set a reminder inside any conversation to keep your future follow-ups visible.</span>
+        </div>
+      `;
+    } else {
+      remindersEl.innerHTML = dashboard.upcomingReminders.map(({ contact, snapshot }) => `
+        <button class="visitor-focus-item visitor-reminder-item" type="button" data-dashboard-contact="${contact.id}">
+          <div class="visitor-focus-copy">
+            <span class="visitor-focus-name">${this.escapeHtml(this.getContactDisplayName(contact))}</span>
+            <span class="visitor-focus-summary">${this.escapeHtml(this.getReminderSummary(contact.id) || snapshot.summary)}</span>
+          </div>
+          <div class="visitor-focus-meta">
+            <span class="visitor-focus-time">${this.escapeHtml(this.formatMetadataTime(snapshot.reminderAt))}</span>
+          </div>
+        </button>
+      `).join('');
+    }
+  }
+
+  getCommandPaletteActions() {
+    const actions = [
+      {
+        id: 'action-dashboard',
+        kind: 'action',
+        title: 'Go to Today dashboard',
+        subtitle: 'Return to the visitor overview and action queue',
+        keywords: 'today dashboard home overview',
+        run: () => {
+          this.closeCommandPalette();
+          this.closeChat();
+        },
+      },
+      {
+        id: 'action-inbox-search',
+        kind: 'action',
+        title: 'Search inbox',
+        subtitle: 'Focus the left-side inbox search box',
+        keywords: 'search inbox chats filters',
+        run: () => {
+          this.closeCommandPalette();
+          document.getElementById('inbox-search-input')?.focus();
+          document.getElementById('inbox-search-input')?.select();
+        },
+      },
+      {
+        id: 'action-needs-reply',
+        kind: 'action',
+        title: 'Show chats that need a reply',
+        subtitle: 'Apply the reply queue inbox preset',
+        keywords: 'reply queue unread pending',
+        run: () => {
+          this.closeCommandPalette();
+          this.applyInboxPreset('needsReply');
+          this.closeChat();
+        },
+      },
+      {
+        id: 'action-reminders',
+        kind: 'action',
+        title: 'Show due reminders',
+        subtitle: 'Filter the inbox to follow-ups that are due now',
+        keywords: 'reminders due follow-up',
+        run: () => {
+          this.closeCommandPalette();
+          this.applyInboxPreset('dueReminders');
+          this.closeChat();
+        },
+      },
+      {
+        id: 'action-clear-filters',
+        kind: 'action',
+        title: 'Clear inbox filters',
+        subtitle: 'Reset search and show every visible conversation again',
+        keywords: 'clear reset filters inbox',
+        run: () => {
+          this.closeCommandPalette();
+          this.clearInboxFilters();
+        },
+      },
+      {
+        id: 'action-appearance',
+        kind: 'action',
+        title: 'Open appearance settings',
+        subtitle: 'Change theme and light/dark mode',
+        keywords: 'appearance theme dark light',
+        run: () => {
+          this.closeCommandPalette();
+          this.openAppearanceModal();
+        },
+      },
+    ];
+
+    if (this.currentContactId) {
+      actions.unshift(
+        {
+          id: 'action-workspace',
+          kind: 'action',
+          title: this.workspaceExpanded ? 'Collapse workspace panel' : 'Expand workspace panel',
+          subtitle: 'Show or hide the conversation context card',
+          keywords: 'workspace panel context notes checklist',
+          run: () => {
+            this.closeCommandPalette();
+            this.toggleWorkspacePanel();
+          },
+        },
+        {
+          id: 'action-chat-search',
+          kind: 'action',
+          title: 'Search current conversation',
+          subtitle: 'Open in-chat search and focus it immediately',
+          keywords: 'search messages current chat',
+          run: () => {
+            this.closeCommandPalette();
+            if (document.getElementById('chat-search-bar')?.classList.contains('hidden')) {
+              this.toggleChatSearch();
+            } else {
+              document.getElementById('chat-search-input')?.focus();
+              document.getElementById('chat-search-input')?.select();
+            }
+          },
+        },
+        {
+          id: 'action-chat-settings',
+          kind: 'action',
+          title: 'Edit current conversation settings',
+          subtitle: 'Open alias, notes, labels, reminder, and translation settings',
+          keywords: 'settings edit notes labels reminder translation',
+          run: () => {
+            this.closeCommandPalette();
+            this.openSettingsModal();
+          },
+        },
+      );
+    }
+
+    return actions;
+  }
+
+  getCommandPaletteItems(query = '') {
+    const normalizedQuery = String(query || '').trim().toLowerCase();
+    const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+    const matchesTokens = (value) => {
+      if (!tokens.length) return true;
+      const haystack = String(value || '').toLowerCase();
+      return tokens.every(token => haystack.includes(token));
+    };
+
+    const actions = this.getCommandPaletteActions()
+      .filter(action => matchesTokens(`${action.title} ${action.subtitle} ${action.keywords}`))
+      .map(action => ({ ...action }));
+
+    const contacts = (this.contacts || [])
+      .map((contact) => {
+        const snapshot = this.getContactActionSnapshot(contact.id);
+        const searchText = [
+          this.getContactDisplayName(contact),
+          contact.phone,
+          snapshot.summary,
+          snapshot.headline,
+          this.getContactNotePreview(contact.id),
+          snapshot.labels.join(' '),
+        ]
+          .filter(Boolean)
+          .join(' ');
+        const matches = matchesTokens(searchText);
+        if (!matches) return null;
+
+        let rank = snapshot.attentionScore + Math.min(20, Math.max(0, Number(contact.unreadCount || 0) * 2));
+        if (!tokens.length) {
+          rank += 8;
+        } else {
+          const displayName = this.getContactDisplayName(contact).toLowerCase();
+          if (tokens.some(token => displayName.startsWith(token))) {
+            rank += 20;
+          }
+        }
+
+        return {
+          id: `contact-${contact.id}`,
+          kind: 'contact',
+          contactId: contact.id,
+          title: this.getContactDisplayName(contact),
+          subtitle: snapshot.summary || snapshot.headline,
+          rank,
+          snapshot,
+          run: () => {
+            this.closeCommandPalette();
+            this.selectContact(contact.id);
+          },
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        if (b.rank !== a.rank) return b.rank - a.rank;
+        return (b.snapshot?.lastMessageTime || 0) - (a.snapshot?.lastMessageTime || 0);
+      })
+      .slice(0, tokens.length ? 8 : 6);
+
+    return [...actions.slice(0, tokens.length ? 6 : 4), ...contacts];
+  }
+
+  renderCommandPalette() {
+    const container = document.getElementById('command-palette-results');
+    const input = document.getElementById('command-palette-input');
+    if (!container || !input) return;
+
+    input.value = this.commandPaletteQuery;
+    this.commandPaletteItems = this.getCommandPaletteItems(this.commandPaletteQuery);
+    if (this.commandPaletteItems.length === 0) {
+      this.commandPaletteSelectionIndex = 0;
+      container.innerHTML = `
+        <div class="command-palette-empty">
+          <strong>No matching chats or actions.</strong>
+          <span>Try a contact name, “reply”, “theme”, or “reminder”.</span>
+        </div>
+      `;
+      return;
+    }
+
+    this.commandPaletteSelectionIndex = Math.min(
+      this.commandPaletteSelectionIndex,
+      this.commandPaletteItems.length - 1,
+    );
+
+    container.innerHTML = this.commandPaletteItems.map((item, index) => {
+      const snapshot = item.snapshot;
+      const badge = item.kind === 'contact' && snapshot?.headline
+        ? `<span class="command-palette-item-badge">${this.escapeHtml(snapshot.headline)}</span>`
+        : `<span class="command-palette-item-badge action">Action</span>`;
+      const meta = item.kind === 'contact'
+        ? `<span class="command-palette-item-meta">${this.escapeHtml(snapshot?.lastMessageTime ? this.formatTime(snapshot.lastMessageTime) : 'No messages yet')}</span>`
+        : '<span class="command-palette-item-meta">Shortcut</span>';
+
+      return `
+        <button
+          class="command-palette-item ${index === this.commandPaletteSelectionIndex ? 'active' : ''}"
+          type="button"
+          data-command-index="${index}"
+        >
+          <div class="command-palette-item-copy">
+            <span class="command-palette-item-title">${this.escapeHtml(item.title)}</span>
+            <span class="command-palette-item-subtitle">${this.escapeHtml(item.subtitle || '')}</span>
+          </div>
+          <div class="command-palette-item-meta-group">
+            ${badge}
+            ${meta}
+          </div>
+        </button>
+      `;
+    }).join('');
+
+    container.querySelector('.command-palette-item.active')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  openCommandPalette(initialQuery = '') {
+    const palette = document.getElementById('command-palette');
+    const input = document.getElementById('command-palette-input');
+    if (!palette || !input) return;
+
+    this.commandPaletteOpen = true;
+    this.commandPaletteQuery = initialQuery;
+    this.commandPaletteSelectionIndex = 0;
+    palette.classList.remove('hidden');
+    this.renderCommandPalette();
+    input.focus();
+    input.select();
+  }
+
+  closeCommandPalette() {
+    this.commandPaletteOpen = false;
+    this.commandPaletteQuery = '';
+    this.commandPaletteSelectionIndex = 0;
+    this.commandPaletteItems = [];
+    document.getElementById('command-palette')?.classList.add('hidden');
+  }
+
+  moveCommandPaletteSelection(direction = 1) {
+    if (!this.commandPaletteOpen || this.commandPaletteItems.length === 0) return;
+    const maxIndex = this.commandPaletteItems.length - 1;
+    this.commandPaletteSelectionIndex = this.commandPaletteSelectionIndex + direction;
+    if (this.commandPaletteSelectionIndex < 0) {
+      this.commandPaletteSelectionIndex = maxIndex;
+    } else if (this.commandPaletteSelectionIndex > maxIndex) {
+      this.commandPaletteSelectionIndex = 0;
+    }
+    this.renderCommandPalette();
+  }
+
+  activateCommandPaletteSelection(index = this.commandPaletteSelectionIndex) {
+    const item = this.commandPaletteItems[index];
+    if (!item) return;
+    item.run();
+  }
+
+  toggleWorkspacePanel(force) {
+    this.workspaceExpanded = typeof force === 'boolean' ? force : !this.workspaceExpanded;
+    this.updateWorkspaceUI();
+  }
+
+  updateWorkspaceUI() {
+    const workspace = document.getElementById('conversation-workspace');
+    const toggleButton = document.getElementById('chat-workspace-toggle');
+    if (workspace) {
+      workspace.classList.toggle('collapsed', !this.workspaceExpanded);
+    }
+    if (toggleButton) {
+      toggleButton.classList.toggle('active', this.workspaceExpanded);
+      toggleButton.setAttribute('aria-expanded', String(this.workspaceExpanded));
+      toggleButton.title = this.workspaceExpanded ? 'Hide workspace' : 'Show workspace';
+    }
+    this.renderConversationWorkspace();
+  }
+
+  renderConversationWorkspace() {
+    const summaryEl = document.getElementById('conversation-workspace-summary');
+    const statusEl = document.getElementById('workspace-primary-status');
+    const notesEl = document.getElementById('workspace-notes');
+    const checklistEl = document.getElementById('workspace-checklist');
+    const checklistSummaryEl = document.getElementById('workspace-checklist-summary');
+    const labelsEl = document.getElementById('workspace-labels');
+    const reminderEl = document.getElementById('workspace-reminder');
+    const timezoneEl = document.getElementById('workspace-timezone');
+    const workspace = document.getElementById('conversation-workspace');
+    if (!summaryEl || !statusEl || !notesEl || !checklistEl || !labelsEl || !reminderEl || !timezoneEl || !workspace) {
+      return;
+    }
+
+    if (!this.currentContactId) {
+      summaryEl.innerHTML = '';
+      statusEl.textContent = 'No local context yet.';
+      notesEl.textContent = 'No notes yet.';
+      checklistEl.innerHTML = '';
+      checklistSummaryEl.textContent = 'No tasks';
+      labelsEl.innerHTML = '';
+      reminderEl.textContent = 'No reminder set.';
+      timezoneEl.textContent = '';
+      return;
+    }
+
+    const contact = this.contacts.find(entry => entry.id === this.currentContactId) || { id: this.currentContactId };
+    const snapshot = this.getContactActionSnapshot(this.currentContactId);
+    const metadata = this.getContactMetadata(this.currentContactId);
+    const checklist = Array.isArray(metadata.checklist) ? metadata.checklist : [];
+    const labels = snapshot.labels;
+    const notes = String(metadata.notes || '').trim();
+
+    summaryEl.innerHTML = this.buildContactBadgeMarkup(this.currentContactId) || '<span class="workspace-empty-chip">No visitor context yet</span>';
+    statusEl.textContent = snapshot.summary || 'Add notes, labels, reminders, or tasks to keep this conversation organized.';
+
+    notesEl.textContent = notes || 'No notes yet. Add private context in conversation settings so you can keep tone, follow-ups, and reminders visible while replying.';
+    notesEl.classList.toggle('empty', !notes);
+
+    checklistSummaryEl.textContent = snapshot.checklist.label;
+    if (checklist.length === 0) {
+      checklistEl.innerHTML = '<span class="workspace-empty-chip">No checklist items yet</span>';
+    } else {
+      checklistEl.innerHTML = checklist.map((item) => `
+        <button
+          class="workspace-checklist-item ${item.done ? 'done' : ''}"
+          type="button"
+          data-workspace-checklist="${item.id}"
+        >
+          <span class="workspace-checklist-mark">${item.done ? '✓' : ''}</span>
+          <span class="workspace-checklist-text">${this.escapeHtml(item.text)}</span>
+        </button>
+      `).join('');
+    }
+
+    if (labels.length === 0) {
+      labelsEl.innerHTML = '<span class="workspace-empty-chip">No labels yet</span>';
+    } else {
+      labelsEl.innerHTML = labels.map(label => `<span class="workspace-label-chip">${this.escapeHtml(label)}</span>`).join('');
+    }
+
+    reminderEl.textContent = this.getReminderSummary(this.currentContactId) || 'No reminder set.';
+    reminderEl.classList.toggle('due', snapshot.reminderStatus === 'due');
+    timezoneEl.textContent = snapshot.timezoneInfo
+      ? `${snapshot.timezoneInfo.localTime} · ${snapshot.timezoneInfo.statusLabel}`
+      : '';
+
+    workspace.classList.toggle('has-reminder-due', snapshot.reminderStatus === 'due');
+    workspace.classList.toggle('collapsed', !this.workspaceExpanded);
+  }
+
+  toggleWorkspaceChecklistItem(itemId) {
+    if (!this.currentContactId || !itemId) return;
+
+    const metadata = this.getContactMetadata(this.currentContactId);
+    const checklist = toggleChecklistItem(metadata.checklist || [], itemId);
+    this.updateContactMetadata(this.currentContactId, { checklist });
+
+    const contact = this.contacts.find(entry => entry.id === this.currentContactId);
+    if (contact) {
+      contact.checklist = checklist;
+    }
+
+    this.renderContacts();
+    this.updateChatHeaderNote();
+    this.renderConversationWorkspace();
   }
 
   // Keep the app height aligned with iOS Safari's real usable screen area.
@@ -899,6 +1444,7 @@ class WhatsAppClient {
     this.scheduleRenderContacts();
     if (contactId === this.currentContactId) {
       this.updateChatHeaderNote();
+      this.renderConversationWorkspace();
     }
   }
 
@@ -1049,6 +1595,8 @@ class WhatsAppClient {
       }
       this.refreshCurrentConversationView();
       this.scrollToBottom();
+      this.updateChatHeaderNote();
+      this.renderConversationWorkspace();
     }
     
     // Refresh usage stats if this was a translated message
@@ -1525,6 +2073,7 @@ class WhatsAppClient {
   // Render contacts list
   renderContacts() {
     const container = document.getElementById('contacts-list');
+    this.renderVisitorDashboard();
     
     if (this.contacts.length === 0) {
       container.innerHTML = `
@@ -1747,6 +2296,7 @@ class WhatsAppClient {
   // Select a contact
   async selectContact(contactId) {
     try {
+      this.closeCommandPalette();
       this.currentContactId = contactId;
       this.messageSearchQuery = '';
       this.starredOnly = false;
@@ -1826,6 +2376,8 @@ class WhatsAppClient {
       if (chatSearchInput) chatSearchInput.value = '';
       this.updateChatSearchUI();
       this.updateStarredToggleUI();
+      this.updateChatHeaderNote();
+      this.updateWorkspaceUI();
       
       // Update send button state and focus input (only on desktop)
       this.updateSendButton();
@@ -2704,6 +3256,8 @@ class WhatsAppClient {
     this.updateDraftBanner();
     this.renderQuickReplies();
     this.scheduleRenderContacts();
+    this.updateChatHeaderNote();
+    this.renderConversationWorkspace();
   }
 
   clearCurrentDraft() {
@@ -2722,6 +3276,8 @@ class WhatsAppClient {
     this.renderQuickReplies();
     this.updateSendButton();
     this.scheduleRenderContacts();
+    this.updateChatHeaderNote();
+    this.renderConversationWorkspace();
   }
 
   updateDraftBanner() {
@@ -3011,6 +3567,8 @@ class WhatsAppClient {
       this.updateSendButton();
       this.autoResizeTextarea(input);
       this.scheduleRenderContacts();
+      this.updateChatHeaderNote();
+      this.renderConversationWorkspace();
       
       // Create a local message representation with translation info from response
       const localMessage = {
@@ -3040,6 +3598,8 @@ class WhatsAppClient {
         messages.push(localMessage);
         this.refreshCurrentConversationView();
         this.scrollToBottom();
+        this.updateChatHeaderNote();
+        this.renderConversationWorkspace();
       }
       
       // Update contact list
@@ -3663,6 +4223,27 @@ class WhatsAppClient {
       button.addEventListener('click', () => this.toggleInboxFilter(button.dataset.inboxFilter));
     });
 
+    document.getElementById('command-palette-button')?.addEventListener('click', () => {
+      this.openCommandPalette();
+    });
+
+    document.getElementById('visitor-dashboard-open-palette')?.addEventListener('click', () => {
+      this.openCommandPalette();
+    });
+
+    document.getElementById('visitor-dashboard')?.addEventListener('click', (event) => {
+      const presetTarget = event.target.closest('[data-dashboard-preset]');
+      if (presetTarget) {
+        this.applyInboxPreset(presetTarget.dataset.dashboardPreset);
+        return;
+      }
+
+      const contactTarget = event.target.closest('[data-dashboard-contact]');
+      if (contactTarget) {
+        this.selectContact(contactTarget.dataset.dashboardContact);
+      }
+    });
+
     // Contact click
     document.getElementById('contacts-list').addEventListener('click', (e) => {
       const contactItem = e.target.closest('.contact-item');
@@ -3874,6 +4455,21 @@ class WhatsAppClient {
       this.closeConversationMenu();
     });
 
+    document.getElementById('chat-workspace-toggle')?.addEventListener('click', () => {
+      this.toggleWorkspacePanel();
+    });
+
+    document.getElementById('workspace-settings-button')?.addEventListener('click', () => {
+      this.openSettingsModal();
+    });
+
+    document.getElementById('workspace-checklist')?.addEventListener('click', (event) => {
+      const item = event.target.closest('[data-workspace-checklist]');
+      if (item) {
+        this.toggleWorkspaceChecklistItem(item.dataset.workspaceChecklist);
+      }
+    });
+
     // Context menu for contacts (right-click)
     document.getElementById('contacts-list').addEventListener('contextmenu', (e) => {
       const contactItem = e.target.closest('.contact-item');
@@ -3955,9 +4551,75 @@ class WhatsAppClient {
       this.saveConversationSettings();
     });
 
+    document.getElementById('command-palette-input')?.addEventListener('input', (event) => {
+      this.commandPaletteQuery = event.target.value || '';
+      this.commandPaletteSelectionIndex = 0;
+      this.renderCommandPalette();
+    });
+
+    document.getElementById('command-palette-results')?.addEventListener('click', (event) => {
+      const item = event.target.closest('[data-command-index]');
+      if (!item) return;
+      this.commandPaletteSelectionIndex = Number(item.dataset.commandIndex || 0);
+      this.activateCommandPaletteSelection();
+    });
+
+    document.querySelector('#command-palette .command-palette-backdrop')?.addEventListener('click', () => {
+      this.closeCommandPalette();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      const target = e.target;
+      const isEditable = target instanceof HTMLElement
+        && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (this.commandPaletteOpen) {
+          this.closeCommandPalette();
+        } else {
+          this.openCommandPalette();
+        }
+        return;
+      }
+
+      if (this.commandPaletteOpen) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          this.moveCommandPaletteSelection(1);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          this.moveCommandPaletteSelection(-1);
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          this.activateCommandPaletteSelection();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          this.closeCommandPalette();
+        }
+        return;
+      }
+
+      if (!isEditable && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        document.getElementById('inbox-search-input')?.focus();
+        document.getElementById('inbox-search-input')?.select();
+        return;
+      }
+
+      if (!isEditable && e.key.toLowerCase() === 'w' && this.currentContactId) {
+        e.preventDefault();
+        this.toggleWorkspacePanel();
+      }
+    });
+
     // Close modal on Escape key
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        if (this.commandPaletteOpen) {
+          this.closeCommandPalette();
+          return;
+        }
         this.closeSettingsModal();
         this.closeAppearanceModal();
         this.hideContactContextMenu();
@@ -3990,6 +4652,8 @@ class WhatsAppClient {
     this.renderQuickReplies();
     this.updateStarredToggleUI();
     this.updateChatSearchUI();
+    this.updateChatHeaderNote();
+    this.updateWorkspaceUI();
     this.renderContacts();
     
     // Update URL without chat parameter
@@ -4725,6 +5389,7 @@ class WhatsAppClient {
     this.syncInboxControls();
     this.renderContacts();
     this.updateChatHeaderNote();
+    this.renderConversationWorkspace();
     this.updateConversationMenuUI();
   }
 }
