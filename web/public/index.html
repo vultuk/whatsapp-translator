@@ -62,20 +62,22 @@
   <div id="app">
     <!-- Password Overlay -->
     <div id="password-overlay" class="overlay hidden">
-      <div class="overlay-content">
-        <h2>Authentication Required</h2>
-        <p>Please enter the password to access WhatsApp Translator</p>
-        <div class="password-form">
+      <div class="overlay-content overlay-card auth-card">
+        <div class="overlay-badge" aria-hidden="true">WT</div>
+        <span class="overlay-kicker">Protected workspace</span>
+        <h2>Unlock WhatsApp Translator</h2>
+        <p>Sign in to open your inbox, follow-ups, and translation tools.</p>
+        <form id="password-form" class="password-form">
           <input type="password" id="password-input" placeholder="Enter password" autocomplete="current-password">
-          <button id="password-submit" class="password-button">Login</button>
-        </div>
-        <p id="password-error" class="password-error hidden">Invalid password. Please try again.</p>
+          <button id="password-submit" class="password-button" type="submit">Continue</button>
+        </form>
+        <p id="password-error" class="password-error hidden">Incorrect password. Try again.</p>
       </div>
     </div>
 
     <!-- QR Code Overlay -->
     <div id="qr-overlay" class="overlay hidden">
-      <div class="overlay-content">
+      <div class="overlay-content overlay-card overlay-centered">
         <h2>Scan QR Code</h2>
         <p>Open WhatsApp on your phone and scan this code to connect</p>
         <div id="qr-container"></div>
@@ -91,7 +93,7 @@
 
     <!-- Connecting Overlay -->
     <div id="connecting-overlay" class="overlay">
-      <div class="overlay-content">
+      <div class="overlay-content overlay-card overlay-centered">
         <h2>Connecting...</h2>
         <div class="spinner"></div>
         <p>Establishing connection to WhatsApp</p>
@@ -177,13 +179,15 @@
       <main id="messages-panel">
         <div id="no-chat-selected" class="empty-chat">
           <div class="empty-chat-content">
-            <div class="empty-icon">
-              <svg viewBox="0 0 24 24" width="80" height="80">
-                <path fill="currentColor" d="M19.005 3.175H4.674C3.642 3.175 3 3.789 3 4.821V21.02l3.544-3.514h12.461c1.033 0 2.064-1.06 2.064-2.093V4.821c-.001-1.032-1.032-1.646-2.064-1.646zm-4.989 9.869H7.041V11.1h6.975v1.944zm3-4H7.041V7.1h9.975v1.944z"/>
-              </svg>
+            <div class="empty-chat-intro">
+              <div class="empty-icon">
+                <svg viewBox="0 0 24 24" width="80" height="80">
+                  <path fill="currentColor" d="M19.005 3.175H4.674C3.642 3.175 3 3.789 3 4.821V21.02l3.544-3.514h12.461c1.033 0 2.064-1.06 2.064-2.093V4.821c-.001-1.032-1.032-1.646-2.064-1.646zm-4.989 9.869H7.041V11.1h6.975v1.944zm3-4H7.041V7.1h9.975v1.944z"/>
+                </svg>
+              </div>
+              <h2>WhatsApp Translator</h2>
+              <p>Select a conversation to view messages</p>
             </div>
-            <h2>WhatsApp Translator</h2>
-            <p>Select a conversation to view messages</p>
             <section id="visitor-dashboard" class="visitor-dashboard hidden">
               <div class="visitor-dashboard-hero">
                 <div>
@@ -253,6 +257,8 @@
               </div>
             </div>
           </header>
+
+          <button id="workspace-backdrop" class="workspace-backdrop hidden" type="button" aria-label="Close conversation context"></button>
 
           <div class="chat-shell">
             <div class="chat-main-column">
@@ -324,7 +330,7 @@
                   </button>
                   <textarea
                     id="message-input"
-                    placeholder="Type a message (Ctrl+Enter to send)"
+                    placeholder="Type a message"
                     rows="1"
                     maxlength="65536"
                   ></textarea>

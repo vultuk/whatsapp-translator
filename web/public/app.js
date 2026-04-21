@@ -99,6 +99,8 @@ class WhatsAppClient {
     this.commandPaletteSelectionIndex = 0;
     this.commandPaletteItems = [];
     this.workspaceExpanded = !this.isMobile();
+    this.mobileLayoutActive = this.isMobile();
+    this.handleResponsiveLayoutChange = this.handleResponsiveLayoutChange.bind(this);
     
     // Emoji data organized by category
     this.emojiData = {
@@ -1055,13 +1057,30 @@ class WhatsAppClient {
   updateWorkspaceUI() {
     const workspace = document.getElementById('conversation-workspace');
     const toggleButton = document.getElementById('chat-workspace-toggle');
+    const backdrop = document.getElementById('workspace-backdrop');
+    const chatView = document.getElementById('chat-view');
+    const showWorkspaceOverlay = this.isMobile() && this.workspaceExpanded && Boolean(this.currentContactId);
     if (workspace) {
       workspace.classList.toggle('collapsed', !this.workspaceExpanded);
     }
     if (toggleButton) {
       toggleButton.classList.toggle('active', this.workspaceExpanded);
       toggleButton.setAttribute('aria-expanded', String(this.workspaceExpanded));
-      toggleButton.title = this.workspaceExpanded ? 'Hide workspace' : 'Show workspace';
+      toggleButton.title = this.workspaceExpanded
+        ? (this.isMobile() ? 'Hide conversation context' : 'Hide workspace')
+        : (this.isMobile() ? 'Show conversation context' : 'Show workspace');
+      toggleButton.setAttribute(
+        'aria-label',
+        this.workspaceExpanded
+          ? (this.isMobile() ? 'Hide conversation context' : 'Hide workspace')
+          : (this.isMobile() ? 'Show conversation context' : 'Show workspace')
+      );
+    }
+    if (backdrop) {
+      backdrop.classList.toggle('hidden', !showWorkspaceOverlay);
+    }
+    if (chatView) {
+      chatView.classList.toggle('workspace-open', showWorkspaceOverlay);
     }
     this.renderConversationWorkspace();
   }
@@ -1227,16 +1246,13 @@ class WhatsAppClient {
   }
 
   bindPasswordEvents() {
+    const form = document.getElementById('password-form');
     const input = document.getElementById('password-input');
-    const submit = document.getElementById('password-submit');
     const error = document.getElementById('password-error');
 
-    submit?.addEventListener('click', () => this.handleLogin());
-    
-    input?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        this.handleLogin();
-      }
+    form?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      this.handleLogin();
     });
 
     input?.addEventListener('input', () => {
@@ -1357,8 +1373,26 @@ class WhatsAppClient {
     if (input) {
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const shortcut = isMac ? '⌘+Enter' : 'Ctrl+Enter';
-      input.placeholder = `Type a message (${shortcut} to send)`;
+      input.placeholder = this.isMobile()
+        ? 'Type a message'
+        : `Type a message (${shortcut} to send)`;
     }
+  }
+
+  handleResponsiveLayoutChange() {
+    const isMobile = this.isMobile();
+
+    if (isMobile !== this.mobileLayoutActive) {
+      this.mobileLayoutActive = isMobile;
+      this.workspaceExpanded = !isMobile;
+    }
+
+    if (!isMobile) {
+      document.getElementById('workspace-backdrop')?.classList.add('hidden');
+    }
+
+    this.updateInputPlaceholder();
+    this.updateWorkspaceUI();
   }
 
   // WebSocket connection
@@ -4266,6 +4300,10 @@ class WhatsAppClient {
       }
     });
 
+    window.addEventListener('resize', this.handleResponsiveLayoutChange);
+    window.addEventListener('orientationchange', this.handleResponsiveLayoutChange);
+    this.handleResponsiveLayoutChange();
+
     // Message input
     const input = document.getElementById('message-input');
     const sendButton = document.getElementById('send-button');
@@ -4459,6 +4497,10 @@ class WhatsAppClient {
       this.toggleWorkspacePanel();
     });
 
+    document.getElementById('workspace-backdrop')?.addEventListener('click', () => {
+      this.toggleWorkspacePanel(false);
+    });
+
     document.getElementById('workspace-settings-button')?.addEventListener('click', () => {
       this.openSettingsModal();
     });
@@ -4648,6 +4690,9 @@ class WhatsAppClient {
     document.getElementById('chat-view').classList.add('hidden');
     document.getElementById('no-chat-selected').classList.remove('hidden');
     this.closeConversationMenu();
+    if (this.isMobile()) {
+      this.workspaceExpanded = false;
+    }
     this.updateDraftBanner();
     this.renderQuickReplies();
     this.updateStarredToggleUI();

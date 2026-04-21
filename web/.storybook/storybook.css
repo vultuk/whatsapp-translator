@@ -1,0 +1,66 @@
+html,
+body,
+#storybook-root {
+  width: 100%;
+  height: 100%;
+}
+
+#storybook-root {
+  display: flex;
+}
+
+#storybook-root > * {
+  flex: 1;
+}
+
+body.sb-storybook-body {
+  overflow: hidden;
+}
+
+.sb-stage {
+  min-height: 100%;
+  overflow: auto;
+  padding: 32px;
+  background:
+    radial-gradient(circle at top, rgba(var(--accent-rgb), 0.12), transparent 34%),
+    var(--app-gradient);
+}
+
+.sb-stage--page {
+  padding: 0;
+}
+
+#app.sb-app--component {
+  align-items: center;
+  justify-content: center;
+}
+
+#app.sb-app--page {
+  min-height: 100%;
+}
+
+.sb-component-card {
+  width: min(100%, 760px);
+  border-radius: 30px;
+  overflow: hidden;
+  border: 1px solid var(--surface-outline);
+  background: var(--surface-panel);
+  box-shadow: var(--panel-shadow);
+}
+
+.sb-component-card--sidebar {
+  width: min(100%, 392px);
+}
+
+.sb-component-card--composer,
+.sb-component-card--chat {
+  width: min(100%, 920px);
+}
+
+.sb-component-card--workspace {
+  width: min(100%, 336px);
+}
+
+.sb-component-card--overlay {
+  width: min(100%, 520px);
+}

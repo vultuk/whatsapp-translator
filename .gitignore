@@ -30,3 +30,6 @@ Thumbs.db
 
 # Build artifacts
 /dist/
+
+*storybook.log
+storybook-static
