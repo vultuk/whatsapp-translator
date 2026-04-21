@@ -417,6 +417,65 @@
       </div>
     </div>
 
+    <!-- Command Palette -->
+    <div id="command-palette" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content command-palette-content">
+        <div class="command-palette-input-wrap">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16a6.47 6.47 0 0 0 4.23-1.57l.27.28v.79L20 21.5 21.5 20l-6-6zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/>
+          </svg>
+          <input id="command-palette-input" type="text" placeholder="Search chats, actions, or settings…" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <kbd class="command-palette-hint">esc</kbd>
+        </div>
+        <div id="command-palette-results" class="command-palette-results"></div>
+        <div class="command-palette-footer">
+          <span><kbd>↑</kbd> <kbd>↓</kbd> to navigate</span>
+          <span><kbd>↵</kbd> to select</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Message Context Menu -->
+    <div id="message-context-menu" class="context-menu hidden">
+      <button class="context-menu-item" data-action="copy">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+        <span>Copy text</span>
+      </button>
+      <button class="context-menu-item" data-action="forward">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 8V4l8 8-8 8v-4H4V8z"/></svg>
+        <span>Forward</span>
+      </button>
+      <button class="context-menu-item" data-action="star">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+        <span class="star-text">Star message</span>
+      </button>
+      <button class="context-menu-item" data-action="reply">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
+        <span>Reply</span>
+      </button>
+    </div>
+
+    <!-- Forward Message Modal -->
+    <div id="forward-modal" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content forward-modal-content">
+        <div class="modal-header">
+          <h3>Forward to…</h3>
+          <button class="modal-close" id="forward-modal-close" aria-label="Close forward dialog">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <label class="forward-search">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16a6.47 6.47 0 0 0 4.23-1.57l.27.28v.79L20 21.5 21.5 20l-6-6zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+            <input id="forward-search-input" type="search" placeholder="Search contacts…" autocomplete="off">
+          </label>
+          <div id="forward-contact-list" class="forward-contact-list"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="appearance-modal" class="modal hidden">
       <div class="modal-backdrop"></div>
       <div class="modal-content appearance-modal-content">

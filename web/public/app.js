@@ -92,6 +92,27 @@ class WhatsAppClient {
     this.starredOnly = false;
     this.fullyLoadedContacts = new Set();
     
+    // Feature: Command Palette
+    this.commandPaletteOpen = false;
+    this.commandPaletteQuery = '';
+    this.commandPaletteSelectedIndex = 0;
+    this.commandPaletteItems = [];
+    
+    // Feature: Message context menu
+    this.messageContextMenuMessageId = null;
+    this.messageContextMenuContactId = null;
+    
+    // Feature: Forward modal
+    this.forwardModalOpen = false;
+    this.forwardMessageId = null;
+    this.forwardSourceContactId = null;
+    this.forwardSearchQuery = '';
+    this.forwardSelectedIndex = 0;
+    
+    // Feature: Unread badge
+    this.originalTitle = document.title;
+    this.originalFaviconHref = document.querySelector('link[rel*="icon"]')?.getAttribute('href') || '/favicon-32.png';
+    
     // Emoji data organized by category
     this.emojiData = {
       smileys: ['😀', '😃', '😄', '😁', '😅', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙', '😚', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐', '😕', '😟', '🙁', '☹️', '😮', '😯', '😲', '😳', '🥺', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖'],
@@ -885,6 +906,7 @@ class WhatsAppClient {
     if (contact) {
       contact.unreadCount = 0;
       this.scheduleRenderContacts();
+      this.updateUnreadBadge();
     }
   }
 
@@ -1445,6 +1467,7 @@ class WhatsAppClient {
     
     // Batch contact list updates during reconnect/history sync.
     this.scheduleRenderContacts();
+    this.updateUnreadBadge();
   }
 
   // Load contacts from server
@@ -1456,6 +1479,7 @@ class WhatsAppClient {
       this.contacts = (await response.json()).map(contact => this.applyStoredContactMetadata(contact));
       this.syncInboxControls();
       this.renderContacts();
+      this.updateUnreadBadge();
     } catch (err) {
       console.error('Failed to load contacts:', err);
     }
@@ -1760,6 +1784,7 @@ class WhatsAppClient {
         contact.unreadCount = 0;
       }
       this.markConversationRead(contactId);
+      this.updateUnreadBadge();
       
       // Update UI
       document.getElementById('no-chat-selected').classList.add('hidden');
@@ -2345,7 +2370,7 @@ class WhatsAppClient {
     const starredBadge = starred ? '<span class="message-starred-badge" title="Starred">★</span>' : '';
     
     return `
-      <div class="message ${isOutgoing ? 'outgoing' : 'incoming'}" data-message-id="${messageId}">
+      <div class="message ${isOutgoing ? 'outgoing' : 'incoming'}" data-message-id="${messageId}" oncontextmenu="event.preventDefault(); app.showMessageContextMenu(event, '${messageId}', '${message.contactId || this.currentContactId}')">
         ${forwarded}
         ${sender}
         ${quotedMessage}
@@ -3644,6 +3669,373 @@ class WhatsAppClient {
     textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
   }
 
+  // ==================== Feature: Command Palette ====================
+
+  openCommandPalette() {
+    const modal = document.getElementById('command-palette');
+    if (!modal) return;
+    this.commandPaletteOpen = true;
+    this.commandPaletteQuery = '';
+    this.commandPaletteSelectedIndex = 0;
+    this.commandPaletteItems = this.buildCommandPaletteItems();
+    const input = document.getElementById('command-palette-input');
+    if (input) {
+      input.value = '';
+    }
+    this.renderCommandPaletteResults();
+    modal.classList.remove('hidden');
+    input?.focus();
+  }
+
+  closeCommandPalette() {
+    document.getElementById('command-palette')?.classList.add('hidden');
+    this.commandPaletteOpen = false;
+    this.commandPaletteQuery = '';
+    this.commandPaletteSelectedIndex = 0;
+  }
+
+  buildCommandPaletteItems() {
+    const items = [];
+    const now = Date.now();
+
+    // Contacts
+    this.contacts.forEach(contact => {
+      const name = this.getContactDisplayName(contact);
+      const unread = contact.unreadCount || 0;
+      const meta = unread > 0 ? `${unread} unread` : this.getMessagePreview(this.messages.get(contact.id)?.slice(-1)[0]);
+      items.push({
+        type: 'contact',
+        id: contact.id,
+        title: name,
+        meta: meta || 'Open conversation',
+        icon: 'chat',
+        action: () => this.selectContact(contact.id),
+      });
+    });
+
+    // Actions
+    items.push(
+      { type: 'action', id: 'clear-filters', title: 'Clear all inbox filters', meta: 'Reset search and filters', icon: 'filter', action: () => this.clearInboxFilters() },
+      { type: 'action', id: 'toggle-dark', title: 'Toggle dark mode', meta: 'Switch between light and dark', icon: 'theme', action: () => this.toggleDarkMode() },
+      { type: 'action', id: 'open-settings', title: 'Open appearance settings', meta: 'Change theme and colors', icon: 'settings', action: () => this.openAppearanceModal() },
+      { type: 'action', id: 'toggle-search', title: 'Search current conversation', meta: 'Find messages in chat', icon: 'search', action: () => { if (this.currentContactId) this.toggleChatSearch(); } },
+      { type: 'action', id: 'close-chat', title: 'Close current chat', meta: 'Back to conversation list', icon: 'back', action: () => this.closeChat() },
+      { type: 'action', id: 'mark-all-read', title: 'Mark all conversations read', meta: 'Clear unread badges', icon: 'read', action: () => this.markAllConversationsRead() },
+    );
+
+    return items;
+  }
+
+  toggleDarkMode() {
+    const current = this.appearancePreferences?.mode || 'system';
+    const next = current === 'dark' ? 'light' : 'dark';
+    this.appearancePreferences = { ...(this.appearancePreferences || {}), mode: next };
+    this.persistAppearancePreferences();
+    this.applyAppearanceTheme();
+  }
+
+  markAllConversationsRead() {
+    this.contacts.forEach(contact => { contact.unreadCount = 0; });
+    this.renderContacts();
+    this.updateUnreadBadge();
+  }
+
+  filterCommandPaletteItems(query) {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) return this.commandPaletteItems.slice(0, 12);
+    const scored = this.commandPaletteItems.map(item => {
+      const title = item.title.toLowerCase();
+      const meta = String(item.meta || '').toLowerCase();
+      let score = 0;
+      if (title.startsWith(q)) score += 3;
+      else if (title.includes(q)) score += 2;
+      else if (meta.includes(q)) score += 1;
+      return { item, score };
+    }).filter(entry => entry.score > 0).sort((a, b) => b.score - a.score);
+    return scored.map(entry => entry.item);
+  }
+
+  renderCommandPaletteResults() {
+    const container = document.getElementById('command-palette-results');
+    if (!container) return;
+    const filtered = this.filterCommandPaletteItems(this.commandPaletteQuery);
+    if (filtered.length === 0) {
+      container.innerHTML = '<div class="command-palette-empty">No results found</div>';
+      return;
+    }
+    let lastSection = null;
+    const html = filtered.map((item, index) => {
+      const section = item.type === 'contact' ? 'Conversations' : 'Actions';
+      const sectionHeader = section !== lastSection ? `<div class="command-palette-section">${this.escapeHtml(section)}</div>` : '';
+      lastSection = section;
+      const selectedClass = index === this.commandPaletteSelectedIndex ? 'selected' : '';
+      const iconSvg = item.icon === 'chat'
+        ? '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>';
+      return `${sectionHeader}<button class="command-palette-item ${selectedClass}" data-index="${index}" type="button">
+        <span class="palette-icon">${iconSvg}</span>
+        <span>${this.escapeHtml(item.title)}</span>
+        <span class="palette-meta">${this.escapeHtml(item.meta || '')}</span>
+      </button>`;
+    }).join('');
+    container.innerHTML = html;
+    const selectedEl = container.querySelector('.command-palette-item.selected');
+    if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest' });
+  }
+
+  handleCommandPaletteInput(value) {
+    this.commandPaletteQuery = value;
+    this.commandPaletteSelectedIndex = 0;
+    this.renderCommandPaletteResults();
+  }
+
+  handleCommandPaletteKeydown(e) {
+    if (!this.commandPaletteOpen) return;
+    const filtered = this.filterCommandPaletteItems(this.commandPaletteQuery);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      this.commandPaletteSelectedIndex = Math.min(this.commandPaletteSelectedIndex + 1, filtered.length - 1);
+      this.renderCommandPaletteResults();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      this.commandPaletteSelectedIndex = Math.max(this.commandPaletteSelectedIndex - 1, 0);
+      this.renderCommandPaletteResults();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const item = filtered[this.commandPaletteSelectedIndex];
+      if (item) {
+        this.closeCommandPalette();
+        item.action();
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      this.closeCommandPalette();
+    }
+  }
+
+  // ==================== Feature: Message Context Menu ====================
+
+  showMessageContextMenu(e, messageId, contactId) {
+    e.preventDefault();
+    const menu = document.getElementById('message-context-menu');
+    if (!menu) return;
+    this.messageContextMenuMessageId = messageId;
+    this.messageContextMenuContactId = contactId;
+    const isStarred = isMessageStarred(this.starredMessages, messageId);
+    const starText = menu.querySelector('.star-text');
+    if (starText) starText.textContent = isStarred ? 'Unstar message' : 'Star message';
+    menu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
+    menu.style.top = `${Math.min(e.clientY, window.innerHeight - 160)}px`;
+    menu.classList.remove('hidden');
+  }
+
+  hideMessageContextMenu() {
+    document.getElementById('message-context-menu')?.classList.add('hidden');
+    this.messageContextMenuMessageId = null;
+    this.messageContextMenuContactId = null;
+  }
+
+  handleMessageContextAction(action) {
+    const messageId = this.messageContextMenuMessageId;
+    const contactId = this.messageContextMenuContactId;
+    if (!messageId || !contactId) return;
+    const messages = this.messages.get(contactId) || [];
+    const message = messages.find(m => m.id === messageId);
+    if (!message) return;
+
+    if (action === 'copy') {
+      const text = this.getMessagePlainText(message);
+      if (text) {
+        navigator.clipboard.writeText(text).catch(err => console.error('Copy failed:', err));
+      }
+    } else if (action === 'forward') {
+      this.openForwardModal(messageId, contactId);
+    } else if (action === 'star') {
+      this.starredMessages = toggleStarredMessage(this.starredMessages, message, Date.now());
+      this.persistStarredMessages();
+      this.updateMessageStarUI(messageId);
+    } else if (action === 'reply') {
+      this.setReplyTo(message);
+    }
+    this.hideMessageContextMenu();
+  }
+
+  getMessagePlainText(message) {
+    const content = message.content || {};
+    if (content.type === 'text') return content.body || content.text || '';
+    if (content.caption) return content.caption;
+    return this.getMessagePreview(message).replace(/^You: /, '');
+  }
+
+  // ==================== Feature: Forward Modal ====================
+
+  openForwardModal(messageId, sourceContactId) {
+    const modal = document.getElementById('forward-modal');
+    if (!modal) return;
+    this.forwardModalOpen = true;
+    this.forwardMessageId = messageId;
+    this.forwardSourceContactId = sourceContactId;
+    this.forwardSearchQuery = '';
+    this.forwardSelectedIndex = 0;
+    const input = document.getElementById('forward-search-input');
+    if (input) input.value = '';
+    this.renderForwardContactList();
+    modal.classList.remove('hidden');
+    input?.focus();
+  }
+
+  closeForwardModal() {
+    document.getElementById('forward-modal')?.classList.add('hidden');
+    this.forwardModalOpen = false;
+    this.forwardMessageId = null;
+    this.forwardSourceContactId = null;
+  }
+
+  getForwardCandidates() {
+    const q = String(this.forwardSearchQuery || '').trim().toLowerCase();
+    const candidates = this.contacts
+      .filter(c => c.id !== this.forwardSourceContactId)
+      .map(c => ({ ...c, displayName: this.getContactDisplayName(c) }));
+    if (!q) return candidates;
+    return candidates.filter(c =>
+      c.displayName.toLowerCase().includes(q) ||
+      String(c.phone || '').includes(q)
+    );
+  }
+
+  renderForwardContactList() {
+    const container = document.getElementById('forward-contact-list');
+    if (!container) return;
+    const candidates = this.getForwardCandidates();
+    if (candidates.length === 0) {
+      container.innerHTML = '<div class="forward-empty">No contacts found</div>';
+      return;
+    }
+    container.innerHTML = candidates.map((contact, index) => {
+      const initial = contact.displayName.charAt(0).toUpperCase();
+      const selectedClass = index === this.forwardSelectedIndex ? 'selected' : '';
+      return `<button class="forward-contact-item ${selectedClass}" data-index="${index}" type="button">
+        <div class="avatar"><span>${this.escapeHtml(initial)}</span></div>
+        <span class="forward-contact-name">${this.escapeHtml(contact.displayName)}</span>
+      </button>`;
+    }).join('');
+    const selectedEl = container.querySelector('.forward-contact-item.selected');
+    if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest' });
+  }
+
+  async confirmForward(targetContactId) {
+    const sourceContactId = this.forwardSourceContactId;
+    const messageId = this.forwardMessageId;
+    if (!sourceContactId || !messageId || !targetContactId) return;
+    const messages = this.messages.get(sourceContactId) || [];
+    const message = messages.find(m => m.id === messageId);
+    if (!message) return;
+    const text = this.getMessagePlainText(message);
+    if (!text) return;
+    this.closeForwardModal();
+    await this.sendTextMessage(targetContactId, text);
+  }
+
+  async sendTextMessage(contactId, text) {
+    if (!contactId || !text.trim()) return;
+    try {
+      const response = await fetch('/api/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ contactId, message: text.trim() }),
+      });
+      const result = await response.json();
+      if (!result.success) {
+        console.error('Forward failed:', result.error);
+      }
+    } catch (err) {
+      console.error('Forward failed:', err);
+    }
+  }
+
+  handleForwardKeydown(e) {
+    if (!this.forwardModalOpen) return;
+    const candidates = this.getForwardCandidates();
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      this.forwardSelectedIndex = Math.min(this.forwardSelectedIndex + 1, candidates.length - 1);
+      this.renderForwardContactList();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      this.forwardSelectedIndex = Math.max(this.forwardSelectedIndex - 1, 0);
+      this.renderForwardContactList();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const contact = candidates[this.forwardSelectedIndex];
+      if (contact) this.confirmForward(contact.id);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      this.closeForwardModal();
+    }
+  }
+
+  // ==================== Feature: Unread Badge ====================
+
+  getTotalUnreadCount() {
+    return this.contacts.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+  }
+
+  updateUnreadBadge() {
+    const unread = this.getTotalUnreadCount();
+    // Update title
+    if (unread > 0) {
+      document.title = `(${unread}) WhatsApp Translator`;
+    } else {
+      document.title = this.originalTitle;
+    }
+    // Update favicon
+    this.drawFaviconBadge(unread);
+  }
+
+  drawFaviconBadge(count) {
+    const link = document.querySelector('link[rel*="icon"]');
+    if (!link) return;
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Draw base circle
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent-color').trim() || '#00a884';
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Draw count
+    if (count > 0) {
+      const text = count > 99 ? '99+' : String(count);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `bold ${text.length > 2 ? 18 : 24}px -apple-system, BlinkMacSystemFont, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, size / 2, size / 2);
+    } else {
+      // Draw speech bubble icon when no unread
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2 - 2, 14, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = accent;
+      ctx.beginPath();
+      ctx.moveTo(size / 2 - 6, size / 2 + 10);
+      ctx.lineTo(size / 2, size / 2 + 4);
+      ctx.lineTo(size / 2 + 6, size / 2 + 10);
+      ctx.fill();
+    }
+
+    link.href = canvas.toDataURL('image/png');
+  }
+
+  // ==================== Bind UI events ====================
+
   // Bind UI events
   bindEvents() {
     // Logout button
@@ -3766,6 +4158,10 @@ class WhatsAppClient {
       // Close conversation actions menu when clicking outside
       if (!e.target.closest('.chat-actions')) {
         this.closeConversationMenu();
+      }
+      // Close message context menu when clicking outside
+      if (!e.target.closest('#message-context-menu')) {
+        this.hideMessageContextMenu();
       }
     });
 
@@ -3964,6 +4360,63 @@ class WhatsAppClient {
         if (!document.getElementById('chat-search-bar')?.classList.contains('hidden')) {
           this.toggleChatSearch();
         }
+      }
+      // Command palette shortcut Cmd/Ctrl+K
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        if (this.commandPaletteOpen) {
+          this.closeCommandPalette();
+        } else {
+          this.openCommandPalette();
+        }
+      }
+      this.handleCommandPaletteKeydown(e);
+      this.handleForwardKeydown(e);
+    });
+
+    // Command palette events
+    document.getElementById('command-palette-input')?.addEventListener('input', (e) => {
+      this.handleCommandPaletteInput(e.target.value);
+    });
+    document.getElementById('command-palette')?.addEventListener('click', (e) => {
+      const item = e.target.closest('.command-palette-item');
+      if (item) {
+        const index = Number(item.dataset.index);
+        const filtered = this.filterCommandPaletteItems(this.commandPaletteQuery);
+        const selected = filtered[index];
+        if (selected) {
+          this.closeCommandPalette();
+          selected.action();
+        }
+      }
+      if (e.target.closest('.modal-backdrop')) {
+        this.closeCommandPalette();
+      }
+    });
+
+    // Message context menu actions
+    document.getElementById('message-context-menu')?.addEventListener('click', (e) => {
+      const item = e.target.closest('.context-menu-item');
+      if (item) {
+        this.handleMessageContextAction(item.dataset.action);
+      }
+    });
+
+    // Forward modal events
+    document.getElementById('forward-modal-close')?.addEventListener('click', () => this.closeForwardModal());
+    document.querySelector('#forward-modal .modal-backdrop')?.addEventListener('click', () => this.closeForwardModal());
+    document.getElementById('forward-search-input')?.addEventListener('input', (e) => {
+      this.forwardSearchQuery = e.target.value;
+      this.forwardSelectedIndex = 0;
+      this.renderForwardContactList();
+    });
+    document.getElementById('forward-contact-list')?.addEventListener('click', (e) => {
+      const item = e.target.closest('.forward-contact-item');
+      if (item) {
+        const index = Number(item.dataset.index);
+        const candidates = this.getForwardCandidates();
+        const contact = candidates[index];
+        if (contact) this.confirmForward(contact.id);
       }
     });
   }
