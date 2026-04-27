@@ -158,6 +158,14 @@ const APPEARANCE_THEME_CONFIG = {
   },
 };
 
+const COMPOSER_LANGUAGE_PRESETS = ['Spanish', 'French', 'Japanese'];
+const COMPOSER_TONE_PRESETS = ['Friendly', 'Formal', 'Concise'];
+const COMPOSER_REMINDER_PRESETS = [
+  { id: 'later-today', label: 'Later today', hours: 3 },
+  { id: 'tomorrow', label: 'Tomorrow 9 AM', days: 1, hour: 9 },
+  { id: 'next-week', label: 'Next week', days: 7, hour: 9 },
+];
+
 function normalizeText(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -1168,6 +1176,75 @@ export function suggestDemoReply({ message = {}, metadata = {}, contact = {} } =
   return `Thanks, I have this. I will reply with the next clear step shortly.${languageNote}`;
 }
 
+export function getSmartReplyOptions({ message = {}, metadata = {}, contact = {} } = {}) {
+  if (!message) return [];
+
+  const displayName = getContactDisplayName(contact, metadata).split(' ')[0] || 'there';
+  const targetLanguage = String(metadata?.targetLanguage || metadata?.languageOverride || '').trim();
+  const languageNote = targetLanguage ? ` I will keep it clear in ${targetLanguage}.` : '';
+  const primary = suggestDemoReply({
+    message,
+    metadata: { ...metadata, targetLanguage },
+    contact,
+  });
+
+  const text = messageSnippet(message).toLowerCase();
+  const detailPrompt = text.includes('address') || text.includes('venue') || text.includes('exit')
+    ? 'Could you send the exact location details again so I can confirm the next step?'
+    : 'Could you send the key detail again so I can confirm properly?';
+  const delayReply = text.includes('tomorrow') || text.includes('quote')
+    ? `Thanks ${displayName}, tomorrow works. I will confirm once I have checked it.${languageNote}`
+    : `Thanks ${displayName}, I am checking this now and will confirm shortly.${languageNote}`;
+
+  return [
+    { id: 'confirm', label: 'Confirm', text: primary },
+    { id: 'ask-detail', label: 'Ask detail', text: detailPrompt },
+    { id: 'buy-time', label: 'Buy time', text: delayReply },
+  ];
+}
+
+export function getComposerProfilePresets(metadata = {}) {
+  const currentLanguage = normalizeText(
+    metadata?.targetLanguage
+    || metadata?.languageOverride
+    || metadata?.language
+    || 'Spanish',
+  );
+  const currentTone = normalizeText(metadata?.translationStyle || '');
+
+  return {
+    languages: COMPOSER_LANGUAGE_PRESETS.map(label => ({
+      label,
+      value: label,
+      active: normalizeText(label) === currentLanguage,
+    })),
+    tones: COMPOSER_TONE_PRESETS.map(label => ({
+      label,
+      value: label.toLowerCase(),
+      active: normalizeText(label) === currentTone,
+    })),
+  };
+}
+
+export function getComposerReminderPresets(now = Date.now()) {
+  return COMPOSER_REMINDER_PRESETS.map((preset) => {
+    const reminderAt = new Date(now);
+    if (preset.days) {
+      reminderAt.setDate(reminderAt.getDate() + preset.days);
+      reminderAt.setHours(preset.hour, 0, 0, 0);
+    } else {
+      reminderAt.setHours(reminderAt.getHours() + preset.hours);
+      reminderAt.setMinutes(0, 0, 0);
+    }
+
+    return {
+      id: preset.id,
+      label: preset.label,
+      reminderAt: reminderAt.getTime(),
+    };
+  });
+}
+
 export function getComposerAssistState({
   draftText = '',
   metadata = {},
@@ -1187,10 +1264,14 @@ export function getComposerAssistState({
   const suggestedReply = latestIncomingMessage
     ? suggestDemoReply({ message: latestIncomingMessage, metadata: { ...metadata, targetLanguage }, contact })
     : '';
+  const smartReplies = latestIncomingMessage
+    ? getSmartReplyOptions({ message: latestIncomingMessage, metadata: { ...metadata, targetLanguage }, contact })
+    : [];
   const translatedPreview = trimmedDraft
     ? simulateTranslation(trimmedDraft, targetLanguage)
     : '';
   const styleSummary = translationStyle ? `${translationStyle} tone` : 'standard tone';
+  const profilePresets = getComposerProfilePresets({ ...metadata, targetLanguage, translationStyle });
 
   return {
     targetLanguage,
@@ -1198,10 +1279,13 @@ export function getComposerAssistState({
     styleSummary,
     latestIncomingSnippet,
     suggestedReply,
+    smartReplies,
+    profilePresets,
+    reminderPresets: getComposerReminderPresets(),
     translatedPreview,
     hasDraft: Boolean(trimmedDraft),
     hasIncomingContext: Boolean(latestIncomingMessage),
-    canUseSuggestedReply: Boolean(suggestedReply),
+    canUseSuggestedReply: smartReplies.length > 0 || Boolean(suggestedReply),
     showPreview: Boolean(trimmedDraft || latestIncomingMessage || targetLanguage || translationStyle || demoMode),
     previewLabel: demoMode ? 'Demo translation preview' : 'Translation route',
   };

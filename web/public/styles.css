@@ -3150,7 +3150,8 @@ select {
 .composer-assist-main {
   min-width: 0;
   display: grid;
-  gap: 4px;
+  gap: 8px;
+  flex: 1;
 }
 
 .composer-assist-kicker {
@@ -3178,6 +3179,89 @@ select {
   flex-wrap: wrap;
   justify-content: flex-end;
   flex-shrink: 0;
+  max-width: 260px;
+}
+
+.composer-profile-presets {
+  display: grid;
+  gap: 6px;
+}
+
+.composer-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.composer-preset-row span {
+  min-width: 56px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.composer-preset-chip,
+.composer-reminder-chip {
+  border: 1px solid rgba(var(--accent-rgb), 0.22);
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.composer-preset-chip.active {
+  background: rgba(var(--accent-rgb), 0.2);
+  color: var(--text-primary);
+  border-color: rgba(var(--accent-rgb), 0.42);
+}
+
+.composer-smart-replies {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.composer-smart-reply {
+  min-width: 0;
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  border-radius: 10px;
+  padding: 8px;
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.composer-smart-reply span,
+.composer-smart-reply small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-smart-reply span {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.composer-smart-reply small {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.composer-reminder-presets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  width: 100%;
 }
 
 .composer-assist-button {
@@ -3237,6 +3321,16 @@ select {
   }
 
   .composer-assist-actions {
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+  }
+
+  .composer-smart-replies {
+    grid-template-columns: 1fr;
+  }
+
+  .composer-reminder-presets {
     justify-content: flex-start;
   }
 }
