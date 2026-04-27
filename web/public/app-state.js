@@ -1245,12 +1245,190 @@ export function getComposerReminderPresets(now = Date.now()) {
   });
 }
 
+function getLatestDirectionalMessage(messages = [], isFromMe) {
+  for (let index = (messages || []).length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (Boolean(message?.isFromMe || message?.is_from_me) === isFromMe) {
+      return message;
+    }
+  }
+  return null;
+}
+
+function textContainsQuestion(text) {
+  const normalized = normalizeText(text);
+  return /\?/.test(String(text || ''))
+    || /\b(can|could|would|will|when|where|what|which|who|how|is|are|do|does|did|peux|puedes|puede|何|どこ|いつ)\b/i.test(normalized);
+}
+
+function textMentionsAny(text, values = []) {
+  const normalized = normalizeText(text);
+  return values.some(value => {
+    const token = normalizeText(value);
+    return token && normalized.includes(token);
+  });
+}
+
+function getOpenChecklistItems(metadata = {}) {
+  return getChecklistItems(metadata).filter(item => item && !item.done);
+}
+
+export function buildConversationBrief({
+  contact = {},
+  metadata = {},
+  messages = [],
+  drafts = {},
+  now = Date.now(),
+} = {}) {
+  const latestIncoming = getLatestDirectionalMessage(messages, false);
+  const latestOutgoing = getLatestDirectionalMessage(messages, true);
+  const snapshot = getContactActionSnapshot({
+    contact,
+    drafts,
+    metadata,
+    messages,
+    now,
+  });
+  const openTasks = getOpenChecklistItems(metadata);
+  const latestIncomingSnippet = latestIncoming ? messageSnippet(latestIncoming, 92) : '';
+  const latestOutgoingSnippet = latestOutgoing ? messageSnippet(latestOutgoing, 92) : '';
+  const hasQuestion = textContainsQuestion(latestIncomingSnippet);
+
+  let nextAction = 'No immediate action suggested.';
+  if (snapshot.reminderStatus === 'due') {
+    nextAction = metadata.reminderText || 'Follow up on the due reminder.';
+  } else if (snapshot.replyState === 'drafting') {
+    nextAction = 'Review and send the saved draft.';
+  } else if (hasQuestion) {
+    nextAction = 'Answer the latest question directly.';
+  } else if (openTasks.length > 0) {
+    nextAction = `Handle: ${openTasks[0].text}`;
+  } else if (snapshot.replyState === 'needs-reply') {
+    nextAction = 'Send a short acknowledgement or next step.';
+  }
+
+  const contextLines = [
+    latestIncomingSnippet ? `Incoming: ${latestIncomingSnippet}` : '',
+    latestOutgoingSnippet ? `Last sent: ${latestOutgoingSnippet}` : '',
+    snapshot.timezoneInfo ? `${snapshot.timezoneInfo.label} · ${snapshot.timezoneInfo.statusLabel}` : '',
+  ].filter(Boolean);
+
+  return {
+    latestIncomingSnippet,
+    latestOutgoingSnippet,
+    hasQuestion,
+    openTasks: openTasks.map(item => ({ ...item })),
+    nextAction,
+    contextLines,
+    summary: contextLines[0] || snapshot.summary || 'Add messages or local context to build a brief.',
+  };
+}
+
+export function getContextualReminderPresets({
+  draftText = '',
+  latestIncomingMessage = null,
+  metadata = {},
+  now = Date.now(),
+} = {}) {
+  const presets = getComposerReminderPresets(now);
+  const sourceText = `${draftText || ''} ${latestIncomingMessage ? messageSnippet(latestIncomingMessage, 120) : ''}`;
+  const normalized = normalizeText(sourceText);
+  const reminderText = String(metadata?.reminderText || '').trim();
+
+  if (/\btomorrow\b|mañana|demain|明日/.test(normalized)) {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0);
+    presets.unshift({
+      id: 'context-tomorrow',
+      label: 'Tomorrow from chat',
+      reminderAt: tomorrow.getTime(),
+      reason: 'Detected tomorrow in the conversation',
+    });
+  } else if (/\bquote\b|\bprice\b|\bconfirm\b|\bcheck\b|\bfollow up\b/.test(normalized) || reminderText) {
+    const soon = new Date(now + 2 * 60 * 60 * 1000);
+    soon.setMinutes(0, 0, 0);
+    presets.unshift({
+      id: 'context-follow-up',
+      label: 'Follow-up soon',
+      reminderAt: soon.getTime(),
+      reason: reminderText || 'Detected a follow-up cue',
+    });
+  }
+
+  return presets.filter((preset, index, list) => (
+    list.findIndex(candidate => candidate.id === preset.id) === index
+  ));
+}
+
+export function getComposerSendReadiness({
+  draftText = '',
+  metadata = {},
+  latestIncomingMessage = null,
+  now = Date.now(),
+} = {}) {
+  const trimmedDraft = String(draftText || '').trim();
+  const latestIncomingSnippet = latestIncomingMessage ? messageSnippet(latestIncomingMessage, 160) : '';
+  const openTasks = getOpenChecklistItems(metadata);
+  const timezoneInfo = getTimezoneInfo(metadata, now);
+  const checks = [];
+
+  if (!trimmedDraft) {
+    checks.push({ id: 'draft', status: 'info', label: 'Type a draft to check reply coverage.' });
+  } else {
+    checks.push({ id: 'draft', status: 'ready', label: 'Draft is ready to translate.' });
+  }
+
+  if (latestIncomingSnippet && textContainsQuestion(latestIncomingSnippet)) {
+    checks.push({
+      id: 'question',
+      status: textContainsQuestion(trimmedDraft) || trimmedDraft.length > 12 ? 'ready' : 'warning',
+      label: textContainsQuestion(trimmedDraft)
+        ? 'Draft asks a clarifying question.'
+        : 'Latest incoming looks like a question; answer it directly.',
+    });
+  }
+
+  if (openTasks.length > 0) {
+    checks.push({
+      id: 'tasks',
+      status: textMentionsAny(trimmedDraft, openTasks.map(item => item.text)) ? 'ready' : 'warning',
+      label: textMentionsAny(trimmedDraft, openTasks.map(item => item.text))
+        ? 'Draft references an open task.'
+        : `Open task still visible: ${openTasks[0].text}`,
+    });
+  }
+
+  if (timezoneInfo?.status === 'quiet-hours') {
+    checks.push({
+      id: 'timezone',
+      status: 'warning',
+      label: `${timezoneInfo.localTime} there. Consider scheduling or waiting.`,
+    });
+  } else if (timezoneInfo) {
+    checks.push({
+      id: 'timezone',
+      status: 'ready',
+      label: `${timezoneInfo.localTime} there. Timing looks reasonable.`,
+    });
+  }
+
+  const warnings = checks.filter(check => check.status === 'warning').length;
+  return {
+    checks,
+    warnings,
+    scoreLabel: warnings === 0 ? 'Ready' : `${warnings} check${warnings === 1 ? '' : 's'}`,
+  };
+}
+
 export function getComposerAssistState({
   draftText = '',
   metadata = {},
   contact = {},
   latestIncomingMessage = null,
+  messages = [],
   demoMode = false,
+  now = Date.now(),
 } = {}) {
   const targetLanguage = String(
     metadata?.targetLanguage
@@ -1272,6 +1450,19 @@ export function getComposerAssistState({
     : '';
   const styleSummary = translationStyle ? `${translationStyle} tone` : 'standard tone';
   const profilePresets = getComposerProfilePresets({ ...metadata, targetLanguage, translationStyle });
+  const readiness = getComposerSendReadiness({
+    draftText: trimmedDraft,
+    metadata,
+    latestIncomingMessage,
+    now,
+  });
+  const conversationBrief = buildConversationBrief({
+    contact,
+    metadata,
+    messages,
+    drafts: contact?.id ? { [contact.id]: { text: trimmedDraft, updatedAt: now } } : {},
+    now,
+  });
 
   return {
     targetLanguage,
@@ -1281,7 +1472,14 @@ export function getComposerAssistState({
     suggestedReply,
     smartReplies,
     profilePresets,
-    reminderPresets: getComposerReminderPresets(),
+    reminderPresets: getContextualReminderPresets({
+      draftText: trimmedDraft,
+      latestIncomingMessage,
+      metadata,
+      now,
+    }),
+    readiness,
+    conversationBrief,
     translatedPreview,
     hasDraft: Boolean(trimmedDraft),
     hasIncomingContext: Boolean(latestIncomingMessage),
