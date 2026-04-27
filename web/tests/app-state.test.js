@@ -24,7 +24,10 @@ import {
   getContactActionSnapshot,
   getContrastRatio,
   buildVisitorDashboard,
+  createDemoWorkspace,
   resolveAppearanceTheme,
+  simulateTranslation,
+  suggestDemoReply,
 } from '../public/app-state.js';
 
 test('upsertDraft stores trimmed text and removes empty drafts', () => {
@@ -579,6 +582,46 @@ test('buildVisitorDashboard summarizes focus work, reminders, drafts, and open t
     ['trip'],
   );
   assert.equal(dashboard.snoozedContacts, 1);
+});
+
+test('createDemoWorkspace provides a usable visitor demo inbox', () => {
+  const now = 1_710_000_000_000;
+  const demo = createDemoWorkspace(now);
+  const dashboard = buildVisitorDashboard({
+    contacts: demo.contacts,
+    drafts: demo.drafts,
+    metadataByContact: demo.metadataByContact,
+    messagesByContact: demo.messagesByContact,
+    now,
+  });
+
+  assert.equal(demo.contacts.length, 4);
+  assert.equal(demo.contacts[0].id, 'demo-casa-azul');
+  assert.ok(demo.messagesByContact['demo-casa-azul'].length >= 3);
+  assert.equal(dashboard.stats.needsReply, 3);
+  assert.equal(dashboard.stats.dueReminders, 1);
+  assert.equal(dashboard.stats.drafts, 1);
+  assert.ok(dashboard.stats.openTasks >= 4);
+  assert.equal(dashboard.snoozedContacts, 1);
+});
+
+test('demo reply and translation helpers make the product explorable without a backend', () => {
+  const demo = createDemoWorkspace(1_710_000_000_000);
+  const contact = demo.contacts.find(entry => entry.id === 'demo-casa-azul');
+  const metadata = demo.metadataByContact[contact.id];
+  const message = demo.messagesByContact[contact.id].at(-1);
+  const reply = suggestDemoReply({ message, metadata, contact });
+
+  assert.match(reply, /18:30/);
+  assert.match(reply, /taxi plate/);
+  assert.equal(
+    simulateTranslation('18:30 works and I will send the taxi plate', 'Spanish'),
+    '18:30 nos va bien. Te enviare la matricula del taxi antes de llegar.',
+  );
+  assert.equal(
+    simulateTranslation('Please share the venue pin and station exit', 'Japanese'),
+    '会場のピンと駅の出口をすぐに共有します。',
+  );
 });
 
 test('resolveAppearanceTheme falls back safely and honors system dark mode', () => {
