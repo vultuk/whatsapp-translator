@@ -3134,6 +3134,73 @@ select {
   font-size: 13px;
 }
 
+.composer-assist {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 8px;
+  padding: 12px;
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-tertiary) 86%, rgba(var(--accent-rgb), 0.18));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.12);
+}
+
+.composer-assist-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.composer-assist-kicker {
+  color: var(--accent-color);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.composer-assist-main strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.composer-assist-preview {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.composer-assist-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.composer-assist-button {
+  border: 1px solid rgba(var(--accent-rgb), 0.24);
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.composer-assist-button.subtle {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.composer-assist-button:disabled {
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+
 .preview-text.draft-preview {
   color: #ffb547;
   font-style: italic;
@@ -3163,6 +3230,14 @@ select {
   .draft-banner {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .composer-assist {
+    flex-direction: column;
+  }
+
+  .composer-assist-actions {
+    justify-content: flex-start;
   }
 }
 
