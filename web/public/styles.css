@@ -3264,6 +3264,34 @@ select {
   width: 100%;
 }
 
+.composer-readiness {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.composer-readiness-chip {
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: var(--text-secondary);
+  background: rgba(var(--accent-rgb), 0.07);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.composer-readiness-chip.ready {
+  border-color: rgba(0, 168, 132, 0.34);
+  background: rgba(0, 168, 132, 0.12);
+  color: var(--text-primary);
+}
+
+.composer-readiness-chip.warning {
+  border-color: rgba(255, 181, 71, 0.42);
+  background: rgba(255, 181, 71, 0.13);
+  color: var(--text-primary);
+}
+
 .composer-assist-button {
   border: 1px solid rgba(var(--accent-rgb), 0.24);
   border-radius: 999px;
@@ -3947,6 +3975,34 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.workspace-brief {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.workspace-brief-primary {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.workspace-brief-lines {
+  display: grid;
+  gap: 5px;
+}
+
+.workspace-brief-lines span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .workspace-section {

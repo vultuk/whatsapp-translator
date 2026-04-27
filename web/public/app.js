@@ -1,6 +1,7 @@
 // WhatsApp Translator Web Client
 
 import {
+  buildConversationBrief,
   buildVisitorDashboard,
   countMatchingMessages,
   createDemoWorkspace,
@@ -412,6 +413,7 @@ class WhatsAppClient {
       metadata: this.getContactMetadata(this.currentContactId),
       contact,
       latestIncomingMessage: this.getLatestIncomingMessage(),
+      messages: this.messages.get(this.currentContactId) || [],
       demoMode: this.demoMode,
     });
   }
@@ -433,6 +435,7 @@ class WhatsAppClient {
     const profilePresets = document.getElementById('composer-profile-presets');
     const smartReplies = document.getElementById('composer-smart-replies');
     const reminderPresets = document.getElementById('composer-reminder-presets');
+    const readiness = document.getElementById('composer-readiness');
 
     if (kicker) kicker.textContent = state.previewLabel;
     if (title) title.textContent = `${state.targetLanguage} · ${state.styleSummary}`;
@@ -492,8 +495,17 @@ class WhatsAppClient {
           class="composer-reminder-chip"
           type="button"
           data-reminder-preset="${this.escapeHtml(preset.id)}"
+          title="${this.escapeHtml(preset.reason || 'Set follow-up reminder')}"
         >${this.escapeHtml(preset.label)}</button>
       `).join('');
+    }
+    if (readiness) {
+      readiness.innerHTML = state.readiness.checks.map((check) => `
+        <span class="composer-readiness-chip ${this.escapeHtml(check.status)}">
+          ${this.escapeHtml(check.label)}
+        </span>
+      `).join('');
+      readiness.setAttribute('aria-label', `Composer checks: ${state.readiness.scoreLabel}`);
     }
 
     container.classList.toggle('hidden', !state.showPreview);
@@ -536,6 +548,8 @@ class WhatsAppClient {
     }
     this.updateChatHeaderNote();
     this.renderContacts();
+    this.renderComposerAssist();
+    this.renderConversationWorkspace();
   }
 
   setComposerReminderPreset(presetId = 'tomorrow') {
@@ -547,8 +561,10 @@ class WhatsAppClient {
     const latestIncoming = this.getLatestIncomingMessage();
     const reminderSource = draft || (latestIncoming ? getMessageSnippet(latestIncoming, 72) : '');
     const displayName = this.getContactDisplayName(contact);
-    const preset = getComposerReminderPresets().find(entry => entry.id === presetId)
-      || getComposerReminderPresets().find(entry => entry.id === 'tomorrow');
+    const state = this.getCurrentComposerAssistState();
+    const fallbackPresets = getComposerReminderPresets();
+    const preset = state.reminderPresets.find(entry => entry.id === presetId)
+      || fallbackPresets.find(entry => entry.id === 'tomorrow');
 
     this.updateContactMetadata(this.currentContactId, {
       reminderText: reminderSource ? `Follow up: ${reminderSource}` : `Follow up with ${displayName}`,
@@ -1337,8 +1353,9 @@ class WhatsAppClient {
     const labelsEl = document.getElementById('workspace-labels');
     const reminderEl = document.getElementById('workspace-reminder');
     const timezoneEl = document.getElementById('workspace-timezone');
+    const briefEl = document.getElementById('workspace-brief');
     const workspace = document.getElementById('conversation-workspace');
-    if (!summaryEl || !statusEl || !notesEl || !checklistEl || !labelsEl || !reminderEl || !timezoneEl || !workspace) {
+    if (!summaryEl || !statusEl || !notesEl || !checklistEl || !labelsEl || !reminderEl || !timezoneEl || !briefEl || !workspace) {
       return;
     }
 
@@ -1351,6 +1368,7 @@ class WhatsAppClient {
       labelsEl.innerHTML = '';
       reminderEl.textContent = 'No reminder set.';
       timezoneEl.textContent = '';
+      briefEl.innerHTML = '';
       return;
     }
 
@@ -1360,9 +1378,23 @@ class WhatsAppClient {
     const checklist = Array.isArray(metadata.checklist) ? metadata.checklist : [];
     const labels = snapshot.labels;
     const notes = String(metadata.notes || '').trim();
+    const brief = buildConversationBrief({
+      contact,
+      metadata,
+      messages: this.messages.get(this.currentContactId) || [],
+      drafts: this.drafts,
+    });
 
     summaryEl.innerHTML = this.buildContactBadgeMarkup(this.currentContactId) || '<span class="workspace-empty-chip">No visitor context yet</span>';
     statusEl.textContent = snapshot.summary || 'Add notes, labels, reminders, or tasks to keep this conversation organized.';
+    briefEl.innerHTML = `
+      <div class="workspace-brief-primary">${this.escapeHtml(brief.nextAction)}</div>
+      ${brief.contextLines.length > 0 ? `
+        <div class="workspace-brief-lines">
+          ${brief.contextLines.map(line => `<span>${this.escapeHtml(line)}</span>`).join('')}
+        </div>
+      ` : ''}
+    `;
 
     notesEl.textContent = notes || 'No notes yet. Add private context in conversation settings so you can keep tone, follow-ups, and reminders visible while replying.';
     notesEl.classList.toggle('empty', !notes);

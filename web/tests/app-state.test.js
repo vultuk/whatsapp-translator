@@ -17,7 +17,10 @@ import {
   toggleChecklistItem,
   upsertChecklistItems,
   upsertQuickReply,
+  buildConversationBrief,
   getChecklistSummary,
+  getComposerSendReadiness,
+  getContextualReminderPresets,
   getPriorityInfo,
   getTimezoneInfo,
   getAppearanceThemeCatalog,
@@ -654,6 +657,8 @@ test('composer assist builds a translation preview and reply starter', () => {
   assert.deepEqual(state.smartReplies.map(reply => reply.id), ['confirm', 'ask-detail', 'buy-time']);
   assert.equal(state.profilePresets.languages.find(preset => preset.value === 'Spanish').active, true);
   assert.equal(state.profilePresets.tones.find(preset => preset.value === 'friendly').active, true);
+  assert.equal(state.readiness.scoreLabel, 'Ready');
+  assert.equal(state.conversationBrief.nextAction, 'Review and send the saved draft.');
 });
 
 test('composer assist still explains the route without a draft', () => {
@@ -694,6 +699,67 @@ test('composer profile and reminder presets expose fast setup choices', () => {
   assert.deepEqual(reminders.map(preset => preset.id), ['later-today', 'tomorrow', 'next-week']);
   assert.equal(new Date(reminders[0].reminderAt).getHours(), 14);
   assert.equal(new Date(reminders[1].reminderAt).getHours(), 9);
+});
+
+test('contextual reminders promote follow-up timing detected in the conversation', () => {
+  const now = new Date('2026-04-27T10:20:00Z').getTime();
+  const latestIncomingMessage = {
+    id: 'incoming',
+    isFromMe: false,
+    content: { type: 'text', body: 'Can you confirm the quote tomorrow morning?' },
+  };
+
+  const presets = getContextualReminderPresets({ latestIncomingMessage, now });
+
+  assert.equal(presets[0].id, 'context-tomorrow');
+  assert.equal(presets[0].label, 'Tomorrow from chat');
+  assert.equal(new Date(presets[0].reminderAt).getHours(), 9);
+});
+
+test('composer readiness warns about missed tasks and quiet-hour contacts', () => {
+  const readiness = getComposerSendReadiness({
+    draftText: 'Thanks, I will check.',
+    metadata: {
+      timezone: 'Asia/Tokyo',
+      checklist: [{ id: 'task-1', text: 'Share venue pin', done: false }],
+    },
+    latestIncomingMessage: {
+      id: 'incoming',
+      isFromMe: false,
+      content: { type: 'text', body: 'Which station exit should we use?' },
+    },
+    now: new Date('2026-04-27T18:30:00Z').getTime(),
+  });
+
+  assert.equal(readiness.warnings, 2);
+  assert.equal(readiness.checks.some(check => check.id === 'tasks' && check.status === 'warning'), true);
+  assert.equal(readiness.checks.some(check => check.id === 'timezone' && check.status === 'warning'), true);
+});
+
+test('conversation brief turns latest messages and tasks into a next action', () => {
+  const brief = buildConversationBrief({
+    contact: { id: 'trip', name: 'Trip group', unreadCount: 1 },
+    metadata: {
+      checklist: [{ id: 'task-1', text: 'Confirm venue pin', done: false }],
+    },
+    messages: [
+      {
+        id: 'outgoing',
+        isFromMe: true,
+        content: { type: 'text', body: 'I will check the location.' },
+      },
+      {
+        id: 'incoming',
+        isFromMe: false,
+        content: { type: 'text', body: 'Which station exit should we use?' },
+      },
+    ],
+  });
+
+  assert.equal(brief.hasQuestion, true);
+  assert.equal(brief.nextAction, 'Answer the latest question directly.');
+  assert.equal(brief.openTasks[0].text, 'Confirm venue pin');
+  assert.match(brief.summary, /Which station exit/);
 });
 
 test('resolveAppearanceTheme falls back safely and honors system dark mode', () => {
