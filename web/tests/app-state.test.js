@@ -22,6 +22,8 @@ import {
   getTimezoneInfo,
   getAppearanceThemeCatalog,
   getComposerAssistState,
+  getComposerProfilePresets,
+  getComposerReminderPresets,
   getContactActionSnapshot,
   getContrastRatio,
   getMessageSnippet,
@@ -29,6 +31,7 @@ import {
   createDemoWorkspace,
   resolveAppearanceTheme,
   simulateTranslation,
+  getSmartReplyOptions,
   suggestDemoReply,
 } from '../public/app-state.js';
 
@@ -648,6 +651,9 @@ test('composer assist builds a translation preview and reply starter', () => {
   assert.match(state.translatedPreview, /18:30 nos va bien/);
   assert.match(state.suggestedReply, /18:30 still works/);
   assert.equal(state.canUseSuggestedReply, true);
+  assert.deepEqual(state.smartReplies.map(reply => reply.id), ['confirm', 'ask-detail', 'buy-time']);
+  assert.equal(state.profilePresets.languages.find(preset => preset.value === 'Spanish').active, true);
+  assert.equal(state.profilePresets.tones.find(preset => preset.value === 'friendly').active, true);
 });
 
 test('composer assist still explains the route without a draft', () => {
@@ -661,6 +667,33 @@ test('composer assist still explains the route without a draft', () => {
   assert.equal(state.hasDraft, false);
   assert.equal(state.canUseSuggestedReply, false);
   assert.equal(state.showPreview, true);
+});
+
+test('smart reply options give distinct one-tap composer choices', () => {
+  const replies = getSmartReplyOptions({
+    message: { content: { body: 'Please share the venue pin and station exit' } },
+    metadata: { languageOverride: 'Japanese' },
+    contact: { id: 'planner', name: 'Akari' },
+  });
+
+  assert.equal(replies.length, 3);
+  assert.equal(replies[0].label, 'Confirm');
+  assert.match(replies[1].text, /location details/);
+  assert.match(replies[2].text, /Akari/);
+});
+
+test('composer profile and reminder presets expose fast setup choices', () => {
+  const profile = getComposerProfilePresets({
+    targetLanguage: 'French',
+    translationStyle: 'formal',
+  });
+  const reminders = getComposerReminderPresets(new Date('2026-04-27T10:20:00Z').getTime());
+
+  assert.equal(profile.languages.find(preset => preset.value === 'French').active, true);
+  assert.equal(profile.tones.find(preset => preset.value === 'formal').active, true);
+  assert.deepEqual(reminders.map(preset => preset.id), ['later-today', 'tomorrow', 'next-week']);
+  assert.equal(new Date(reminders[0].reminderAt).getHours(), 14);
+  assert.equal(new Date(reminders[1].reminderAt).getHours(), 9);
 });
 
 test('resolveAppearanceTheme falls back safely and honors system dark mode', () => {

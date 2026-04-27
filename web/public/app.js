@@ -7,6 +7,7 @@ import {
   filterMessagesByQuery,
   getAppearanceThemeCatalog,
   getComposerAssistState,
+  getComposerReminderPresets,
   getContactActionSnapshot,
   getChecklistSummary,
   getContactDisplayName,
@@ -429,6 +430,9 @@ class WhatsAppClient {
     const title = document.getElementById('composer-assist-title');
     const preview = document.getElementById('composer-assist-preview');
     const suggestionButton = document.getElementById('composer-use-suggestion');
+    const profilePresets = document.getElementById('composer-profile-presets');
+    const smartReplies = document.getElementById('composer-smart-replies');
+    const reminderPresets = document.getElementById('composer-reminder-presets');
 
     if (kicker) kicker.textContent = state.previewLabel;
     if (title) title.textContent = `${state.targetLanguage} · ${state.styleSummary}`;
@@ -444,29 +448,97 @@ class WhatsAppClient {
     if (suggestionButton) {
       suggestionButton.disabled = !state.canUseSuggestedReply;
       suggestionButton.title = state.canUseSuggestedReply
-        ? 'Use a reply starter based on the latest incoming message'
+        ? 'Use the first reply starter based on the latest incoming message'
         : 'No incoming message available for a smart reply yet';
+    }
+    if (profilePresets) {
+      const languageButtons = state.profilePresets.languages.map((preset) => `
+        <button
+          class="composer-preset-chip ${preset.active ? 'active' : ''}"
+          type="button"
+          data-composer-language="${this.escapeHtml(preset.value)}"
+        >${this.escapeHtml(preset.label)}</button>
+      `).join('');
+      const toneButtons = state.profilePresets.tones.map((preset) => `
+        <button
+          class="composer-preset-chip ${preset.active ? 'active' : ''}"
+          type="button"
+          data-composer-tone="${this.escapeHtml(preset.value)}"
+        >${this.escapeHtml(preset.label)}</button>
+      `).join('');
+      profilePresets.innerHTML = `
+        <div class="composer-preset-row"><span>Language</span>${languageButtons}</div>
+        <div class="composer-preset-row"><span>Tone</span>${toneButtons}</div>
+      `;
+    }
+    if (smartReplies) {
+      smartReplies.innerHTML = state.smartReplies.length > 0
+        ? state.smartReplies.map((reply) => `
+          <button
+            class="composer-smart-reply"
+            type="button"
+            data-smart-reply-id="${this.escapeHtml(reply.id)}"
+            title="${this.escapeHtml(reply.text)}"
+          >
+            <span>${this.escapeHtml(reply.label)}</span>
+            <small>${this.escapeHtml(reply.text)}</small>
+          </button>
+        `).join('')
+        : '';
+    }
+    if (reminderPresets) {
+      reminderPresets.innerHTML = state.reminderPresets.map((preset) => `
+        <button
+          class="composer-reminder-chip"
+          type="button"
+          data-reminder-preset="${this.escapeHtml(preset.id)}"
+        >${this.escapeHtml(preset.label)}</button>
+      `).join('');
     }
 
     container.classList.toggle('hidden', !state.showPreview);
   }
 
-  useComposerSuggestedReply() {
+  useComposerSuggestedReply(replyId = 'confirm') {
     if (!this.currentContactId) return;
     const state = this.getCurrentComposerAssistState();
-    if (!state.suggestedReply) return;
+    const selectedReply = state.smartReplies.find(reply => reply.id === replyId) || state.smartReplies[0];
+    const replyText = selectedReply?.text || state.suggestedReply;
+    if (!replyText) return;
 
     const input = document.getElementById('message-input');
     if (!input) return;
 
-    input.value = state.suggestedReply;
+    input.value = replyText;
     this.autoResizeTextarea(input);
     this.updateSendButton();
     this.handleDraftInput();
     input.focus();
   }
 
-  setComposerReminderTomorrow() {
+  applyComposerProfilePreset(updates = {}) {
+    if (!this.currentContactId) return;
+
+    const nextUpdates = {};
+    if (updates.language) {
+      nextUpdates.languageOverride = updates.language;
+      nextUpdates.targetLanguage = updates.language;
+    }
+    if (updates.tone) {
+      nextUpdates.translationStyle = updates.tone;
+    }
+    if (Object.keys(nextUpdates).length === 0) return;
+
+    this.updateContactMetadata(this.currentContactId, nextUpdates);
+    const contact = this.getCurrentContact();
+    if (contact) {
+      Object.assign(contact, nextUpdates);
+    }
+    this.updateChatHeaderNote();
+    this.renderContacts();
+  }
+
+  setComposerReminderPreset(presetId = 'tomorrow') {
     if (!this.currentContactId) return;
 
     const contact = this.getCurrentContact() || { id: this.currentContactId };
@@ -475,17 +547,20 @@ class WhatsAppClient {
     const latestIncoming = this.getLatestIncomingMessage();
     const reminderSource = draft || (latestIncoming ? getMessageSnippet(latestIncoming, 72) : '');
     const displayName = this.getContactDisplayName(contact);
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(9, 0, 0, 0);
+    const preset = getComposerReminderPresets().find(entry => entry.id === presetId)
+      || getComposerReminderPresets().find(entry => entry.id === 'tomorrow');
 
     this.updateContactMetadata(this.currentContactId, {
       reminderText: reminderSource ? `Follow up: ${reminderSource}` : `Follow up with ${displayName}`,
-      reminderAt: tomorrow.getTime(),
+      reminderAt: preset?.reminderAt || Date.now() + 86_400_000,
     });
     this.renderContacts();
     this.updateChatHeaderNote();
     this.renderComposerAssist();
+  }
+
+  setComposerReminderTomorrow() {
+    this.setComposerReminderPreset('tomorrow');
   }
 
   buildContactBadgeMarkup(contactId, now = Date.now()) {
@@ -4609,6 +4684,33 @@ class WhatsAppClient {
 
     document.getElementById('composer-remind-tomorrow')?.addEventListener('click', () => {
       this.setComposerReminderTomorrow();
+    });
+
+    document.getElementById('composer-profile-presets')?.addEventListener('click', (event) => {
+      const languageTarget = event.target.closest('[data-composer-language]');
+      if (languageTarget) {
+        this.applyComposerProfilePreset({ language: languageTarget.dataset.composerLanguage });
+        return;
+      }
+
+      const toneTarget = event.target.closest('[data-composer-tone]');
+      if (toneTarget) {
+        this.applyComposerProfilePreset({ tone: toneTarget.dataset.composerTone });
+      }
+    });
+
+    document.getElementById('composer-smart-replies')?.addEventListener('click', (event) => {
+      const replyTarget = event.target.closest('[data-smart-reply-id]');
+      if (replyTarget) {
+        this.useComposerSuggestedReply(replyTarget.dataset.smartReplyId);
+      }
+    });
+
+    document.getElementById('composer-reminder-presets')?.addEventListener('click', (event) => {
+      const presetTarget = event.target.closest('[data-reminder-preset]');
+      if (presetTarget) {
+        this.setComposerReminderPreset(presetTarget.dataset.reminderPreset);
+      }
     });
 
     document.getElementById('composer-edit-profile')?.addEventListener('click', () => {
