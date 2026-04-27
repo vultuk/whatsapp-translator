@@ -3,6 +3,7 @@
 import {
   buildVisitorDashboard,
   countMatchingMessages,
+  createDemoWorkspace,
   filterMessagesByQuery,
   getAppearanceThemeCatalog,
   getContactActionSnapshot,
@@ -21,6 +22,8 @@ import {
   parseLabelsInput,
   removeQuickReply,
   resolveAppearanceTheme,
+  simulateTranslation,
+  suggestDemoReply,
   toggleChecklistItem,
   toggleStarredMessage,
   upsertChecklistItems,
@@ -33,6 +36,7 @@ class WhatsAppClient {
   constructor() {
     this.ws = null;
     this.connected = false;
+    this.demoMode = false;
     this.contacts = [];
     this.currentContactId = null;
     this.settingsContactId = null;
@@ -774,6 +778,67 @@ class WhatsAppClient {
     }
   }
 
+  startDemoWorkspace() {
+    const demo = createDemoWorkspace();
+    this.demoMode = true;
+    this.connected = true;
+
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.close();
+      this.ws = null;
+    }
+
+    this.contacts = demo.contacts.map(contact => ({ ...contact }));
+    this.messages = new Map(
+      Object.entries(demo.messagesByContact).map(([contactId, messages]) => [
+        contactId,
+        messages.map(message => ({ ...message, content: { ...(message.content || {}) } })),
+      ]),
+    );
+    this.contactMetadata = {
+      ...this.contactMetadata,
+      ...demo.metadataByContact,
+    };
+    this.drafts = {
+      ...demo.drafts,
+      ...this.drafts,
+    };
+    this.quickReplies = this.quickReplies.length > 0 ? this.quickReplies : demo.quickReplies;
+    this.globalUsage = demo.globalUsage;
+    this.currentContactId = null;
+
+    document.getElementById('password-overlay')?.classList.add('hidden');
+    document.getElementById('qr-overlay')?.classList.add('hidden');
+    document.getElementById('connecting-overlay')?.classList.add('hidden');
+    document.getElementById('main-container')?.classList.remove('hidden');
+    document.getElementById('no-chat-selected')?.classList.remove('hidden');
+    document.getElementById('chat-view')?.classList.add('hidden');
+    document.getElementById('main-container')?.classList.remove('chat-open');
+
+    const userName = document.getElementById('user-name');
+    const userInitial = document.getElementById('user-initial');
+    const userPhone = document.getElementById('user-phone');
+    if (userName) userName.textContent = 'Demo Visitor';
+    if (userInitial) userInitial.textContent = 'D';
+    if (userPhone) userPhone.textContent = 'Sample inbox';
+
+    const statusIndicator = document.getElementById('status-indicator');
+    const statusText = statusIndicator?.querySelector('span:last-child');
+    statusIndicator?.querySelector('.status-dot')?.classList.add('connected');
+    if (statusText) statusText.textContent = 'Demo mode';
+
+    this.persistDrafts();
+    this.saveStoredArray(this.quickRepliesStorageKey, this.quickReplies);
+    this.syncInboxControls();
+    this.renderContacts();
+    this.updateGlobalUsageDisplay();
+    this.updateDraftBanner();
+    this.renderQuickReplies();
+    this.renderVisitorDashboard();
+    this.updateWorkspaceUI();
+  }
+
   getCommandPaletteActions() {
     const actions = [
       {
@@ -1397,6 +1462,8 @@ class WhatsAppClient {
 
   // WebSocket connection
   connectWebSocket() {
+    if (this.demoMode) return;
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
     
@@ -1412,6 +1479,7 @@ class WhatsAppClient {
     };
     
     this.ws.onclose = () => {
+      if (this.demoMode) return;
       console.log('WebSocket disconnected, reconnecting...');
       setTimeout(() => this.connectWebSocket(), 3000);
     };
@@ -1494,6 +1562,8 @@ class WhatsAppClient {
 
   // Show connecting overlay
   showConnecting() {
+    if (this.demoMode) return;
+
     document.getElementById('qr-overlay').classList.add('hidden');
     document.getElementById('connecting-overlay').classList.remove('hidden');
     document.getElementById('main-container').classList.add('hidden');
@@ -1575,6 +1645,8 @@ class WhatsAppClient {
 
   // Handle disconnected state
   handleDisconnected() {
+    if (this.demoMode) return;
+
     this.connected = false;
     
     const statusDot = document.querySelector('.status-dot');
@@ -2054,6 +2126,8 @@ class WhatsAppClient {
 
   // Fetch avatar for a contact
   async fetchAvatar(jid) {
+    if (this.demoMode) return;
+
     // Skip if already cached or being fetched
     if (this.avatarCache.has(jid) || this.avatarFetching.has(jid)) {
       return;
@@ -2305,6 +2379,7 @@ class WhatsAppClient {
 
   async markConversationRead(contactId, message = null) {
     if (!contactId) return;
+    if (this.demoMode) return;
 
     try {
       const targetMessage = message || this.getLatestIncomingMessage(contactId);
@@ -2513,6 +2588,15 @@ class WhatsAppClient {
   async loadMessages(contactId) {
     try {
       this.messagesLoading.set(contactId, true);
+      if (this.demoMode) {
+        this.messagesHasMore.set(contactId, false);
+        this.fullyLoadedContacts.add(contactId);
+        if (contactId === this.currentContactId) {
+          this.renderMessages(this.getVisibleMessagesForCurrentConversation());
+        }
+        return;
+      }
+
       const response = await fetch(`/api/messages/${encodeURIComponent(contactId)}?limit=${this.initialMessageLimit}`, {
         headers: this.getAuthHeaders()
       });
@@ -3559,6 +3643,48 @@ class WhatsAppClient {
     // Capture reply state before clearing
     const replyTo = this.replyingTo ? this.replyingTo.messageId : null;
     const replyToSender = this.replyingTo ? this.replyingTo.senderJid : null;
+
+    if (this.demoMode) {
+      const replyContext = this.replyingTo ? { ...this.replyingTo } : null;
+      const metadata = this.getContactMetadata(this.currentContactId);
+      const targetLanguage = metadata.targetLanguage || 'Spanish';
+      const translatedText = simulateTranslation(text, targetLanguage);
+      const localMessage = {
+        id: `demo-out-${Date.now()}`,
+        timestamp: Date.now(),
+        contactId: this.currentContactId,
+        isFromMe: true,
+        isForwarded: false,
+        senderJid: this.getMessageSenderJid({ isFromMe: true }),
+        content: { type: 'text', body: text },
+        isTranslated: Boolean(translatedText),
+        originalText: text,
+        translatedText,
+        sourceLanguage: targetLanguage,
+        replyContext,
+      };
+
+      input.value = '';
+      this.drafts = upsertDraft(this.drafts, this.currentContactId, '');
+      this.persistDrafts();
+      this.updateDraftBanner();
+      this.renderQuickReplies();
+      this.clearReply();
+      this.updateSendButton();
+      this.autoResizeTextarea(input);
+
+      if (!this.messages.has(this.currentContactId)) {
+        this.messages.set(this.currentContactId, []);
+      }
+      this.messages.get(this.currentContactId).push(localMessage);
+      this.refreshCurrentConversationView();
+      this.scrollToBottom();
+      this.updateContactInList(localMessage);
+      this.renderConversationWorkspace();
+      sendButton.disabled = false;
+      this.updateSendButton();
+      return;
+    }
     
     try {
       const requestBody = {
@@ -3859,6 +3985,22 @@ class WhatsAppClient {
       alert('No text to translate in this message.');
       return;
     }
+
+    if (this.demoMode) {
+      const metadata = this.getContactMetadata(this.currentContactId);
+      const targetLanguage = metadata.targetLanguage || message.sourceLanguage || 'English';
+      const translatedText = simulateTranslation(text, targetLanguage);
+      message.original_text = text;
+      message.originalText = text;
+      message.translated_text = translatedText;
+      message.translatedText = translatedText;
+      message.source_language = targetLanguage;
+      message.sourceLanguage = targetLanguage;
+      message.is_translated = true;
+      message.isTranslated = true;
+      this.renderMessages(this.getVisibleMessagesForCurrentConversation());
+      return;
+    }
     
     try {
       // Call the translation API
@@ -4148,6 +4290,24 @@ class WhatsAppClient {
     }
     
     try {
+      if (this.demoMode) {
+        const contact = this.contacts.find(entry => entry.id === this.currentContactId) || {};
+        const replyText = suggestDemoReply({
+          message,
+          metadata: this.getContactMetadata(this.currentContactId),
+          contact,
+        });
+
+        this.setReplyTo(message);
+        const input = document.getElementById('message-input');
+        input.value = replyText;
+        this.autoResizeTextarea(input);
+        this.updateSendButton();
+        this.handleDraftInput();
+        input.focus();
+        return;
+      }
+
       const response = await fetch('/api/ai-reply', {
         method: 'POST',
         headers: { 
@@ -4259,6 +4419,10 @@ class WhatsAppClient {
 
     document.getElementById('command-palette-button')?.addEventListener('click', () => {
       this.openCommandPalette();
+    });
+
+    document.getElementById('demo-mode-button')?.addEventListener('click', () => {
+      this.startDemoWorkspace();
     });
 
     document.getElementById('visitor-dashboard-open-palette')?.addEventListener('click', () => {
@@ -4836,6 +5000,11 @@ class WhatsAppClient {
 
   // Fetch and display global usage
   async fetchGlobalUsage() {
+    if (this.demoMode) {
+      this.updateGlobalUsageDisplay();
+      return;
+    }
+
     try {
       const response = await fetch('/api/usage');
       const usage = await response.json();
@@ -4856,6 +5025,17 @@ class WhatsAppClient {
 
   // Fetch and display conversation usage
   async fetchConversationUsage(contactId) {
+    if (this.demoMode) {
+      const messages = this.messages.get(contactId) || [];
+      const translatedCount = messages.filter(message => message.isTranslated || message.is_translated).length;
+      const usage = { costUsd: translatedCount * 0.004 };
+      this.conversationUsageCache.set(contactId, usage);
+      if (contactId === this.currentContactId) {
+        this.updateConversationUsageDisplay(usage);
+      }
+      return;
+    }
+
     try {
       const response = await fetch(`/api/usage/${encodeURIComponent(contactId)}`, {
         headers: this.getAuthHeaders()
