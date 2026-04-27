@@ -21,8 +21,10 @@ import {
   getPriorityInfo,
   getTimezoneInfo,
   getAppearanceThemeCatalog,
+  getComposerAssistState,
   getContactActionSnapshot,
   getContrastRatio,
+  getMessageSnippet,
   buildVisitorDashboard,
   createDemoWorkspace,
   resolveAppearanceTheme,
@@ -622,6 +624,43 @@ test('demo reply and translation helpers make the product explorable without a b
     simulateTranslation('Please share the venue pin and station exit', 'Japanese'),
     '会場のピンと駅の出口をすぐに共有します。',
   );
+});
+
+test('composer assist builds a translation preview and reply starter', () => {
+  const incoming = {
+    id: 'm1',
+    isFromMe: false,
+    content: { type: 'text', body: 'Puede llegar despues de las 18:00?' },
+  };
+
+  const state = getComposerAssistState({
+    draftText: '18:30 works and I will send the taxi plate',
+    metadata: { languageOverride: 'Spanish', translationStyle: 'friendly' },
+    contact: { id: 'host', name: 'Sofia' },
+    latestIncomingMessage: incoming,
+    demoMode: true,
+  });
+
+  assert.equal(getMessageSnippet(incoming), 'Puede llegar despues de las 18:00?');
+  assert.equal(state.targetLanguage, 'Spanish');
+  assert.equal(state.styleSummary, 'friendly tone');
+  assert.equal(state.previewLabel, 'Demo translation preview');
+  assert.match(state.translatedPreview, /18:30 nos va bien/);
+  assert.match(state.suggestedReply, /18:30 still works/);
+  assert.equal(state.canUseSuggestedReply, true);
+});
+
+test('composer assist still explains the route without a draft', () => {
+  const state = getComposerAssistState({
+    metadata: { targetLanguage: 'Japanese' },
+    demoMode: false,
+  });
+
+  assert.equal(state.targetLanguage, 'Japanese');
+  assert.equal(state.previewLabel, 'Translation route');
+  assert.equal(state.hasDraft, false);
+  assert.equal(state.canUseSuggestedReply, false);
+  assert.equal(state.showPreview, true);
 });
 
 test('resolveAppearanceTheme falls back safely and honors system dark mode', () => {

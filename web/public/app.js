@@ -6,10 +6,12 @@ import {
   createDemoWorkspace,
   filterMessagesByQuery,
   getAppearanceThemeCatalog,
+  getComposerAssistState,
   getContactActionSnapshot,
   getChecklistSummary,
   getContactDisplayName,
   getContactLabels,
+  getMessageSnippet,
   getDraftPreview,
   getDraftText,
   getPriorityInfo,
@@ -386,6 +388,106 @@ class WhatsAppClient {
     return `Snoozed until ${this.formatMetadataTime(Number(metadata.snoozedUntil))}`;
   }
 
+  getCurrentContact() {
+    return this.contacts.find(contact => contact.id === this.currentContactId) || null;
+  }
+
+  getLatestIncomingMessage(contactId = this.currentContactId) {
+    const messages = this.messages.get(contactId) || [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (!message?.isFromMe && getMessageSnippet(message, 96) !== '[Message]') {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  getCurrentComposerAssistState() {
+    const input = document.getElementById('message-input');
+    const contact = this.getCurrentContact() || { id: this.currentContactId };
+    return getComposerAssistState({
+      draftText: input?.value || getDraftText(this.drafts, this.currentContactId),
+      metadata: this.getContactMetadata(this.currentContactId),
+      contact,
+      latestIncomingMessage: this.getLatestIncomingMessage(),
+      demoMode: this.demoMode,
+    });
+  }
+
+  renderComposerAssist() {
+    const container = document.getElementById('composer-assist');
+    if (!container) return;
+
+    if (!this.currentContactId) {
+      container.classList.add('hidden');
+      return;
+    }
+
+    const state = this.getCurrentComposerAssistState();
+    const kicker = document.getElementById('composer-assist-kicker');
+    const title = document.getElementById('composer-assist-title');
+    const preview = document.getElementById('composer-assist-preview');
+    const suggestionButton = document.getElementById('composer-use-suggestion');
+
+    if (kicker) kicker.textContent = state.previewLabel;
+    if (title) title.textContent = `${state.targetLanguage} · ${state.styleSummary}`;
+    if (preview) {
+      if (state.translatedPreview) {
+        preview.textContent = state.translatedPreview;
+      } else if (state.latestIncomingSnippet) {
+        preview.textContent = `Latest incoming: ${state.latestIncomingSnippet}`;
+      } else {
+        preview.textContent = 'Set a language profile or type a draft to preview the translation route.';
+      }
+    }
+    if (suggestionButton) {
+      suggestionButton.disabled = !state.canUseSuggestedReply;
+      suggestionButton.title = state.canUseSuggestedReply
+        ? 'Use a reply starter based on the latest incoming message'
+        : 'No incoming message available for a smart reply yet';
+    }
+
+    container.classList.toggle('hidden', !state.showPreview);
+  }
+
+  useComposerSuggestedReply() {
+    if (!this.currentContactId) return;
+    const state = this.getCurrentComposerAssistState();
+    if (!state.suggestedReply) return;
+
+    const input = document.getElementById('message-input');
+    if (!input) return;
+
+    input.value = state.suggestedReply;
+    this.autoResizeTextarea(input);
+    this.updateSendButton();
+    this.handleDraftInput();
+    input.focus();
+  }
+
+  setComposerReminderTomorrow() {
+    if (!this.currentContactId) return;
+
+    const contact = this.getCurrentContact() || { id: this.currentContactId };
+    const input = document.getElementById('message-input');
+    const draft = String(input?.value || '').trim();
+    const latestIncoming = this.getLatestIncomingMessage();
+    const reminderSource = draft || (latestIncoming ? getMessageSnippet(latestIncoming, 72) : '');
+    const displayName = this.getContactDisplayName(contact);
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0);
+
+    this.updateContactMetadata(this.currentContactId, {
+      reminderText: reminderSource ? `Follow up: ${reminderSource}` : `Follow up with ${displayName}`,
+      reminderAt: tomorrow.getTime(),
+    });
+    this.renderContacts();
+    this.updateChatHeaderNote();
+    this.renderComposerAssist();
+  }
+
   buildContactBadgeMarkup(contactId, now = Date.now()) {
     const metadata = this.getContactMetadata(contactId);
     const badges = [];
@@ -519,6 +621,7 @@ class WhatsAppClient {
     this.scheduleMetadataRefresh();
     this.renderVisitorDashboard();
     this.renderConversationWorkspace();
+    this.renderComposerAssist();
     return this.getContactMetadata(contactId);
   }
 
@@ -2487,6 +2590,7 @@ class WhatsAppClient {
       this.updateStarredToggleUI();
       this.updateChatHeaderNote();
       this.updateWorkspaceUI();
+      this.renderComposerAssist();
       
       // Update send button state and focus input (only on desktop)
       this.updateSendButton();
@@ -2828,6 +2932,7 @@ class WhatsAppClient {
         : (this.starredOnly ? 'No starred messages in this conversation yet' : 'No messages yet');
       container.innerHTML = `<div class="empty-state"><p>${this.escapeHtml(emptyMessage)}</p></div>`;
       this.updateChatSearchUI();
+      this.renderComposerAssist();
       return;
     }
     
@@ -2851,6 +2956,7 @@ class WhatsAppClient {
     // Defer previews until after the first paint.
     this.scheduleLinkPreviewLoad(container);
     this.updateChatSearchUI();
+    this.renderComposerAssist();
   }
 
   // Load link previews for messages near the viewport.
@@ -3373,6 +3479,7 @@ class WhatsAppClient {
     this.persistDrafts();
     this.updateDraftBanner();
     this.renderQuickReplies();
+    this.renderComposerAssist();
     this.scheduleRenderContacts();
     this.updateChatHeaderNote();
     this.renderConversationWorkspace();
@@ -3392,6 +3499,7 @@ class WhatsAppClient {
 
     this.updateDraftBanner();
     this.renderQuickReplies();
+    this.renderComposerAssist();
     this.updateSendButton();
     this.scheduleRenderContacts();
     this.updateChatHeaderNote();
@@ -4495,6 +4603,18 @@ class WhatsAppClient {
       this.sendMessage();
     });
 
+    document.getElementById('composer-use-suggestion')?.addEventListener('click', () => {
+      this.useComposerSuggestedReply();
+    });
+
+    document.getElementById('composer-remind-tomorrow')?.addEventListener('click', () => {
+      this.setComposerReminderTomorrow();
+    });
+
+    document.getElementById('composer-edit-profile')?.addEventListener('click', () => {
+      this.openSettingsModal();
+    });
+
     // Image attach button
     const attachButton = document.getElementById('attach-button');
     const imageInput = document.getElementById('image-input');
@@ -5555,6 +5675,9 @@ class WhatsAppClient {
 
     this.updateContactMetadata(targetContactId, {
       alias,
+      languageOverride,
+      targetLanguage: languageOverride,
+      translationStyle,
       priority,
       timezone,
       notes,
@@ -5571,6 +5694,9 @@ class WhatsAppClient {
     const contact = this.contacts.find(item => item.id === targetContactId);
     if (contact) {
       contact.alias = alias;
+      contact.languageOverride = languageOverride;
+      contact.targetLanguage = languageOverride;
+      contact.translationStyle = translationStyle;
       contact.priority = priority;
       contact.timezone = timezone;
       contact.notes = notes;

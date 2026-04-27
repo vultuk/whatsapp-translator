@@ -547,6 +547,10 @@ function messageSnippet(message, maxLength = 140) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
+export function getMessageSnippet(message, maxLength = 140) {
+  return messageSnippet(message, maxLength);
+}
+
 export function toggleStarredMessage(starredLookup, message, updatedAt = Date.now()) {
   const nextLookup = cloneObject(starredLookup);
   const id = message?.id;
@@ -1162,6 +1166,45 @@ export function suggestDemoReply({ message = {}, metadata = {}, contact = {} } =
   }
 
   return `Thanks, I have this. I will reply with the next clear step shortly.${languageNote}`;
+}
+
+export function getComposerAssistState({
+  draftText = '',
+  metadata = {},
+  contact = {},
+  latestIncomingMessage = null,
+  demoMode = false,
+} = {}) {
+  const targetLanguage = String(
+    metadata?.targetLanguage
+    || metadata?.languageOverride
+    || metadata?.language
+    || 'Spanish',
+  ).trim() || 'Spanish';
+  const translationStyle = String(metadata?.translationStyle || '').trim();
+  const trimmedDraft = String(draftText || '').trim();
+  const latestIncomingSnippet = latestIncomingMessage ? messageSnippet(latestIncomingMessage, 96) : '';
+  const suggestedReply = latestIncomingMessage
+    ? suggestDemoReply({ message: latestIncomingMessage, metadata: { ...metadata, targetLanguage }, contact })
+    : '';
+  const translatedPreview = trimmedDraft
+    ? simulateTranslation(trimmedDraft, targetLanguage)
+    : '';
+  const styleSummary = translationStyle ? `${translationStyle} tone` : 'standard tone';
+
+  return {
+    targetLanguage,
+    translationStyle,
+    styleSummary,
+    latestIncomingSnippet,
+    suggestedReply,
+    translatedPreview,
+    hasDraft: Boolean(trimmedDraft),
+    hasIncomingContext: Boolean(latestIncomingMessage),
+    canUseSuggestedReply: Boolean(suggestedReply),
+    showPreview: Boolean(trimmedDraft || latestIncomingMessage || targetLanguage || translationStyle || demoMode),
+    previewLabel: demoMode ? 'Demo translation preview' : 'Translation route',
+  };
 }
 
 export function simulateTranslation(text, targetLanguage = 'Spanish') {
