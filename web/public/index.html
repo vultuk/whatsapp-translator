@@ -250,6 +250,7 @@
               <div id="chat-actions-menu" class="chat-actions-menu hidden" role="menu" aria-label="Conversation actions">
                 <button id="chat-search-toggle" class="chat-menu-item" type="button" role="menuitem">Search messages</button>
                 <button id="chat-starred-toggle" class="chat-menu-item" type="button" role="menuitem">Show starred messages only</button>
+                <button id="chat-translate-all" class="chat-menu-item" type="button" role="menuitem">Translate incoming messages</button>
                 <button id="chat-settings-button" class="chat-menu-item" type="button" role="menuitem">Conversation settings</button>
                 <div class="chat-menu-divider" aria-hidden="true"></div>
                 <div class="chat-menu-meta">
@@ -386,6 +387,11 @@
                 </div>
                 <div id="conversation-workspace-summary" class="workspace-summary"></div>
                 <div id="workspace-brief" class="workspace-brief"></div>
+                <div class="workspace-actions">
+                  <button id="workspace-copy-brief" class="workspace-action-button" type="button">Copy brief</button>
+                  <button id="workspace-translate-all" class="workspace-action-button" type="button">Translate incoming</button>
+                </div>
+                <div id="workspace-action-plan" class="workspace-action-plan"></div>
                 <div class="workspace-section">
                   <span class="workspace-section-label">Right now</span>
                   <p id="workspace-primary-status" class="workspace-primary-status">No local context yet.</p>

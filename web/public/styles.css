@@ -4005,6 +4005,74 @@ select {
   overflow-wrap: anywhere;
 }
 
+.workspace-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.workspace-action-button {
+  flex: 1;
+  border: 1px solid rgba(var(--accent-rgb), 0.22);
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 10px 11px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.workspace-action-button:hover:not(:disabled) {
+  background: rgba(var(--accent-rgb), 0.16);
+  border-color: rgba(var(--accent-rgb), 0.36);
+}
+
+.workspace-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.workspace-action-plan {
+  display: grid;
+  gap: 10px;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--surface-outline);
+}
+
+.workspace-action-list {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-action-item {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--surface-outline);
+  border-radius: 14px;
+  padding: 11px 12px;
+  background: color-mix(in srgb, var(--surface-canvas) 92%, transparent);
+}
+
+.workspace-action-item.high {
+  border-color: rgba(246, 196, 69, 0.32);
+  background: rgba(246, 196, 69, 0.08);
+}
+
+.workspace-action-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.workspace-action-detail {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .workspace-section {
   display: flex;
   flex-direction: column;
