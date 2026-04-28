@@ -18,6 +18,8 @@ import {
   upsertChecklistItems,
   upsertQuickReply,
   buildConversationBrief,
+  buildConversationActionPlan,
+  buildConversationHandoffBrief,
   getChecklistSummary,
   getComposerSendReadiness,
   getContextualReminderPresets,
@@ -30,6 +32,7 @@ import {
   getContactActionSnapshot,
   getContrastRatio,
   getMessageSnippet,
+  getUntranslatedIncomingMessages,
   buildVisitorDashboard,
   createDemoWorkspace,
   resolveAppearanceTheme,
@@ -760,6 +763,73 @@ test('conversation brief turns latest messages and tasks into a next action', ()
   assert.equal(brief.nextAction, 'Answer the latest question directly.');
   assert.equal(brief.openTasks[0].text, 'Confirm venue pin');
   assert.match(brief.summary, /Which station exit/);
+});
+
+test('conversation action plan prioritizes drafts, questions, tasks, and translation backlog', () => {
+  const now = Date.parse('2026-04-28T10:00:00Z');
+  const messages = [
+    {
+      id: 'incoming-1',
+      isFromMe: false,
+      content: { type: 'text', body: 'Which station exit should we use?' },
+    },
+    {
+      id: 'incoming-2',
+      isFromMe: false,
+      content: { type: 'text', body: '駅の出口は何番ですか?' },
+    },
+  ];
+
+  const plan = buildConversationActionPlan({
+    contact: { id: 'trip', name: 'Trip group', unreadCount: 1 },
+    metadata: {
+      checklist: [{ id: 'task-1', text: 'Confirm venue pin', done: false }],
+    },
+    drafts: { trip: { text: 'I will confirm the venue pin shortly.', updatedAt: now } },
+    messages,
+    now,
+  });
+
+  assert.equal(plan.untranslatedCount, 2);
+  assert.deepEqual(
+    plan.actions.map(action => action.id).slice(0, 4),
+    ['review-draft', 'answer-question', 'translate-incoming', 'task-task-1'],
+  );
+});
+
+test('conversation handoff brief is copy-ready and includes visitor context', () => {
+  const handoff = buildConversationHandoffBrief({
+    contact: { id: 'host', name: 'Sofia' },
+    metadata: {
+      labels: ['Travel', 'VIP'],
+      notes: 'Prefers concise replies.',
+      checklist: [{ id: 'task-1', text: 'Send taxi plate', done: false }],
+      reminderText: 'Send taxi plate before arrival',
+    },
+    drafts: { host: { text: '18:30 works for us.', updatedAt: 123 } },
+    messages: [
+      { id: 'in', isFromMe: false, senderName: 'Sofia', content: { type: 'text', body: 'Puede llegar despues de las 18:00?' } },
+      { id: 'out', isFromMe: true, content: { type: 'text', body: 'I will confirm.' } },
+    ],
+  });
+
+  assert.match(handoff, /Conversation: Sofia/);
+  assert.match(handoff, /Next action:/);
+  assert.match(handoff, /Labels: Travel, VIP/);
+  assert.match(handoff, /Open tasks:\n- Send taxi plate/);
+  assert.match(handoff, /Saved draft:\n18:30 works for us./);
+  assert.match(handoff, /Recent messages:\n- Sofia:/);
+});
+
+test('untranslated incoming messages excludes outgoing, translated, and media-only entries', () => {
+  const messages = [
+    { id: 'incoming', isFromMe: false, content: { body: 'Hola' } },
+    { id: 'translated', isFromMe: false, isTranslated: true, content: { body: 'Bonjour' } },
+    { id: 'outgoing', isFromMe: true, content: { body: 'Hello' } },
+    { id: 'media', isFromMe: false, content: { type: 'image' } },
+  ];
+
+  assert.deepEqual(getUntranslatedIncomingMessages(messages).map(message => message.id), ['incoming']);
 });
 
 test('resolveAppearanceTheme falls back safely and honors system dark mode', () => {

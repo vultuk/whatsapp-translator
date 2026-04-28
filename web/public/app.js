@@ -2,6 +2,8 @@
 
 import {
   buildConversationBrief,
+  buildConversationActionPlan,
+  buildConversationHandoffBrief,
   buildVisitorDashboard,
   countMatchingMessages,
   createDemoWorkspace,
@@ -14,6 +16,7 @@ import {
   getContactDisplayName,
   getContactLabels,
   getMessageSnippet,
+  getUntranslatedIncomingMessages,
   getDraftPreview,
   getDraftText,
   getPriorityInfo,
@@ -1136,6 +1139,28 @@ class WhatsAppClient {
           },
         },
         {
+          id: 'action-copy-brief',
+          kind: 'action',
+          title: 'Copy current conversation brief',
+          subtitle: 'Copy next action, context, tasks, draft, and recent messages',
+          keywords: 'copy brief handoff summary context',
+          run: () => {
+            this.closeCommandPalette();
+            this.copyConversationBrief();
+          },
+        },
+        {
+          id: 'action-translate-all',
+          kind: 'action',
+          title: 'Translate incoming messages',
+          subtitle: 'Translate every untranslated incoming message in this chat',
+          keywords: 'translate incoming unread messages batch',
+          run: () => {
+            this.closeCommandPalette();
+            this.translateUntranslatedIncomingMessages();
+          },
+        },
+        {
           id: 'action-chat-settings',
           kind: 'action',
           title: 'Edit current conversation settings',
@@ -1354,8 +1379,11 @@ class WhatsAppClient {
     const reminderEl = document.getElementById('workspace-reminder');
     const timezoneEl = document.getElementById('workspace-timezone');
     const briefEl = document.getElementById('workspace-brief');
+    const actionPlanEl = document.getElementById('workspace-action-plan');
+    const copyBriefButton = document.getElementById('workspace-copy-brief');
+    const translateAllButton = document.getElementById('workspace-translate-all');
     const workspace = document.getElementById('conversation-workspace');
-    if (!summaryEl || !statusEl || !notesEl || !checklistEl || !labelsEl || !reminderEl || !timezoneEl || !briefEl || !workspace) {
+    if (!summaryEl || !statusEl || !notesEl || !checklistEl || !labelsEl || !reminderEl || !timezoneEl || !briefEl || !actionPlanEl || !workspace) {
       return;
     }
 
@@ -1369,6 +1397,9 @@ class WhatsAppClient {
       reminderEl.textContent = 'No reminder set.';
       timezoneEl.textContent = '';
       briefEl.innerHTML = '';
+      actionPlanEl.innerHTML = '';
+      if (copyBriefButton) copyBriefButton.disabled = true;
+      if (translateAllButton) translateAllButton.disabled = true;
       return;
     }
 
@@ -1379,6 +1410,12 @@ class WhatsAppClient {
     const labels = snapshot.labels;
     const notes = String(metadata.notes || '').trim();
     const brief = buildConversationBrief({
+      contact,
+      metadata,
+      messages: this.messages.get(this.currentContactId) || [],
+      drafts: this.drafts,
+    });
+    const actionPlan = buildConversationActionPlan({
       contact,
       metadata,
       messages: this.messages.get(this.currentContactId) || [],
@@ -1395,6 +1432,28 @@ class WhatsAppClient {
         </div>
       ` : ''}
     `;
+    actionPlanEl.innerHTML = `
+      <span class="workspace-section-label">Action plan</span>
+      <div class="workspace-action-list">
+        ${actionPlan.actions.map(action => `
+          <div class="workspace-action-item ${this.escapeHtml(action.priority || 'normal')}">
+            <span class="workspace-action-title">${this.escapeHtml(action.label)}</span>
+            <span class="workspace-action-detail">${this.escapeHtml(action.detail)}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+
+    if (copyBriefButton) {
+      copyBriefButton.disabled = false;
+      copyBriefButton.textContent = 'Copy brief';
+    }
+    if (translateAllButton) {
+      translateAllButton.disabled = actionPlan.untranslatedCount === 0;
+      translateAllButton.textContent = actionPlan.untranslatedCount === 0
+        ? 'Translated'
+        : `Translate ${actionPlan.untranslatedCount}`;
+    }
 
     notesEl.textContent = notes || 'No notes yet. Add private context in conversation settings so you can keep tone, follow-ups, and reminders visible while replying.';
     notesEl.classList.toggle('empty', !notes);
@@ -3650,6 +3709,7 @@ class WhatsAppClient {
     const menu = document.getElementById('chat-actions-menu');
     const searchButton = document.getElementById('chat-search-toggle');
     const starredButton = document.getElementById('chat-starred-toggle');
+    const translateAllButton = document.getElementById('chat-translate-all');
     const searchBarVisible = !document.getElementById('chat-search-bar')?.classList.contains('hidden');
 
     if (button && menu) {
@@ -3666,6 +3726,18 @@ class WhatsAppClient {
       starredButton.classList.toggle('active', this.starredOnly);
       starredButton.textContent = this.starredOnly ? 'Show all messages' : 'Show starred messages only';
     }
+
+    if (translateAllButton) {
+      const count = this.getUntranslatedIncomingMessagesForCurrentConversation().length;
+      translateAllButton.disabled = count === 0;
+      translateAllButton.textContent = count === 0
+        ? 'All incoming translated'
+        : `Translate ${count} incoming message${count === 1 ? '' : 's'}`;
+    }
+  }
+
+  getUntranslatedIncomingMessagesForCurrentConversation() {
+    return getUntranslatedIncomingMessages(this.messages.get(this.currentContactId) || []);
   }
 
   renderQuickReplies() {
@@ -4180,8 +4252,81 @@ class WhatsAppClient {
     }
   }
 
+  getConversationHandoffBrief() {
+    if (!this.currentContactId) return '';
+
+    const contact = this.contacts.find(entry => entry.id === this.currentContactId) || { id: this.currentContactId };
+    return buildConversationHandoffBrief({
+      contact,
+      metadata: this.getContactMetadata(this.currentContactId),
+      messages: this.messages.get(this.currentContactId) || [],
+      drafts: this.drafts,
+    });
+  }
+
+  async copyConversationBrief() {
+    const text = this.getConversationHandoffBrief();
+    if (!text) return;
+
+    const button = document.getElementById('workspace-copy-brief');
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+      }
+      if (button) {
+        button.textContent = 'Copied';
+        window.setTimeout(() => this.renderConversationWorkspace(), 1600);
+      }
+    } catch (err) {
+      console.error('Failed to copy conversation brief:', err);
+      alert('Failed to copy conversation brief: ' + err.message);
+    }
+  }
+
+  async translateUntranslatedIncomingMessages() {
+    if (!this.currentContactId) return;
+
+    const messages = this.getUntranslatedIncomingMessagesForCurrentConversation();
+    if (messages.length === 0) {
+      this.updateConversationMenuUI();
+      this.renderConversationWorkspace();
+      return;
+    }
+
+    const buttons = [
+      document.getElementById('chat-translate-all'),
+      document.getElementById('workspace-translate-all'),
+    ].filter(Boolean);
+    buttons.forEach((button) => {
+      button.disabled = true;
+      button.textContent = 'Translating...';
+    });
+
+    try {
+      for (const message of messages) {
+        await this.translateMessage(message.id, { silent: true, rerender: false });
+      }
+      this.refreshCurrentConversationView();
+      this.renderConversationWorkspace();
+    } finally {
+      this.updateConversationMenuUI();
+      this.renderConversationWorkspace();
+    }
+  }
+
   // Translate a message manually
-  async translateMessage(messageId) {
+  async translateMessage(messageId, options = {}) {
+    const { silent = false, rerender = true } = options;
     const messages = this.messages.get(this.currentContactId);
     if (!messages) return;
     
@@ -4190,14 +4335,14 @@ class WhatsAppClient {
     
     // Check if already translated
     if (message.is_translated || message.isTranslated) {
-      alert('This message has already been translated.');
+      if (!silent) alert('This message has already been translated.');
       return;
     }
     
     // Get the text to translate
     const text = message.content?.body || message.content?.caption || message.content?.text;
     if (!text) {
-      alert('No text to translate in this message.');
+      if (!silent) alert('No text to translate in this message.');
       return;
     }
 
@@ -4213,7 +4358,11 @@ class WhatsAppClient {
       message.sourceLanguage = targetLanguage;
       message.is_translated = true;
       message.isTranslated = true;
-      this.renderMessages(this.getVisibleMessagesForCurrentConversation());
+      if (rerender) {
+        this.renderMessages(this.getVisibleMessagesForCurrentConversation());
+        this.renderConversationWorkspace();
+        this.updateConversationMenuUI();
+      }
       return;
     }
     
@@ -4221,7 +4370,7 @@ class WhatsAppClient {
       // Call the translation API
       const response = await fetch('/api/translate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ 
           text: text,
           messageId: messageId,
@@ -4245,12 +4394,16 @@ class WhatsAppClient {
       message.isTranslated = true;
       
       // Re-render messages to show translation
-      const currentMessages = this.messages.get(this.currentContactId) || [];
-      this.renderMessages(currentMessages);
+      if (rerender) {
+        const currentMessages = this.getVisibleMessagesForCurrentConversation();
+        this.renderMessages(currentMessages);
+        this.renderConversationWorkspace();
+        this.updateConversationMenuUI();
+      }
       
     } catch (err) {
       console.error('Translation failed:', err);
-      alert('Translation failed: ' + err.message);
+      if (!silent) alert('Translation failed: ' + err.message);
     }
   }
 
@@ -4905,6 +5058,11 @@ class WhatsAppClient {
       this.closeConversationMenu();
     });
 
+    document.getElementById('chat-translate-all')?.addEventListener('click', () => {
+      this.translateUntranslatedIncomingMessages();
+      this.closeConversationMenu();
+    });
+
     // Chat settings button in header
     document.getElementById('chat-settings-button')?.addEventListener('click', () => {
       this.openSettingsModal();
@@ -4921,6 +5079,14 @@ class WhatsAppClient {
 
     document.getElementById('workspace-settings-button')?.addEventListener('click', () => {
       this.openSettingsModal();
+    });
+
+    document.getElementById('workspace-copy-brief')?.addEventListener('click', () => {
+      this.copyConversationBrief();
+    });
+
+    document.getElementById('workspace-translate-all')?.addEventListener('click', () => {
+      this.translateUntranslatedIncomingMessages();
     });
 
     document.getElementById('workspace-checklist')?.addEventListener('click', (event) => {
