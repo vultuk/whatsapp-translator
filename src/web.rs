@@ -988,11 +988,14 @@ async fn update_conversation_settings(
 
 /// Query parameters for messages pagination
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MessagesQuery {
     /// Maximum number of messages to return (default: 30 for initial load)
     limit: Option<u32>,
     /// Only get messages before this timestamp (for loading older messages)
     before: Option<i64>,
+    /// Tie-breaker message ID for stable pagination when timestamps match
+    before_id: Option<String>,
 }
 
 /// Response for paginated messages
@@ -1018,15 +1021,21 @@ async fn get_messages(
         Some(n) => Some(n),
         None => Some(30), // Default to 30 for lazy loading
     };
+    let storage_limit = limit.map(|l| l.saturating_add(1));
 
     // Strip media_data from messages to reduce payload (media loaded on demand via /api/media)
-    match state
-        .store
-        .get_messages_paginated(&contact_id, limit, params.before, true)
-    {
-        Ok(messages) => {
-            // Check if there are more messages (we got a full page)
-            let has_more = limit.map(|l| messages.len() >= l as usize).unwrap_or(false);
+    match state.store.get_messages_paginated(
+        &contact_id,
+        storage_limit,
+        params.before,
+        params.before_id.as_deref(),
+        true,
+    ) {
+        Ok(mut messages) => {
+            let has_more = limit.map(|l| messages.len() > l as usize).unwrap_or(false);
+            if has_more {
+                messages.remove(0);
+            }
             Json(MessagesResponse { messages, has_more }).into_response()
         }
         Err(e) => {

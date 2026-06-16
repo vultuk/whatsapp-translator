@@ -2956,15 +2956,23 @@ class WhatsAppClient {
     const existingMessages = this.messages.get(contactId) || [];
     if (existingMessages.length === 0) return;
     
-    // Get the oldest message's timestamp
-    const oldestTimestamp = existingMessages[0].timestamp;
+    // Get the oldest message cursor
+    const oldestMessage = existingMessages[0];
+    const oldestTimestamp = oldestMessage.timestamp;
+    const olderParams = new URLSearchParams({
+      before: String(oldestTimestamp),
+      limit: '50'
+    });
+    if (oldestMessage.id) {
+      olderParams.set('beforeId', oldestMessage.id);
+    }
     
     try {
       this.messagesLoading.set(contactId, true);
       this.showLoadingIndicator();
       
       const response = await this.apiFetch(
-        `/api/messages/${encodeURIComponent(contactId)}?before=${oldestTimestamp}&limit=50`,
+        `/api/messages/${encodeURIComponent(contactId)}?${olderParams.toString()}`,
         {
           headers: this.getAuthHeaders()
         }

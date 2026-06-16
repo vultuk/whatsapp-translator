@@ -195,6 +195,7 @@ impl MessageStore {
             CREATE INDEX IF NOT EXISTS idx_messages_contact_id ON messages(contact_id);
             CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
             CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_desc ON messages(contact_id, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_id_desc ON messages(contact_id, timestamp DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_contacts_last_message ON contacts(last_message_time DESC);
 
             -- AI usage tracking
@@ -309,6 +310,8 @@ impl MessageStore {
             r#"
             CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_desc
                 ON messages(contact_id, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_id_desc
+                ON messages(contact_id, timestamp DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_contacts_pinned_sort
                 ON contacts(pinned_at, last_message_time DESC);
             CREATE INDEX IF NOT EXISTS idx_usage_contact_timestamp
@@ -878,7 +881,7 @@ impl MessageStore {
 
     /// Get messages for a specific contact (all messages - for MCP/internal use)
     pub fn get_messages(&self, contact_id: &str) -> Result<Vec<StoredMessage>> {
-        self.get_messages_paginated(contact_id, None, None, false)
+        self.get_messages_paginated(contact_id, None, None, None, false)
     }
 
     /// Get media data for a specific message
@@ -948,13 +951,16 @@ impl MessageStore {
     /// Get messages for a specific contact with pagination
     /// - limit: max number of messages to return (default: all)
     /// - before_timestamp: only get messages before this timestamp (for loading older messages)
+    /// - before_message_id: tie-breaker cursor for messages with the same timestamp
     /// - strip_media: if true, remove media_data from content to reduce payload size
-    /// Returns messages in ascending order by timestamp (oldest first)
+    ///
+    /// Returns messages in ascending order by timestamp and ID (oldest first)
     pub fn get_messages_paginated(
         &self,
         contact_id: &str,
         limit: Option<u32>,
         before_timestamp: Option<i64>,
+        before_message_id: Option<&str>,
         strip_media: bool,
     ) -> Result<Vec<StoredMessage>> {
         let conn = self.conn.lock().unwrap();
@@ -970,56 +976,32 @@ impl MessageStore {
 
         let (contact_name, contact_phone) = contact_info.unwrap_or((None, None));
 
-        // Build query based on parameters
-        // We select in DESC order to get the most recent N messages, then reverse
-        let query = match (limit, before_timestamp) {
-            (Some(lim), Some(before)) => {
-                format!(
-                    r#"
-                    SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, 
-                           sender_phone, chat_type, content_type, content_json, original_text,
-                           translated_text, source_language, is_translated
-                    FROM messages 
-                    WHERE contact_id = ? AND timestamp < ?
-                    ORDER BY timestamp DESC
-                    LIMIT {}
-                    "#,
-                    lim
-                )
-            }
-            (Some(lim), None) => {
-                format!(
-                    r#"
-                    SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, 
-                           sender_phone, chat_type, content_type, content_json, original_text,
-                           translated_text, source_language, is_translated
-                    FROM messages 
-                    WHERE contact_id = ?
-                    ORDER BY timestamp DESC
-                    LIMIT {}
-                    "#,
-                    lim
-                )
-            }
-            (None, Some(before)) => r#"
-                SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, 
-                       sender_phone, chat_type, content_type, content_json, original_text,
-                       translated_text, source_language, is_translated
-                FROM messages 
-                WHERE contact_id = ? AND timestamp < ?
-                ORDER BY timestamp ASC
-                "#
-            .to_string(),
-            (None, None) => r#"
-                SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, 
-                       sender_phone, chat_type, content_type, content_json, original_text,
-                       translated_text, source_language, is_translated
-                FROM messages 
-                WHERE contact_id = ?
-                ORDER BY timestamp ASC
-                "#
-            .to_string(),
+        let cursor_clause = if before_timestamp.is_some() && before_message_id.is_some() {
+            "AND (timestamp < ? OR (timestamp = ? AND id < ?))"
+        } else if before_timestamp.is_some() {
+            "AND timestamp < ?"
+        } else {
+            ""
         };
+        let order_clause = if limit.is_some() {
+            "ORDER BY timestamp DESC, id DESC"
+        } else {
+            "ORDER BY timestamp ASC, id ASC"
+        };
+        let limit_clause = limit
+            .map(|lim| format!("LIMIT {}", lim))
+            .unwrap_or_default();
+        let query = format!(
+            r#"
+            SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
+                   sender_phone, chat_type, content_type, content_json, original_text,
+                   translated_text, source_language, is_translated
+            FROM messages
+            WHERE contact_id = ? {cursor_clause}
+            {order_clause}
+            {limit_clause}
+            "#
+        );
 
         let mut stmt = conn.prepare(&query)?;
 
@@ -1060,19 +1042,26 @@ impl MessageStore {
             })
         };
 
-        let messages: Vec<StoredMessage> = if before_timestamp.is_some() {
-            stmt.query_map(params![contact_id, before_timestamp], |row| {
-                build_message(row, &contact_name, &contact_phone, strip_media)
-            })?
-            .filter_map(|r| r.ok())
-            .collect()
-        } else {
-            stmt.query_map(params![contact_id], |row| {
-                build_message(row, &contact_name, &contact_phone, strip_media)
-            })?
-            .filter_map(|r| r.ok())
-            .collect()
-        };
+        let messages: Vec<StoredMessage> =
+            if let (Some(before), Some(before_id)) = (before_timestamp, before_message_id) {
+                stmt.query_map(params![contact_id, before, before, before_id], |row| {
+                    build_message(row, &contact_name, &contact_phone, strip_media)
+                })?
+                .filter_map(|r| r.ok())
+                .collect()
+            } else if let Some(before) = before_timestamp {
+                stmt.query_map(params![contact_id, before], |row| {
+                    build_message(row, &contact_name, &contact_phone, strip_media)
+                })?
+                .filter_map(|r| r.ok())
+                .collect()
+            } else {
+                stmt.query_map(params![contact_id], |row| {
+                    build_message(row, &contact_name, &contact_phone, strip_media)
+                })?
+                .filter_map(|r| r.ok())
+                .collect()
+            };
 
         // If we used DESC order with limit, reverse to get chronological order
         if limit.is_some() {
@@ -1964,7 +1953,7 @@ impl MessageStore {
                    translated_text, source_language, is_translated
             FROM messages
             WHERE contact_id = ?
-            ORDER BY timestamp DESC
+            ORDER BY timestamp DESC, id DESC
             LIMIT ?
             "#,
         )?;
@@ -1985,5 +1974,89 @@ impl Clone for MessageStore {
         Self {
             conn: Arc::clone(&self.conn),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn test_store() -> (MessageStore, PathBuf) {
+        let data_dir = std::env::temp_dir().join(format!(
+            "whatsapp-translator-storage-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = MessageStore::new(&data_dir).expect("test store");
+        (store, data_dir)
+    }
+
+    fn test_message(id: &str, timestamp: i64) -> StoredMessage {
+        let content = serde_json::json!({
+            "type": "text",
+            "body": id,
+        });
+
+        StoredMessage {
+            id: id.to_string(),
+            contact_id: "chat@example.test".to_string(),
+            timestamp,
+            is_from_me: false,
+            is_forwarded: false,
+            sender_name: Some("Tester".to_string()),
+            sender_phone: None,
+            contact_name: Some("Test Chat".to_string()),
+            contact_phone: None,
+            chat_type: "private".to_string(),
+            content_type: "Text".to_string(),
+            content_json: content.to_string(),
+            content: Some(content),
+            original_text: Some(id.to_string()),
+            translated_text: None,
+            source_language: None,
+            is_translated: false,
+        }
+    }
+
+    fn message_ids(messages: &[StoredMessage]) -> Vec<String> {
+        messages.iter().map(|message| message.id.clone()).collect()
+    }
+
+    #[test]
+    fn paginated_messages_use_id_cursor_when_timestamps_match() {
+        let (store, data_dir) = test_store();
+        store
+            .upsert_contact(
+                "chat@example.test",
+                Some("Test Chat"),
+                None,
+                Some("private"),
+                1_700_000_000,
+            )
+            .expect("insert contact");
+
+        for id in ["m01", "m02", "m03", "m04"] {
+            store
+                .add_message(&test_message(id, 1_700_000_000))
+                .expect("insert message");
+        }
+
+        let first_page = store
+            .get_messages_paginated("chat@example.test", Some(2), None, None, true)
+            .expect("first page");
+        assert_eq!(message_ids(&first_page), vec!["m03", "m04"]);
+
+        let second_page = store
+            .get_messages_paginated(
+                "chat@example.test",
+                Some(2),
+                Some(first_page[0].timestamp),
+                Some(&first_page[0].id),
+                true,
+            )
+            .expect("second page");
+        assert_eq!(message_ids(&second_page), vec!["m01", "m02"]);
+
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 }
