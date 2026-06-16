@@ -971,7 +971,7 @@ export function createDemoWorkspace(now = Date.now()) {
       unreadCount: 2,
       pinnedAt: minutesAgo(50),
       lastMessageTime: minutesAgo(4),
-      lastMessagePreview: 'Puede llegar despues de las 18:00?',
+      lastMessagePreview: 'Perfect, can you arrive after 18:00?',
     },
     {
       id: 'demo-tutor',
@@ -1037,6 +1037,10 @@ export function createDemoWorkspace(now = Date.now()) {
         senderName: 'Sofia',
         senderJid: '34600111222@s.whatsapp.net',
         content: { type: 'text', body: 'Perfecto, puede llegar despues de las 18:00?' },
+        originalText: 'Perfecto, puede llegar despues de las 18:00?',
+        translatedText: 'Perfect, can you arrive after 18:00?',
+        sourceLanguage: 'Spanish',
+        isTranslated: true,
       },
     ],
     'demo-tutor': [
@@ -1081,6 +1085,10 @@ export function createDemoWorkspace(now = Date.now()) {
         senderJid: '819098765432@s.whatsapp.net',
         chatType: 'group',
         content: { type: 'text', body: '駅の出口は何番ですか?' },
+        originalText: '駅の出口は何番ですか?',
+        translatedText: 'Which station exit should we use?',
+        sourceLanguage: 'Japanese',
+        isTranslated: true,
       },
     ],
     'demo-plumber': [

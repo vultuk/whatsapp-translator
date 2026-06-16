@@ -52,7 +52,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260616-simplified-ui">
   <!-- QR Code library -->
   <script src="https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"></script>
   <!-- Prevent phone number detection on iOS -->
@@ -64,9 +64,9 @@
     <div id="password-overlay" class="overlay hidden">
       <div class="overlay-content overlay-card auth-card">
         <div class="overlay-badge" aria-hidden="true">WT</div>
-        <span class="overlay-kicker">Protected workspace</span>
+        <span class="overlay-kicker">Private translator</span>
         <h2>Unlock WhatsApp Translator</h2>
-        <p>Sign in to open your inbox, follow-ups, and translation tools.</p>
+        <p>Sign in to open translated WhatsApp chats.</p>
         <form id="password-form" class="password-form">
           <input type="password" id="password-input" placeholder="Enter password" autocomplete="current-password">
           <button id="password-submit" class="password-button" type="submit">Continue</button>
@@ -97,8 +97,8 @@
         <h2>Connecting...</h2>
         <div class="spinner"></div>
         <p>Establishing connection to WhatsApp</p>
-        <button id="demo-mode-button" class="overlay-primary-button" type="button">Explore demo inbox</button>
-        <p class="overlay-helper">Try replies, translations, reminders, and tasks without linking a phone.</p>
+        <button id="demo-mode-button" class="overlay-primary-button" type="button">Preview demo chats</button>
+        <p class="overlay-helper">See translated WhatsApp conversations without linking a phone.</p>
       </div>
     </div>
 
@@ -144,7 +144,7 @@
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
               <path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16a6.47 6.47 0 0 0 4.23-1.57l.27.28v.79L20 21.5 21.5 20l-6-6zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/>
             </svg>
-            <input id="inbox-search-input" type="search" placeholder="Search chats, aliases, drafts, or notes">
+            <input id="inbox-search-input" type="search" placeholder="Search chats">
           </label>
           <div class="inbox-filter-row">
             <button class="inbox-filter-chip" data-inbox-filter="unreadOnly" type="button">Unread</button>
@@ -187,8 +187,8 @@
                   <path fill="currentColor" d="M19.005 3.175H4.674C3.642 3.175 3 3.789 3 4.821V21.02l3.544-3.514h12.461c1.033 0 2.064-1.06 2.064-2.093V4.821c-.001-1.032-1.032-1.646-2.064-1.646zm-4.989 9.869H7.041V11.1h6.975v1.944zm3-4H7.041V7.1h9.975v1.944z"/>
                 </svg>
               </div>
-              <h2>WhatsApp Translator</h2>
-              <p>Select a conversation to view messages</p>
+              <h2>Choose a chat</h2>
+              <p>Incoming messages translate automatically. Replies send in the conversation's language.</p>
             </div>
             <section id="visitor-dashboard" class="visitor-dashboard hidden">
               <div class="visitor-dashboard-hero">
@@ -603,6 +603,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=20260616-simplified-ui"></script>
 </body>
 </html>

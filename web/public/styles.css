@@ -1718,6 +1718,226 @@ select {
   background: rgba(0, 0, 0, 0.15);
 }
 
+/* ==================== Simplified translator-first interface ==================== */
+#app {
+  background: var(--bg-primary);
+}
+
+#contacts-panel {
+  width: clamp(320px, 28vw, 368px);
+  min-width: 300px;
+  max-width: 380px;
+  background: var(--bg-secondary);
+  box-shadow: none;
+}
+
+.panel-header,
+.chat-header {
+  background: var(--bg-secondary);
+  backdrop-filter: none;
+}
+
+.panel-header {
+  padding: 16px 18px;
+  min-height: 76px;
+}
+
+.header-actions {
+  gap: 4px;
+}
+
+#command-palette-button,
+#app-appearance-button,
+.notification-prompt,
+.inbox-filter-row,
+.sidebar-footer,
+.visitor-dashboard,
+.chat-workspace-button,
+.chat-cost-badge,
+.conversation-workspace,
+.workspace-backdrop,
+.composer-assist,
+.quick-replies-bar,
+.send-dropdown-toggle,
+.send-dropdown {
+  display: none !important;
+}
+
+.inbox-toolbar {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--surface-outline);
+  background: var(--bg-secondary);
+}
+
+.inbox-search {
+  min-height: 44px;
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+  box-shadow: none;
+}
+
+.inbox-search input {
+  font-size: 14px;
+}
+
+.contact-item {
+  min-height: 76px;
+  padding: 12px 16px;
+  border-bottom-color: color-mix(in srgb, var(--border-color) 78%, transparent);
+}
+
+.contact-item.active {
+  background:
+    linear-gradient(90deg, rgba(var(--accent-rgb), 0.18), transparent 92%),
+    var(--bg-tertiary);
+}
+
+.contact-item.has-due-reminder {
+  box-shadow: none;
+}
+
+.contact-title {
+  display: block;
+  max-height: none;
+  overflow: hidden;
+}
+
+.contact-name {
+  display: block;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.contact-meta-chip,
+.pin-button {
+  display: none !important;
+}
+
+.contact-header {
+  margin-bottom: 4px;
+}
+
+.contact-preview {
+  gap: 8px;
+}
+
+.preview-text,
+.preview-text.reminder-preview,
+.preview-text.checklist-preview,
+.preview-text.timezone-preview,
+.preview-text.snooze-preview {
+  color: var(--text-secondary);
+  font-style: normal;
+}
+
+.draft-preview {
+  color: color-mix(in srgb, var(--accent-color) 70%, var(--text-secondary) 30%);
+}
+
+.unread-badge {
+  min-width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+}
+
+#messages-panel {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 90%, var(--bg-secondary) 10%), var(--bg-primary));
+}
+
+.empty-chat {
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+}
+
+.empty-chat-content {
+  width: min(100%, 520px);
+  display: block;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.empty-chat-intro {
+  max-width: 520px;
+}
+
+.empty-icon {
+  width: 88px;
+  height: 88px;
+  border-radius: 24px;
+  box-shadow: none;
+}
+
+.empty-chat h2 {
+  font-size: clamp(2rem, 4vw, 2.8rem);
+  letter-spacing: 0;
+}
+
+.empty-chat-intro p {
+  max-width: 42ch;
+}
+
+.chat-header {
+  padding: 12px 16px;
+}
+
+.chat-actions {
+  gap: 6px;
+}
+
+.chat-actions-menu {
+  min-width: 230px;
+}
+
+.messages-list {
+  padding: 22px 32px;
+  gap: 8px;
+  background:
+    radial-gradient(circle at top right, rgba(var(--accent-rgb), 0.05), transparent 28%),
+    var(--surface-canvas);
+}
+
+.message {
+  max-width: min(68%, 40rem);
+  box-shadow: none;
+}
+
+.message-input-area {
+  border-top: 1px solid var(--surface-outline);
+  background: var(--bg-secondary);
+}
+
+.input-container {
+  padding-top: 10px;
+}
+
+.send-button-group {
+  display: flex;
+}
+
+.send-button {
+  border-radius: 50%;
+}
+
+@media (max-width: 768px) {
+  #contacts-panel {
+    width: 100%;
+    max-width: none;
+  }
+
+  .messages-list {
+    padding: 18px 14px;
+  }
+
+  .message {
+    max-width: 82%;
+  }
+}
+
 /* Password form */
 .password-form {
   display: flex;
@@ -4504,4 +4724,50 @@ select {
     padding-left: 16px;
     padding-right: 16px;
   }
+}
+
+/* Final simplified-mode overrides must remain after responsive workspace rules. */
+#command-palette-button,
+#app-appearance-button,
+.notification-prompt,
+.inbox-filter-row,
+.sidebar-footer,
+.visitor-dashboard,
+.chat-workspace-button,
+.chat-cost-badge,
+.conversation-workspace,
+.workspace-backdrop,
+.composer-assist,
+.quick-replies-bar,
+.send-dropdown-toggle,
+.send-dropdown,
+.contact-meta-chip,
+.pin-button {
+  display: none !important;
+}
+
+.empty-chat {
+  align-items: center;
+  justify-content: center;
+}
+
+.empty-chat-content {
+  width: min(100%, 520px);
+  display: block;
+  text-align: center;
+}
+
+.chat-main-column {
+  flex: 1 1 auto;
+}
+
+.message-input-area {
+  border-top: 1px solid var(--surface-outline);
+  background: var(--bg-secondary);
+}
+
+.messages-list {
+  background:
+    radial-gradient(circle at top right, rgba(var(--accent-rgb), 0.05), transparent 28%),
+    var(--surface-canvas);
 }

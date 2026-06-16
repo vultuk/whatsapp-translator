@@ -36,8 +36,8 @@ import {
   upsertChecklistItems,
   upsertDraft,
   upsertQuickReply,
-} from './app-state.js';
-import { calculateViewportLayout } from './viewport.js';
+} from './app-state.js?v=20260616-simplified-ui';
+import { calculateViewportLayout } from './viewport.js?v=20260616-simplified-ui';
 
 class WhatsAppClient {
   constructor() {
@@ -726,46 +726,9 @@ class WhatsAppClient {
   }
 
   buildContactBadgeMarkup(contactId, now = Date.now()) {
-    const metadata = this.getContactMetadata(contactId);
-    const badges = [];
-    const priority = this.getPriorityInfo(contactId);
-    const checklist = this.getChecklistSummary(contactId);
-    const reminderStatus = getReminderStatus(metadata, now);
-    const replyState = this.getReplyState(contactId, now);
-    if (priority.isImportant) {
-      badges.push(`<span class="contact-meta-chip priority ${priority.value}">${priority.label}</span>`);
-    }
-    if (replyState === 'needs-reply') {
-      badges.push('<span class="contact-meta-chip reply">Reply</span>');
-    } else if (replyState === 'drafting') {
-      badges.push('<span class="contact-meta-chip drafting">Drafting</span>');
-    } else if (replyState === 'waiting') {
-      badges.push('<span class="contact-meta-chip waiting">Waiting</span>');
-    }
-
-    if (checklist.open > 0) {
-      badges.push(`<span class="contact-meta-chip tasks">${checklist.open} task${checklist.open === 1 ? '' : 's'}</span>`);
-    }
-
-    if (reminderStatus === 'due') {
-      badges.push('<span class="contact-meta-chip due">Due</span>');
-    } else if (reminderStatus === 'upcoming') {
-      badges.push('<span class="contact-meta-chip reminder">Reminder</span>');
-    }
-
-    if (isContactSnoozed(metadata, now)) {
-      badges.push('<span class="contact-meta-chip snoozed">Snoozed</span>');
-    }
-
-    if (this.getContactNotePreview(contactId)) {
-      badges.push('<span class="contact-meta-chip">Note</span>');
-    }
-
-    this.getContactLabels(contactId).slice(0, 2).forEach((label) => {
-      badges.push(`<span class="contact-meta-chip label">${this.escapeHtml(label)}</span>`);
-    });
-
-    return badges.join('');
+    void contactId;
+    void now;
+    return '';
   }
 
   buildChatMetadataSummary(contactId, now = Date.now()) {
@@ -773,36 +736,14 @@ class WhatsAppClient {
 
     const pieces = [];
     const metadata = this.getContactMetadata(contactId);
-    const priority = this.getPriorityInfo(contactId);
-    const checklist = this.getChecklistSummary(contactId);
-    const timezoneInfo = this.getTimezoneInfo(contactId, now);
+    const contact = this.contacts.find(item => item.id === contactId);
+    const targetLanguage = metadata.languageOverride || contact?.languageOverride || '';
+    const translationStyle = metadata.translationStyle || contact?.translationStyle || '';
 
-    if (priority.value !== 'normal') {
-      pieces.push(`${priority.label} priority`);
-    }
+    pieces.push(targetLanguage ? `Translates to ${targetLanguage}` : 'Auto-translation on');
 
-    const replySummary = this.getReplySummary(contactId, now);
-    if (replySummary) {
-      pieces.push(replySummary);
-    }
-
-    if (checklist.open > 0) {
-      pieces.push(`${checklist.open} open task${checklist.open === 1 ? '' : 's'}`);
-    }
-
-    const reminderStatus = getReminderStatus(metadata, now);
-    if (reminderStatus === 'due') {
-      pieces.push('Reminder due');
-    } else if (reminderStatus === 'upcoming') {
-      pieces.push('Reminder set');
-    }
-
-    if (isContactSnoozed(metadata, now)) {
-      pieces.push('Snoozed');
-    }
-
-    if (timezoneInfo) {
-      pieces.push(`${timezoneInfo.label} · ${timezoneInfo.statusLabel}`);
+    if (translationStyle) {
+      pieces.push(translationStyle);
     }
 
     return pieces.slice(0, 3).join(' • ');
@@ -1015,107 +956,10 @@ class WhatsAppClient {
 
   renderVisitorDashboard() {
     const container = document.getElementById('visitor-dashboard');
-    const statsEl = document.getElementById('visitor-dashboard-stats');
-    const focusEl = document.getElementById('visitor-dashboard-focus');
-    const remindersEl = document.getElementById('visitor-dashboard-reminders');
-    const focusCountEl = document.getElementById('visitor-dashboard-focus-count');
-    const reminderCountEl = document.getElementById('visitor-dashboard-reminder-count');
-    if (!container || !statsEl || !focusEl || !remindersEl) return;
-
-    if ((this.contacts || []).length === 0) {
+    if (container) {
       container.classList.add('hidden');
-      return;
     }
-
-    container.classList.remove('hidden');
-    const dashboard = this.getVisitorDashboardData();
-    const statCards = [
-      {
-        id: 'needsReply',
-        label: 'Needs reply',
-        value: dashboard.stats.needsReply,
-        description: 'Chats waiting on you',
-        active: this.contactFilters.needsReplyOnly,
-      },
-      {
-        id: 'dueReminders',
-        label: 'Due reminders',
-        value: dashboard.stats.dueReminders,
-        description: 'Follow-ups that are due now',
-        active: this.contactFilters.dueRemindersOnly,
-      },
-      {
-        id: 'drafts',
-        label: 'Saved drafts',
-        value: dashboard.stats.drafts,
-        description: 'Replies you already started',
-        active: this.contactFilters.draftsOnly,
-      },
-      {
-        id: 'openTasks',
-        label: 'Open tasks',
-        value: dashboard.stats.openTasks,
-        description: 'Checklist items still open',
-        active: this.contactFilters.tasksOnly,
-      },
-    ];
-
-    statsEl.innerHTML = statCards.map(card => `
-      <button
-        class="visitor-stat-card ${card.active ? 'active' : ''}"
-        type="button"
-        data-dashboard-preset="${card.id}"
-      >
-        <span class="visitor-stat-value">${card.value}</span>
-        <span class="visitor-stat-label">${card.label}</span>
-        <span class="visitor-stat-description">${card.description}</span>
-      </button>
-    `).join('');
-
-    focusCountEl.textContent = `${dashboard.focusContacts.length} active`;
-    reminderCountEl.textContent = `${dashboard.upcomingReminders.length} scheduled`;
-
-    if (dashboard.focusContacts.length === 0) {
-      focusEl.innerHTML = `
-        <div class="visitor-dashboard-empty">
-          <strong>Your inbox is in good shape.</strong>
-          <span>No replies, reminders, or open tasks are asking for attention right now.</span>
-        </div>
-      `;
-    } else {
-      focusEl.innerHTML = dashboard.focusContacts.map(({ contact, snapshot }) => `
-        <button class="visitor-focus-item" type="button" data-dashboard-contact="${contact.id}">
-          <div class="visitor-focus-copy">
-            <span class="visitor-focus-name">${this.escapeHtml(this.getContactDisplayName(contact))}</span>
-            <span class="visitor-focus-summary">${this.escapeHtml(snapshot.summary || snapshot.headline)}</span>
-          </div>
-          <div class="visitor-focus-meta">
-            <span class="visitor-focus-time">${this.escapeHtml(snapshot.lastMessageTime ? this.formatTime(snapshot.lastMessageTime) : 'No recent activity')}</span>
-          </div>
-        </button>
-      `).join('');
-    }
-
-    if (dashboard.upcomingReminders.length === 0) {
-      remindersEl.innerHTML = `
-        <div class="visitor-dashboard-empty">
-          <strong>No upcoming reminders yet.</strong>
-          <span>Set a reminder inside any conversation to keep your future follow-ups visible.</span>
-        </div>
-      `;
-    } else {
-      remindersEl.innerHTML = dashboard.upcomingReminders.map(({ contact, snapshot }) => `
-        <button class="visitor-focus-item visitor-reminder-item" type="button" data-dashboard-contact="${contact.id}">
-          <div class="visitor-focus-copy">
-            <span class="visitor-focus-name">${this.escapeHtml(this.getContactDisplayName(contact))}</span>
-            <span class="visitor-focus-summary">${this.escapeHtml(this.getReminderSummary(contact.id) || snapshot.summary)}</span>
-          </div>
-          <div class="visitor-focus-meta">
-            <span class="visitor-focus-time">${this.escapeHtml(this.formatMetadataTime(snapshot.reminderAt))}</span>
-          </div>
-        </button>
-      `).join('');
-    }
+    return;
   }
 
   startDemoWorkspace() {
@@ -2715,36 +2559,22 @@ class WhatsAppClient {
     container.innerHTML = sorted.map(contact => {
       const isGroup = contact.type === 'group';
       const isPinned = contact.pinnedAt != null;
-      const reminderStatus = getReminderStatus(this.getContactMetadata(contact.id));
-      const isSnoozed = isContactSnoozed(this.getContactMetadata(contact.id));
-      const priority = this.getPriorityInfo(contact.id);
-      const checklist = this.getChecklistSummary(contact.id);
-      const timezoneInfo = this.getTimezoneInfo(contact.id);
       const displayName = this.getContactDisplayName(contact);
       const initial = (displayName || '?').charAt(0).toUpperCase();
       const time = this.formatTime(contact.lastMessageTime);
       const isActive = contact.id === this.currentContactId;
       const unread = contact.unreadCount > 0 ? 
         `<span class="unread-badge">${contact.unreadCount}</span>` : '';
-      const badgeMarkup = this.buildContactBadgeMarkup(contact.id);
       
       // Get last message preview - prefer saved drafts, then cached messages, then backend preview
       const messages = this.messages.get(contact.id) || [];
       const lastMessage = messages[messages.length - 1];
       const draftPreview = getDraftPreview(this.drafts, contact.id);
-      const snoozeSummary = this.getSnoozeSummary(contact.id);
-      const reminderSummary = this.getReminderSummary(contact.id);
       let preview = '';
       let previewClass = draftPreview ? 'preview-text draft-preview' : 'preview-text';
       
       if (draftPreview) {
         preview = draftPreview;
-      } else if (reminderStatus === 'due' && reminderSummary) {
-        preview = reminderSummary;
-        previewClass = 'preview-text reminder-preview';
-      } else if (isSnoozed && snoozeSummary) {
-        preview = snoozeSummary;
-        previewClass = 'preview-text snooze-preview';
       } else if (lastMessage) {
         // Use locally cached message for preview
         preview = this.getMessagePreview(lastMessage);
@@ -2758,12 +2588,6 @@ class WhatsAppClient {
       } else if (contact.lastMessagePreview) {
         // Fall back to server-provided preview (used before messages are loaded)
         preview = contact.lastMessagePreview;
-      } else if (checklist.open > 0) {
-        preview = checklist.label;
-        previewClass = 'preview-text checklist-preview';
-      } else if (timezoneInfo) {
-        preview = `${timezoneInfo.label} · ${timezoneInfo.statusLabel}`;
-        previewClass = 'preview-text timezone-preview';
       }
       
       // Check for cached avatar
@@ -2789,7 +2613,7 @@ class WhatsAppClient {
       `;
       
       return `
-        <div class="contact-item ${isActive ? 'active' : ''} ${isGroup ? 'is-group' : ''} ${isPinned ? 'is-pinned' : ''} ${priority.isImportant ? 'is-important' : ''} ${reminderStatus === 'due' ? 'has-due-reminder' : ''}" data-contact-id="${contact.id}">
+        <div class="contact-item ${isActive ? 'active' : ''} ${isGroup ? 'is-group' : ''} ${isPinned ? 'is-pinned' : ''}" data-contact-id="${contact.id}">
           <div class="avatar-container">
             <div class="avatar">
               ${avatarContent}
@@ -2801,7 +2625,6 @@ class WhatsAppClient {
             <div class="contact-header">
               <div class="contact-title">
                 <span class="contact-name">${this.escapeHtml(displayName)}</span>
-                ${badgeMarkup}
               </div>
               <span class="contact-time">${time}</span>
             </div>
@@ -2826,16 +2649,30 @@ class WhatsAppClient {
 
   // Get message preview text
   getMessagePreview(message) {
-    const prefix = message.isFromMe ? 'You: ' : '';
-    const content = message.content;
+    const isFromMe = message.isFromMe || message.is_from_me;
+    const isTranslated = message.isTranslated || message.is_translated;
+    const translatedText = message.translatedText || message.translated_text || '';
+    const originalText = message.originalText || message.original_text || '';
+    const prefix = isFromMe ? 'You: ' : '';
+    const content = message.content || {};
+    const bodyText = () => {
+      if (isTranslated && isFromMe && originalText) return originalText;
+      if (isTranslated && !isFromMe && translatedText) return translatedText;
+      return content.body || content.text || '';
+    };
+    const captionText = () => {
+      if (isTranslated && isFromMe && originalText) return originalText;
+      if (isTranslated && !isFromMe && translatedText) return translatedText;
+      return content.caption || '';
+    };
     
     switch (content.type) {
       case 'text':
-        return prefix + (content.body || content.text || '').substring(0, 50);
+        return prefix + bodyText().substring(0, 50);
       case 'image':
-        return prefix + '[ Image ]' + (content.caption ? ' ' + content.caption.substring(0, 30) : '');
+        return prefix + '[ Image ]' + (captionText() ? ' ' + captionText().substring(0, 30) : '');
       case 'video':
-        return prefix + '[ Video ]' + (content.caption ? ' ' + content.caption.substring(0, 30) : '');
+        return prefix + '[ Video ]' + (captionText() ? ' ' + captionText().substring(0, 30) : '');
       case 'audio':
         return prefix + (content.isVoiceNote ? '[ Voice Note ]' : '[ Audio ]');
       case 'document':

@@ -122,6 +122,30 @@ test('composer send controls require a live bridge connection', () => {
   assert.match(updateSendButtonBody, /this\.currentContactId && this\.connected/);
 });
 
+test('contact previews prefer translated message text when available', () => {
+  const getMessagePreview = new Function('message', extractMethodBody(appJs, 'getMessagePreview'));
+
+  assert.equal(
+    getMessagePreview({
+      isFromMe: false,
+      isTranslated: true,
+      translatedText: 'Perfect, can you arrive after 18:00?',
+      content: { type: 'text', body: 'Perfecto, puede llegar despues de las 18:00?' },
+    }),
+    'Perfect, can you arrive after 18:00?'
+  );
+  assert.equal(
+    getMessagePreview({
+      isFromMe: true,
+      isTranslated: true,
+      originalText: '18:30 works for us.',
+      translatedText: '18:30 nos va bien.',
+      content: { type: 'text', body: '18:30 works for us.' },
+    }),
+    'You: 18:30 works for us.'
+  );
+});
+
 test('static and generated markup do not use inline event attributes', () => {
   const renderedSources = `${indexHtml}\n${appJs}`;
 
