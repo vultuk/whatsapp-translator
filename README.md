@@ -88,6 +88,10 @@ Then open:
 http://localhost:3000
 ```
 
+The supported backend is the Rust app (`cargo run --release`). The `web/`
+package is only for frontend tests and Storybook previews; it does not run a
+separate Node API server.
+
 ## Deploy on Railway
 
 1. Click the Railway button above.
