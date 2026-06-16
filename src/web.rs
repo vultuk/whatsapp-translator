@@ -3443,6 +3443,120 @@ mod tests {
         let _ = std::fs::remove_dir_all(data_dir);
     }
 
+    #[tokio::test]
+    async fn logout_route_rejects_missing_token_when_password_is_configured() {
+        let (state, data_dir) = test_state(Some("secret"));
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri("/api/logout")
+            .body(Body::empty())
+            .expect("request");
+
+        let response = create_router(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn logout_clears_messages_oauth_clients_and_ui_tokens() {
+        let (state, data_dir) = test_state(Some("secret"));
+        state
+            .store
+            .upsert_contact(
+                "chat@example.test",
+                Some("Test Chat"),
+                None,
+                Some("private"),
+                1_700_000_000_000,
+            )
+            .expect("insert contact");
+        state
+            .store
+            .add_message(&test_outgoing_message("msg_1", 1_700_000_000_000))
+            .expect("insert message");
+
+        let client = OAuthClientRegistration {
+            client_id: "client_test".to_string(),
+            client_name: Some("Local MCP Client".to_string()),
+            redirect_uris: vec!["http://127.0.0.1:8787/callback".to_string()],
+            scope: "mcp".to_string(),
+            created_at: 1_700_000_000,
+        };
+        state
+            .store
+            .oauth_store_client(&client)
+            .expect("store oauth client");
+        state
+            .store
+            .oauth_store_access_token(&AccessToken {
+                token: "access-token".to_string(),
+                client_id: client.client_id.clone(),
+                scope: "mcp".to_string(),
+                created_at: 1_700_000_000,
+                expires_at: i64::MAX,
+            })
+            .expect("store access token");
+        state
+            .store
+            .oauth_store_refresh_token(&RefreshToken {
+                token: "refresh-token".to_string(),
+                client_id: client.client_id.clone(),
+                scope: "mcp".to_string(),
+                created_at: 1_700_000_000,
+                expires_at: i64::MAX,
+            })
+            .expect("store refresh token");
+
+        let ui_token = generate_token();
+        state
+            .auth_tokens
+            .write()
+            .await
+            .insert(ui_token.clone(), chrono::Utc::now().timestamp() + 60);
+
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri("/api/logout")
+            .header(header::AUTHORIZATION, format!("Bearer {}", ui_token))
+            .body(Body::empty())
+            .expect("request");
+
+        let response = create_router(state.clone())
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(state.store.get_contacts().expect("contacts").is_empty());
+        assert!(state
+            .store
+            .get_messages_paginated("chat@example.test", None, None, None, true)
+            .expect("messages")
+            .is_empty());
+        assert!(state
+            .store
+            .oauth_list_clients()
+            .expect("oauth clients")
+            .is_empty());
+        assert!(state
+            .store
+            .oauth_validate_access_token("access-token")
+            .expect("access token")
+            .is_none());
+        assert!(state
+            .store
+            .oauth_get_refresh_token("refresh-token")
+            .expect("refresh token")
+            .is_none());
+        assert!(state.auth_tokens.read().await.is_empty());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
     #[test]
     fn oauth_redirect_validation_allows_only_loopback_http_callbacks() {
         assert!(validate_oauth_redirect_uri("http://127.0.0.1:8787/callback").is_ok());
