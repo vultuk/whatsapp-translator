@@ -22,6 +22,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{broadcast, oneshot, RwLock};
 use tower_http::services::ServeDir;
 use tracing::{error, info, warn};
@@ -40,6 +41,7 @@ use tokio::sync::mpsc;
 const WEB_AUTH_TOKEN_TTL_SECONDS: i64 = 12 * 60 * 60;
 const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_IMAGE_BASE64_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4;
+const SEND_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 struct ValidatedImagePayload {
@@ -70,12 +72,36 @@ pub struct AppState {
     pub avatar_cache: RwLock<HashMap<String, ProfilePicture>>,
     /// Pending profile picture requests (request_id -> sender)
     pub pending_avatar_requests: RwLock<HashMap<i32, oneshot::Sender<Option<String>>>>,
+    /// Pending send requests (request_id -> pending reconciliation metadata)
+    pub pending_send_requests: RwLock<HashMap<i32, PendingSendRequest>>,
     /// Request ID counter
     pub request_id_counter: AtomicI32,
     /// Password for web interface (None = no password required)
     pub password: Option<String>,
     /// Valid web auth tokens and their expiration timestamps.
     pub auth_tokens: RwLock<HashMap<String, i64>>,
+}
+
+/// Bridge send result normalized for Rust/web consumers.
+#[derive(Debug, Clone)]
+pub struct BridgeSendResult {
+    pub request_id: i32,
+    pub success: bool,
+    pub message_id: Option<String>,
+    pub timestamp: Option<i64>,
+    pub error: Option<String>,
+}
+
+/// Error while waiting for the bridge to confirm a send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendConfirmationError {
+    Timeout,
+    ChannelClosed,
+}
+
+pub struct PendingSendRequest {
+    temp_message_id: Option<String>,
+    tx: oneshot::Sender<BridgeSendResult>,
 }
 
 /// Events sent to WebSocket clients
@@ -105,6 +131,14 @@ pub enum WebSocketEvent {
     },
     MarkAsRead {
         chat_id: String,
+    },
+    SendResult {
+        request_id: i32,
+        success: bool,
+        temp_message_id: Option<String>,
+        message_id: Option<String>,
+        timestamp: Option<i64>,
+        error: Option<String>,
     },
     Error {
         error: String,
@@ -391,6 +425,7 @@ impl AppState {
             translator,
             avatar_cache: RwLock::new(HashMap::new()),
             pending_avatar_requests: RwLock::new(HashMap::new()),
+            pending_send_requests: RwLock::new(HashMap::new()),
             request_id_counter: AtomicI32::new(1),
             password,
             auth_tokens: RwLock::new(HashMap::new()),
@@ -542,6 +577,120 @@ impl AppState {
             let _ = tx.send(url);
         }
     }
+
+    /// Register a bridge send request so send_result can reconcile it.
+    pub async fn register_pending_send(
+        &self,
+        request_id: i32,
+        temp_message_id: Option<String>,
+    ) -> oneshot::Receiver<BridgeSendResult> {
+        let (tx, rx) = oneshot::channel();
+        let mut pending = self.pending_send_requests.write().await;
+        pending.insert(
+            request_id,
+            PendingSendRequest {
+                temp_message_id,
+                tx,
+            },
+        );
+        rx
+    }
+
+    /// Cancel a pending send and remove any temporary optimistic row.
+    pub async fn cancel_pending_send(&self, request_id: i32) {
+        let pending = self.pending_send_requests.write().await.remove(&request_id);
+        if let Some(pending) = pending {
+            if let Some(temp_message_id) = pending.temp_message_id {
+                if let Err(e) = self.store.delete_message(&temp_message_id) {
+                    warn!(
+                        "Failed to delete pending message {} after send cancellation: {}",
+                        temp_message_id, e
+                    );
+                }
+            }
+        }
+    }
+
+    /// Wait for a bridge send result with a bounded timeout.
+    pub async fn wait_for_send_result(
+        &self,
+        request_id: i32,
+        rx: oneshot::Receiver<BridgeSendResult>,
+    ) -> Result<BridgeSendResult, SendConfirmationError> {
+        match tokio::time::timeout(SEND_RESULT_TIMEOUT, rx).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(_)) => {
+                self.cancel_pending_send(request_id).await;
+                Err(SendConfirmationError::ChannelClosed)
+            }
+            Err(_) => {
+                self.cancel_pending_send(request_id).await;
+                Err(SendConfirmationError::Timeout)
+            }
+        }
+    }
+
+    /// Reconcile a bridge send_result with a temporary stored row and release waiters.
+    pub async fn handle_send_result(&self, mut result: BridgeSendResult) {
+        result.timestamp = normalize_bridge_timestamp_millis(result.timestamp);
+        let pending = self
+            .pending_send_requests
+            .write()
+            .await
+            .remove(&result.request_id);
+
+        if let Some(pending) = pending {
+            if result.success {
+                if let Some(temp_message_id) = pending.temp_message_id.as_deref() {
+                    let confirmed_message_id =
+                        result.message_id.as_deref().unwrap_or(temp_message_id);
+                    if let Err(e) = self.store.replace_message_id(
+                        temp_message_id,
+                        confirmed_message_id,
+                        result.timestamp,
+                    ) {
+                        warn!(
+                            "Failed to reconcile pending message {} to {}: {}",
+                            temp_message_id, confirmed_message_id, e
+                        );
+                    }
+                }
+            } else if let Some(temp_message_id) = pending.temp_message_id.as_deref() {
+                if let Err(e) = self.store.delete_message(temp_message_id) {
+                    warn!(
+                        "Failed to delete pending message {} after send failure: {}",
+                        temp_message_id, e
+                    );
+                }
+            }
+
+            let _ = self.broadcast_tx.send(WebSocketEvent::SendResult {
+                request_id: result.request_id,
+                success: result.success,
+                temp_message_id: pending.temp_message_id.clone(),
+                message_id: result.message_id.clone(),
+                timestamp: result.timestamp,
+                error: result.error.clone(),
+            });
+
+            let _ = pending.tx.send(result);
+        } else if result.request_id != 0 {
+            warn!(
+                "Received send_result for unknown request_id {}",
+                result.request_id
+            );
+        }
+    }
+}
+
+fn normalize_bridge_timestamp_millis(timestamp: Option<i64>) -> Option<i64> {
+    timestamp.filter(|value| *value > 0).map(|value| {
+        if value < 10_000_000_000 {
+            value * 1000
+        } else {
+            value
+        }
+    })
 }
 
 /// Create the web server router
@@ -1200,31 +1349,9 @@ async fn send_message(
             (req.text.clone(), None, false, None)
         };
 
-    // Send the message via bridge
-    let cmd = BridgeCommand::Send {
-        request_id: None, // We don't track request IDs for now, response is fire-and-forget
-        to: req.contact_id.clone(),
-        text: text_to_send.clone(),
-        reply_to: req.reply_to.clone(),
-        reply_to_sender: req.reply_to_sender.clone(),
-        reply_to_text: req.reply_to_text.clone(),
-    };
-
-    if let Err(e) = state.send_bridge_command(cmd).await {
-        error!("Failed to send message: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("Failed to send message: {}", e)
-            })),
-        )
-            .into_response();
-    }
-
-    // Generate a temporary message ID and timestamp for immediate response
-    // The actual message ID will come back via the bridge's send_result event
+    let request_id = state.next_request_id();
     let timestamp = chrono::Utc::now().timestamp_millis();
-    let temp_message_id = format!("pending_{}", timestamp);
+    let temp_message_id = format!("pending_{}_{}", request_id, timestamp);
 
     // Store the sent message locally
     // For outgoing translated messages:
@@ -1292,9 +1419,15 @@ async fn send_message(
         is_translated: was_translated,
     };
 
-    // Store the message (don't broadcast - frontend already displays it optimistically)
     if let Err(e) = state.store.add_message(&stored_msg) {
         error!("Failed to store sent message: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to store pending message: {}", e)
+            })),
+        )
+            .into_response();
     }
 
     // Update contact's last message time (preserve contact name/phone)
@@ -1306,14 +1439,79 @@ async fn send_message(
         stored_msg.timestamp,
     ) {
         error!("Failed to update contact: {}", e);
+        let _ = state.store.delete_message(&temp_message_id);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to update contact: {}", e)
+            })),
+        )
+            .into_response();
     }
 
-    // Note: We don't broadcast sent messages - the frontend displays them immediately.
-    // The message is stored in the DB so it will appear when the conversation is reloaded.
+    let rx = state
+        .register_pending_send(request_id, Some(temp_message_id.clone()))
+        .await;
+
+    let cmd = BridgeCommand::Send {
+        request_id: Some(request_id),
+        to: req.contact_id.clone(),
+        text: text_to_send.clone(),
+        reply_to: req.reply_to.clone(),
+        reply_to_sender: req.reply_to_sender.clone(),
+        reply_to_text: req.reply_to_text.clone(),
+    };
+
+    if let Err(e) = state.send_bridge_command(cmd).await {
+        error!("Failed to send message: {}", e);
+        state.cancel_pending_send(request_id).await;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to send message: {}", e)
+            })),
+        )
+            .into_response();
+    }
+
+    let send_result = match state.wait_for_send_result(request_id, rx).await {
+        Ok(result) => result,
+        Err(SendConfirmationError::Timeout) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(serde_json::json!({
+                    "error": "Timed out waiting for WhatsApp send confirmation"
+                })),
+            )
+                .into_response();
+        }
+        Err(SendConfirmationError::ChannelClosed) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": "WhatsApp send confirmation channel closed"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if !send_result.success {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": send_result.error.unwrap_or_else(|| "WhatsApp rejected the message".to_string())
+            })),
+        )
+            .into_response();
+    }
+
+    let confirmed_message_id = send_result.message_id.unwrap_or(temp_message_id);
+    let confirmed_timestamp = send_result.timestamp.unwrap_or(timestamp);
 
     Json(SendMessageResponse {
-        message_id: temp_message_id,
-        timestamp,
+        message_id: confirmed_message_id,
+        timestamp: confirmed_timestamp,
         is_translated: was_translated,
         translated_text: if was_translated {
             Some(text_to_send)
@@ -1352,6 +1550,8 @@ async fn send_image(
                 .into_response();
         }
     };
+    let validated_mime_type = validated_image.mime_type.clone();
+    let validated_decoded_size = validated_image.decoded_size;
 
     // Check if connected
     if !*state.connected.read().await {
@@ -1364,32 +1564,9 @@ async fn send_image(
             .into_response();
     }
 
-    // Send the image via bridge
-    let cmd = BridgeCommand::SendImage {
-        request_id: None,
-        to: req.contact_id.clone(),
-        media_data: req.media_data.clone(),
-        mime_type: validated_image.mime_type.clone(),
-        caption: req.caption.clone(),
-        reply_to: req.reply_to.clone(),
-        reply_to_sender: req.reply_to_sender.clone(),
-        reply_to_text: req.reply_to_text.clone(),
-    };
-
-    if let Err(e) = state.send_bridge_command(cmd).await {
-        error!("Failed to send image: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("Failed to send image: {}", e)
-            })),
-        )
-            .into_response();
-    }
-
-    // Generate a temporary message ID and timestamp for immediate response
+    let request_id = state.next_request_id();
     let timestamp = chrono::Utc::now().timestamp_millis();
-    let temp_message_id = format!("pending_img_{}", timestamp);
+    let temp_message_id = format!("pending_img_{}_{}", request_id, timestamp);
 
     // Get contact info for the recipient
     let contact_info = state.store.get_contact(&req.contact_id).ok().flatten();
@@ -1415,10 +1592,10 @@ async fn send_image(
         content_type: "Image".to_string(),
         content_json: serde_json::json!({
             "type": "image",
-            "mime_type": validated_image.mime_type,
+            "mime_type": validated_mime_type.clone(),
             "caption": req.caption,
             "media_data": req.media_data,
-            "file_size": validated_image.decoded_size,
+            "file_size": validated_decoded_size,
             "reply_context": req.reply_to.as_ref().map(|reply_to| serde_json::json!({
                 "messageId": reply_to,
                 "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
@@ -1430,10 +1607,10 @@ async fn send_image(
         .to_string(),
         content: Some(serde_json::json!({
             "type": "image",
-            "mime_type": validated_image.mime_type,
+            "mime_type": validated_mime_type.clone(),
             "caption": req.caption,
             "media_data": req.media_data,
-            "file_size": validated_image.decoded_size,
+            "file_size": validated_decoded_size,
             "reply_context": req.reply_to.as_ref().map(|reply_to| serde_json::json!({
                 "messageId": reply_to,
                 "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
@@ -1451,6 +1628,13 @@ async fn send_image(
     // Store the message
     if let Err(e) = state.store.add_message(&stored_msg) {
         error!("Failed to store sent image: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to store pending image: {}", e)
+            })),
+        )
+            .into_response();
     }
 
     // Update contact's last message time (preserve contact name/phone)
@@ -1462,11 +1646,81 @@ async fn send_image(
         stored_msg.timestamp,
     ) {
         error!("Failed to update contact: {}", e);
+        let _ = state.store.delete_message(&temp_message_id);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to update contact: {}", e)
+            })),
+        )
+            .into_response();
     }
 
+    let rx = state
+        .register_pending_send(request_id, Some(temp_message_id.clone()))
+        .await;
+
+    let cmd = BridgeCommand::SendImage {
+        request_id: Some(request_id),
+        to: req.contact_id.clone(),
+        media_data: req.media_data.clone(),
+        mime_type: validated_mime_type,
+        caption: req.caption.clone(),
+        reply_to: req.reply_to.clone(),
+        reply_to_sender: req.reply_to_sender.clone(),
+        reply_to_text: req.reply_to_text.clone(),
+    };
+
+    if let Err(e) = state.send_bridge_command(cmd).await {
+        error!("Failed to send image: {}", e);
+        state.cancel_pending_send(request_id).await;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to send image: {}", e)
+            })),
+        )
+            .into_response();
+    }
+
+    let send_result = match state.wait_for_send_result(request_id, rx).await {
+        Ok(result) => result,
+        Err(SendConfirmationError::Timeout) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(serde_json::json!({
+                    "error": "Timed out waiting for WhatsApp image send confirmation"
+                })),
+            )
+                .into_response();
+        }
+        Err(SendConfirmationError::ChannelClosed) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": "WhatsApp image send confirmation channel closed"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if !send_result.success {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": send_result.error.unwrap_or_else(|| "WhatsApp rejected the image".to_string())
+            })),
+        )
+            .into_response();
+    }
+
+    let confirmed_message_id = send_result.message_id.unwrap_or(temp_message_id);
+    let confirmed_timestamp = send_result.timestamp.unwrap_or(timestamp);
+
     Json(SendImageResponse {
-        message_id: temp_message_id,
-        timestamp,
+        message_id: confirmed_message_id,
+        timestamp: confirmed_timestamp,
     })
     .into_response()
 }
@@ -1497,9 +1751,12 @@ async fn send_reaction(
             .into_response();
     }
 
+    let request_id = state.next_request_id();
+    let rx = state.register_pending_send(request_id, None).await;
+
     // Send the reaction via bridge
     let cmd = BridgeCommand::SendReaction {
-        request_id: None,
+        request_id: Some(request_id),
         to: req.contact_id.clone(),
         message_id: req.message_id.clone(),
         sender_jid: req.sender_jid.clone(),
@@ -1508,10 +1765,43 @@ async fn send_reaction(
 
     if let Err(e) = state.send_bridge_command(cmd).await {
         error!("Failed to send reaction: {}", e);
+        state.cancel_pending_send(request_id).await;
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({
                 "error": format!("Failed to send reaction: {}", e)
+            })),
+        )
+            .into_response();
+    }
+
+    let send_result = match state.wait_for_send_result(request_id, rx).await {
+        Ok(result) => result,
+        Err(SendConfirmationError::Timeout) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(serde_json::json!({
+                    "error": "Timed out waiting for WhatsApp reaction confirmation"
+                })),
+            )
+                .into_response();
+        }
+        Err(SendConfirmationError::ChannelClosed) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": "WhatsApp reaction confirmation channel closed"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if !send_result.success {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": send_result.error.unwrap_or_else(|| "WhatsApp rejected the reaction".to_string())
             })),
         )
             .into_response();
@@ -1538,7 +1828,6 @@ async fn translate_message(
             .into_response();
         }
     };
-
     // Get conversation settings for this contact
     let settings = state
         .store
@@ -2634,9 +2923,7 @@ use rmcp::transport::streamable_http_server::{
 };
 
 fn create_mcp_service(
-    store: Arc<MessageStore>,
-    command_tx: Option<mpsc::Sender<BridgeCommand>>,
-    translator: Option<Arc<TranslationService>>,
+    state: Arc<AppState>,
 ) -> StreamableHttpService<WhatsAppMcpServer, LocalSessionManager> {
     let session_manager = Arc::new(LocalSessionManager::default());
     let config = StreamableHttpServerConfig {
@@ -2647,11 +2934,7 @@ fn create_mcp_service(
     StreamableHttpService::new(
         move || {
             // Create a new MCP server instance for each request
-            Ok(WhatsAppMcpServer::new(
-                store.clone(),
-                command_tx.clone(),
-                translator.clone(),
-            ))
+            Ok(WhatsAppMcpServer::new(state.clone()))
         },
         session_manager,
         config,
@@ -2717,12 +3000,7 @@ async fn mcp_handler(
             .into_response();
     }
 
-    // Read the command_tx asynchronously before creating the service
-    let command_tx = state.command_tx.read().await.clone();
-    let store = Arc::new(state.store.clone());
-    let translator = state.translator.clone();
-
-    let service = create_mcp_service(store, command_tx, translator);
+    let service = create_mcp_service(state);
     // StreamableHttpService has an async handle method we can call directly
     service.handle(request).await.into_response()
 }
@@ -2759,6 +3037,33 @@ mod tests {
             .uri(uri)
             .body(Body::empty())
             .expect("request")
+    }
+
+    fn test_outgoing_message(id: &str, timestamp: i64) -> StoredMessage {
+        let content = serde_json::json!({
+            "type": "text",
+            "body": "hello",
+        });
+
+        StoredMessage {
+            id: id.to_string(),
+            contact_id: "chat@example.test".to_string(),
+            timestamp,
+            is_from_me: true,
+            is_forwarded: false,
+            sender_name: Some("Me".to_string()),
+            sender_phone: Some("123".to_string()),
+            contact_name: Some("Test Chat".to_string()),
+            contact_phone: None,
+            chat_type: "private".to_string(),
+            content_type: "Text".to_string(),
+            content_json: content.to_string(),
+            content: Some(content),
+            original_text: None,
+            translated_text: None,
+            source_language: None,
+            is_translated: false,
+        }
     }
 
     #[tokio::test]
@@ -2819,6 +3124,97 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn send_result_reconciles_pending_message_and_releases_waiter() {
+        let (state, data_dir) = test_state(None);
+        state
+            .store
+            .upsert_contact(
+                "chat@example.test",
+                Some("Test Chat"),
+                None,
+                Some("private"),
+                1_700_000_000_000,
+            )
+            .expect("insert contact");
+        state
+            .store
+            .add_message(&test_outgoing_message("pending_1", 1_700_000_000_000))
+            .expect("insert pending");
+
+        let rx = state
+            .register_pending_send(42, Some("pending_1".to_string()))
+            .await;
+        state
+            .handle_send_result(BridgeSendResult {
+                request_id: 42,
+                success: true,
+                message_id: Some("real_1".to_string()),
+                timestamp: Some(1_700_000_005),
+                error: None,
+            })
+            .await;
+
+        let result = rx.await.expect("send result");
+        assert!(result.success);
+        assert_eq!(result.message_id.as_deref(), Some("real_1"));
+        assert_eq!(result.timestamp, Some(1_700_000_005_000));
+
+        let messages = state
+            .store
+            .get_messages_paginated("chat@example.test", None, None, None, true)
+            .expect("messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, "real_1");
+        assert_eq!(messages[0].timestamp, 1_700_000_005_000);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn failed_send_result_deletes_pending_message_and_releases_waiter() {
+        let (state, data_dir) = test_state(None);
+        state
+            .store
+            .upsert_contact(
+                "chat@example.test",
+                Some("Test Chat"),
+                None,
+                Some("private"),
+                1_700_000_000_000,
+            )
+            .expect("insert contact");
+        state
+            .store
+            .add_message(&test_outgoing_message("pending_1", 1_700_000_000_000))
+            .expect("insert pending");
+
+        let rx = state
+            .register_pending_send(43, Some("pending_1".to_string()))
+            .await;
+        state
+            .handle_send_result(BridgeSendResult {
+                request_id: 43,
+                success: false,
+                message_id: None,
+                timestamp: None,
+                error: Some("rate limited".to_string()),
+            })
+            .await;
+
+        let result = rx.await.expect("send result");
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("rate limited"));
+
+        let messages = state
+            .store
+            .get_messages_paginated("chat@example.test", None, None, None, true)
+            .expect("messages");
+        assert!(messages.is_empty());
+
         let _ = std::fs::remove_dir_all(data_dir);
     }
 

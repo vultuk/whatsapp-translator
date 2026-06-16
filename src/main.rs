@@ -302,6 +302,16 @@ async fn handle_web_event(
             timestamp,
             error,
         } => {
+            state
+                .handle_send_result(web::BridgeSendResult {
+                    request_id,
+                    success,
+                    message_id: message_id.clone(),
+                    timestamp,
+                    error: error.clone(),
+                })
+                .await;
+
             if success {
                 debug!(
                     "Message sent successfully: {:?} at {:?}",

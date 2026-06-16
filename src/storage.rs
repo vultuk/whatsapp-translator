@@ -1,7 +1,7 @@
 //! SQLite storage for messages and contacts.
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -669,6 +669,130 @@ impl MessageStore {
             "#,
             params![translated_text, source_language, message_id],
         )?;
+
+        Ok(())
+    }
+
+    /// Replace a temporary outgoing message ID with the bridge-confirmed WhatsApp ID.
+    pub fn replace_message_id(
+        &self,
+        temp_message_id: &str,
+        confirmed_message_id: &str,
+        confirmed_timestamp: Option<i64>,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        let temp_contact_id: Option<String> = tx
+            .query_row(
+                "SELECT contact_id FROM messages WHERE id = ?",
+                params![temp_message_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let Some(contact_id) = temp_contact_id else {
+            return Ok(());
+        };
+
+        let confirmed_exists: bool = tx
+            .query_row(
+                "SELECT 1 FROM messages WHERE id = ?",
+                params![confirmed_message_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+
+        if confirmed_exists && temp_message_id != confirmed_message_id {
+            tx.execute(
+                "DELETE FROM messages WHERE id = ?",
+                params![temp_message_id],
+            )?;
+        } else {
+            tx.execute(
+                r#"
+                UPDATE messages
+                SET id = ?1,
+                    timestamp = COALESCE(?2, timestamp)
+                WHERE id = ?3
+                "#,
+                params![confirmed_message_id, confirmed_timestamp, temp_message_id],
+            )?;
+        }
+
+        Self::refresh_contact_last_message(&tx, &contact_id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Delete a message and refresh the owning contact's last-message summary.
+    pub fn delete_message(&self, message_id: &str) -> Result<bool> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        let contact_id: Option<String> = tx
+            .query_row(
+                "SELECT contact_id FROM messages WHERE id = ?",
+                params![message_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let Some(contact_id) = contact_id else {
+            return Ok(false);
+        };
+
+        let deleted = tx.execute("DELETE FROM messages WHERE id = ?", params![message_id])?;
+        Self::refresh_contact_last_message(&tx, &contact_id)?;
+        tx.commit()?;
+        Ok(deleted > 0)
+    }
+
+    fn refresh_contact_last_message(
+        conn: &rusqlite::Transaction<'_>,
+        contact_id: &str,
+    ) -> Result<()> {
+        let latest: Option<(i64, String, String, bool)> = conn
+            .query_row(
+                r#"
+                SELECT timestamp, content_json, content_type, is_from_me
+                FROM messages
+                WHERE contact_id = ?
+                ORDER BY timestamp DESC, id DESC
+                LIMIT 1
+                "#,
+                params![contact_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+
+        if let Some((timestamp, content_json, content_type, is_from_me)) = latest {
+            let preview = Self::generate_message_preview(
+                Some(&content_json),
+                Some(&content_type),
+                is_from_me,
+            );
+            conn.execute(
+                r#"
+                UPDATE contacts
+                SET last_message_time = ?2,
+                    last_message_preview = ?3
+                WHERE id = ?1
+                "#,
+                params![contact_id, timestamp, preview],
+            )?;
+        } else {
+            conn.execute(
+                r#"
+                UPDATE contacts
+                SET last_message_time = 0,
+                    last_message_preview = NULL
+                WHERE id = ?1
+                "#,
+                params![contact_id],
+            )?;
+        }
 
         Ok(())
     }
@@ -2022,9 +2146,7 @@ mod tests {
         messages.iter().map(|message| message.id.clone()).collect()
     }
 
-    #[test]
-    fn paginated_messages_use_id_cursor_when_timestamps_match() {
-        let (store, data_dir) = test_store();
+    fn insert_test_contact(store: &MessageStore) {
         store
             .upsert_contact(
                 "chat@example.test",
@@ -2034,6 +2156,12 @@ mod tests {
                 1_700_000_000,
             )
             .expect("insert contact");
+    }
+
+    #[test]
+    fn paginated_messages_use_id_cursor_when_timestamps_match() {
+        let (store, data_dir) = test_store();
+        insert_test_contact(&store);
 
         for id in ["m01", "m02", "m03", "m04"] {
             store
@@ -2056,6 +2184,86 @@ mod tests {
             )
             .expect("second page");
         assert_eq!(message_ids(&second_page), vec!["m01", "m02"]);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn replace_message_id_reconciles_pending_outgoing_message() {
+        let (store, data_dir) = test_store();
+        insert_test_contact(&store);
+        store
+            .add_message(&test_message("pending_1", 1_700_000_000_000))
+            .expect("insert pending");
+
+        store
+            .replace_message_id("pending_1", "real_1", Some(1_700_000_005_000))
+            .expect("replace id");
+
+        let messages = store
+            .get_messages_paginated("chat@example.test", None, None, None, true)
+            .expect("messages");
+        assert_eq!(message_ids(&messages), vec!["real_1"]);
+        assert_eq!(messages[0].timestamp, 1_700_000_005_000);
+
+        let contact = store
+            .get_contact("chat@example.test")
+            .expect("contact query")
+            .expect("contact");
+        assert_eq!(contact.last_message_time, 1_700_000_005_000);
+        assert_eq!(contact.last_message_preview.as_deref(), Some("pending_1"));
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn delete_message_refreshes_contact_preview_to_previous_message() {
+        let (store, data_dir) = test_store();
+        insert_test_contact(&store);
+        store
+            .add_message(&test_message("older", 1_700_000_000_000))
+            .expect("insert older");
+        store
+            .add_message(&test_message("pending_1", 1_700_000_005_000))
+            .expect("insert pending");
+
+        assert!(store.delete_message("pending_1").expect("delete"));
+
+        let messages = store
+            .get_messages_paginated("chat@example.test", None, None, None, true)
+            .expect("messages");
+        assert_eq!(message_ids(&messages), vec!["older"]);
+
+        let contact = store
+            .get_contact("chat@example.test")
+            .expect("contact query")
+            .expect("contact");
+        assert_eq!(contact.last_message_time, 1_700_000_000_000);
+        assert_eq!(contact.last_message_preview.as_deref(), Some("older"));
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn replace_message_id_removes_pending_duplicate_when_real_message_exists() {
+        let (store, data_dir) = test_store();
+        insert_test_contact(&store);
+        store
+            .add_message(&test_message("pending_1", 1_700_000_000_000))
+            .expect("insert pending");
+        store
+            .add_message(&test_message("real_1", 1_700_000_006_000))
+            .expect("insert real");
+
+        store
+            .replace_message_id("pending_1", "real_1", Some(1_700_000_005_000))
+            .expect("replace duplicate");
+
+        let messages = store
+            .get_messages_paginated("chat@example.test", None, None, None, true)
+            .expect("messages");
+        assert_eq!(message_ids(&messages), vec!["real_1"]);
+        assert_eq!(messages[0].timestamp, 1_700_000_006_000);
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

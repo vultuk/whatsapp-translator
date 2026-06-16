@@ -2,8 +2,8 @@
 //!
 //! Exposes WhatsApp functionality to external LLMs via the MCP protocol.
 
-use crate::storage::{MessageStore, StoredContact, StoredMessage};
-use crate::translation::TranslationService;
+use crate::storage::{StoredContact, StoredMessage};
+use crate::web::{AppState, SendConfirmationError};
 use rmcp::{
     model::{
         CallToolRequestParam, CallToolResult, Content, Implementation, ListToolsResult,
@@ -15,7 +15,6 @@ use rmcp::{
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::bridge::BridgeCommand;
@@ -23,9 +22,7 @@ use crate::bridge::BridgeCommand;
 /// WhatsApp MCP Server handler
 #[derive(Clone)]
 pub struct WhatsAppMcpServer {
-    store: Arc<MessageStore>,
-    command_tx: Option<mpsc::Sender<BridgeCommand>>,
-    translator: Option<Arc<TranslationService>>,
+    state: Arc<AppState>,
 }
 
 /// Contact information returned by the API
@@ -94,16 +91,8 @@ impl From<StoredMessage> for MessageInfo {
 }
 
 impl WhatsAppMcpServer {
-    pub fn new(
-        store: Arc<MessageStore>,
-        command_tx: Option<mpsc::Sender<BridgeCommand>>,
-        translator: Option<Arc<TranslationService>>,
-    ) -> Self {
-        Self {
-            store,
-            command_tx,
-            translator,
-        }
+    pub fn new(state: Arc<AppState>) -> Self {
+        Self { state }
     }
 
     fn list_contacts_tool() -> Tool {
@@ -186,7 +175,7 @@ impl WhatsAppMcpServer {
             .unwrap_or("all");
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
-        let contacts = self.store.get_contacts().map_err(|e| {
+        let contacts = self.state.store.get_contacts().map_err(|e| {
             McpError::internal_error(format!("Failed to get contacts: {}", e), None)
         })?;
 
@@ -214,7 +203,7 @@ impl WhatsAppMcpServer {
             .ok_or_else(|| McpError::invalid_params("contact_id is required", None))?;
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
-        let messages = self.store.get_messages(contact_id).map_err(|e| {
+        let messages = self.state.store.get_messages(contact_id).map_err(|e| {
             McpError::internal_error(format!("Failed to get messages: {}", e), None)
         })?;
 
@@ -247,15 +236,10 @@ impl WhatsAppMcpServer {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::invalid_params("text is required", None))?;
 
-        let command_tx = self
-            .command_tx
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("WhatsApp bridge not connected", None))?;
-
         // Translate the message if needed based on conversation language
         let (text_to_send, was_translated, target_language) =
-            if let Some(translator) = &self.translator {
-                match self.store.get_conversation_language(contact_id, 10) {
+            if let Some(translator) = &self.state.translator {
+                match self.state.store.get_conversation_language(contact_id, 10) {
                     Ok(Some(conv_lang)) => {
                         info!(
                             "MCP: Conversation language for {} is {}",
@@ -265,7 +249,7 @@ impl WhatsAppMcpServer {
                             Ok((translated, usage)) => {
                                 // Record usage if there was actual API usage
                                 if usage.input_tokens > 0 {
-                                    if let Err(e) = self.store.record_usage(
+                                    if let Err(e) = self.state.store.record_usage(
                                         Some(contact_id),
                                         None,
                                         &usage,
@@ -301,28 +285,13 @@ impl WhatsAppMcpServer {
                 (text.to_string(), false, None)
             };
 
-        // Create the send command
-        let cmd = BridgeCommand::Send {
-            request_id: None,
-            to: contact_id.to_string(),
-            text: text_to_send.clone(),
-            reply_to: None,
-            reply_to_sender: None,
-            reply_to_text: None,
-        };
-
-        command_tx.send(cmd).await.map_err(
-            |e: tokio::sync::mpsc::error::SendError<BridgeCommand>| {
-                McpError::internal_error(format!("Failed to send message: {}", e), None)
-            },
-        )?;
-
         // Store the sent message locally
+        let request_id = self.state.next_request_id();
         let timestamp = chrono::Utc::now().timestamp_millis();
-        let temp_message_id = format!("mcp_pending_{}", timestamp);
+        let temp_message_id = format!("mcp_pending_{}_{}", request_id, timestamp);
 
         // Get contact info for the recipient
-        let contact_info = self.store.get_contact(contact_id).ok().flatten();
+        let contact_info = self.state.store.get_contact(contact_id).ok().flatten();
         let contact_name = contact_info.as_ref().and_then(|c| c.name.clone());
         let contact_phone = contact_info.as_ref().and_then(|c| c.phone.clone());
         let chat_type = contact_info
@@ -338,7 +307,7 @@ impl WhatsAppMcpServer {
 
         // Create StoredMessage struct
         let stored_msg = StoredMessage {
-            id: temp_message_id,
+            id: temp_message_id.clone(),
             contact_id: contact_id.to_string(),
             timestamp,
             is_from_me: true,
@@ -366,31 +335,93 @@ impl WhatsAppMcpServer {
         };
 
         // Store the message
-        if let Err(e) = self.store.add_message(&stored_msg) {
-            warn!("MCP: Failed to store sent message: {}", e);
+        if let Err(e) = self.state.store.add_message(&stored_msg) {
+            return Err(McpError::internal_error(
+                format!("Failed to store pending message: {}", e),
+                None,
+            ));
         }
 
         // Update contact's last message time
-        if let Err(e) = self.store.upsert_contact(
+        if let Err(e) = self.state.store.upsert_contact(
             contact_id,
             contact_name.as_deref(),
             contact_phone.as_deref(),
             Some(&chat_type),
             timestamp,
         ) {
-            warn!("MCP: Failed to update contact: {}", e);
+            let _ = self.state.store.delete_message(&temp_message_id);
+            return Err(McpError::internal_error(
+                format!("Failed to update contact: {}", e),
+                None,
+            ));
         }
+
+        let rx = self
+            .state
+            .register_pending_send(request_id, Some(temp_message_id.clone()))
+            .await;
+
+        let cmd = BridgeCommand::Send {
+            request_id: Some(request_id),
+            to: contact_id.to_string(),
+            text: text_to_send.clone(),
+            reply_to: None,
+            reply_to_sender: None,
+            reply_to_text: None,
+        };
+
+        if let Err(e) = self.state.send_bridge_command(cmd).await {
+            self.state.cancel_pending_send(request_id).await;
+            return Err(McpError::internal_error(
+                format!("Failed to send message: {}", e),
+                None,
+            ));
+        }
+
+        let send_result = match self.state.wait_for_send_result(request_id, rx).await {
+            Ok(result) => result,
+            Err(SendConfirmationError::Timeout) => {
+                return Err(McpError::internal_error(
+                    "Timed out waiting for WhatsApp send confirmation",
+                    None,
+                ));
+            }
+            Err(SendConfirmationError::ChannelClosed) => {
+                return Err(McpError::internal_error(
+                    "WhatsApp send confirmation channel closed",
+                    None,
+                ));
+            }
+        };
+
+        if !send_result.success {
+            return Err(McpError::internal_error(
+                send_result
+                    .error
+                    .unwrap_or_else(|| "WhatsApp rejected the message".to_string()),
+                None,
+            ));
+        }
+
+        let confirmed_message_id = send_result.message_id.unwrap_or(temp_message_id);
+        let confirmed_timestamp = send_result.timestamp.unwrap_or(timestamp);
 
         let response = if was_translated {
             format!(
-                "Message sent to {} (translated to {}): \"{}\" -> \"{}\"",
+                "Message sent to {} as {} at {} (translated to {}): \"{}\" -> \"{}\"",
                 contact_id,
+                confirmed_message_id,
+                confirmed_timestamp,
                 target_language.unwrap_or_default(),
                 text,
                 text_to_send
             )
         } else {
-            format!("Message sent to {}: \"{}\"", contact_id, text)
+            format!(
+                "Message sent to {} as {} at {}: \"{}\"",
+                contact_id, confirmed_message_id, confirmed_timestamp, text
+            )
         };
 
         Ok(CallToolResult::success(vec![Content::text(response)]))
