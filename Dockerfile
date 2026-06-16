@@ -73,7 +73,7 @@ EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD port="${WA_PORT:-${PORT:-3000}}"; curl -f "http://localhost:${port}/api/status" || exit 1
+    CMD port="${WA_PORT:-${PORT:-3000}}"; curl -f "http://localhost:${port}/api/health" || exit 1
 
 # Note: For persistent data (WhatsApp session), mount a volume to /data
 # On Railway, use Railway Volumes: https://docs.railway.com/reference/volumes

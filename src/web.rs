@@ -154,6 +154,12 @@ struct StatusResponse {
     name: Option<String>,
 }
 
+#[derive(Serialize)]
+struct HealthResponse {
+    ok: bool,
+    service: &'static str,
+}
+
 /// API QR response
 #[derive(Serialize)]
 struct QrResponse {
@@ -736,6 +742,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(serve_index))
         .route("/index.html", get(serve_index))
+        .route("/api/health", get(get_health))
         // OAuth 2.0 routes for MCP authentication
         .route(
             "/.well-known/oauth-authorization-server",
@@ -1001,6 +1008,13 @@ async fn get_status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> 
         connected: *state.connected.read().await,
         phone: state.phone.read().await.clone(),
         name: state.name.read().await.clone(),
+    })
+}
+
+async fn get_health() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        ok: true,
+        service: "whatsapp-translator",
     })
 }
 
@@ -3403,6 +3417,25 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn health_check_stays_public_when_password_is_configured() {
+        let (state, data_dir) = test_state(Some("secret"));
+        let response = create_router(state)
+            .oneshot(empty_request("/api/health"))
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("health json");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["service"], "whatsapp-translator");
+
         let _ = std::fs::remove_dir_all(data_dir);
     }
 

@@ -106,7 +106,7 @@ separate Node API server.
    - `WA_PASSWORD` if the service will be publicly reachable
 4. Deploy and open the generated Railway domain.
 
-The repo includes [railway.toml](/Users/vultuk/Development/Personal/whatsapp-translator/railway.toml) for Dockerfile-based deploys and `/api/status` health checks.
+The repo includes [railway.toml](/Users/vultuk/Development/Personal/whatsapp-translator/railway.toml) for Dockerfile-based deploys and unauthenticated `/api/health` health checks.
 
 ## Run With Docker
 
