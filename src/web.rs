@@ -1873,6 +1873,14 @@ async fn get_link_preview(
 
     let url = query.url;
 
+    if let Err(e) = link_preview::validate_link_preview_url(&url).await {
+        return Json(link_preview::LinkPreview::error(
+            url,
+            format!("Blocked link preview URL: {}", e),
+        ))
+        .into_response();
+    }
+
     // Cache duration: 24 hours for successful fetches, 1 hour for errors
     let cache_duration = 24 * 60 * 60; // 24 hours
 

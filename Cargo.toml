@@ -42,8 +42,8 @@ axum = { version = "0.7", features = ["ws"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs"] }
 
-# HTTP client for OpenAI Responses API
-reqwest = { version = "0.12", features = ["json"] }
+# HTTP client for OpenAI Responses API and link previews
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # SQLite database
 rusqlite = { version = "0.31", features = ["bundled"] }

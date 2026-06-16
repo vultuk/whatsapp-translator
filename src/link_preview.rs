@@ -1,14 +1,19 @@
 //! Link preview fetching - extracts Open Graph metadata from URLs.
 
 use anyhow::{Context, Result};
+use futures::StreamExt;
 use regex::Regex;
-use reqwest::Client;
+use reqwest::{header, redirect::Policy, Client, Url};
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 use std::time::Duration;
 use tracing::debug;
 
 /// Maximum response size to fetch (1MB)
 const MAX_RESPONSE_SIZE: usize = 1024 * 1024;
+
+/// Maximum redirects to follow while revalidating every target.
+const MAX_REDIRECTS: usize = 3;
 
 /// Request timeout
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -40,6 +45,12 @@ impl LinkPreview {
     }
 }
 
+/// Validate a URL is safe for server-side link preview fetching.
+pub async fn validate_link_preview_url(url: &str) -> Result<()> {
+    let parsed_url = Url::parse(url).context("Invalid URL")?;
+    validate_url_target(&parsed_url).await
+}
+
 /// Extract URLs from text
 pub fn extract_urls(text: &str) -> Vec<String> {
     // Match URLs starting with http:// or https://
@@ -61,24 +72,64 @@ pub fn extract_urls(text: &str) -> Vec<String> {
 
 /// Fetch link preview metadata from a URL
 pub async fn fetch_link_preview(url: &str) -> Result<LinkPreview> {
+    let original_url = url.to_string();
+    let mut current_url = Url::parse(url).context("Invalid URL")?;
+    validate_url_target(&current_url).await?;
+
     let client = Client::builder()
         .timeout(FETCH_TIMEOUT)
+        .redirect(Policy::none())
         .user_agent("Mozilla/5.0 (compatible; WhatsAppTranslator/1.0; +https://github.com/vultuk/whatsapp-translator)")
         .build()
         .context("Failed to create HTTP client")?;
 
-    debug!("Fetching link preview for: {}", url);
+    debug!("Fetching link preview for: {}", current_url);
 
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .context("Failed to fetch URL")?;
+    let mut redirects = 0;
+    let response = loop {
+        validate_url_target(&current_url).await?;
+
+        let response = client
+            .get(current_url.clone())
+            .send()
+            .await
+            .context("Failed to fetch URL")?;
+
+        if !response.status().is_redirection() {
+            break response;
+        }
+
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .context("Redirect response missing Location header")?;
+        let next_url = current_url
+            .join(location)
+            .context("Redirect Location is not a valid URL")?;
+
+        if next_url == current_url {
+            return Ok(LinkPreview::error(
+                original_url,
+                "Redirect loop detected".to_string(),
+            ));
+        }
+
+        if redirects >= MAX_REDIRECTS {
+            return Ok(LinkPreview::error(
+                original_url,
+                "Too many redirects".to_string(),
+            ));
+        }
+
+        redirects += 1;
+        current_url = next_url;
+    };
 
     // Check status
     if !response.status().is_success() {
         return Ok(LinkPreview::error(
-            url.to_string(),
+            original_url,
             format!("HTTP {}", response.status()),
         ));
     }
@@ -92,34 +143,115 @@ pub async fn fetch_link_preview(url: &str) -> Result<LinkPreview> {
 
     if !content_type.contains("text/html") {
         return Ok(LinkPreview::error(
-            url.to_string(),
+            original_url,
             "Not an HTML page".to_string(),
         ));
     }
 
-    // Fetch body with size limit
-    let body = response
-        .bytes()
-        .await
-        .context("Failed to read response body")?;
-
-    if body.len() > MAX_RESPONSE_SIZE {
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_RESPONSE_SIZE as u64)
+    {
         return Ok(LinkPreview::error(
-            url.to_string(),
+            original_url,
             "Response too large".to_string(),
         ));
     }
 
+    // Stream body with a hard size cap instead of buffering unbounded responses.
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("Failed to read response body")?;
+        if body.len() + chunk.len() > MAX_RESPONSE_SIZE {
+            return Ok(LinkPreview::error(
+                original_url,
+                "Response too large".to_string(),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+
     // Parse HTML and extract metadata
     let html = String::from_utf8_lossy(&body);
-    let preview = parse_html_metadata(url, &html);
+    let mut preview = parse_html_metadata(current_url.as_str(), &html);
+    preview.url = original_url.clone();
 
     debug!(
         "Link preview for {}: title={:?}, image={:?}",
-        url, preview.title, preview.image_url
+        original_url, preview.title, preview.image_url
     );
 
     Ok(preview)
+}
+
+async fn validate_url_target(url: &Url) -> Result<()> {
+    match url.scheme() {
+        "http" | "https" => {}
+        _ => anyhow::bail!("Only http and https URLs are allowed"),
+    }
+
+    if !url.username().is_empty() || url.password().is_some() {
+        anyhow::bail!("URLs with embedded credentials are not allowed");
+    }
+
+    let host = url.host_str().context("URL host is required")?;
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_blocked_ip(ip) {
+            anyhow::bail!("URL resolves to a blocked address");
+        }
+        return Ok(());
+    }
+
+    let port = url
+        .port_or_known_default()
+        .context("URL port could not be determined")?;
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .with_context(|| format!("Failed to resolve URL host: {}", host))?
+        .collect::<Vec<_>>();
+
+    if addresses.is_empty() {
+        anyhow::bail!("URL host did not resolve to any addresses");
+    }
+    if addresses.iter().any(|addr| is_blocked_ip(addr.ip())) {
+        anyhow::bail!("URL resolves to a blocked address");
+    }
+
+    Ok(())
+}
+
+fn is_blocked_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            octets[0] == 0
+                || octets[0] == 10
+                || octets[0] == 127
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+                || (octets[0] == 169 && octets[1] == 254)
+                || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+                || (octets[0] == 192 && octets[1] == 168)
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+                || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+                || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+                || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+                || (224..=255).contains(&octets[0])
+        }
+        IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| is_blocked_ip(mapped.into()))
+                || (segments[0] & 0xfe00) == 0xfc00
+                || (segments[0] & 0xffc0) == 0xfe80
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+        }
+    }
 }
 
 /// Parse HTML and extract Open Graph / meta tags
@@ -271,5 +403,33 @@ mod tests {
     fn test_extract_html_title() {
         let html = r#"<html><head><title>Page Title</title></head></html>"#;
         assert_eq!(extract_html_title(html), Some("Page Title".to_string()));
+    }
+
+    #[test]
+    fn blocks_private_and_special_ip_ranges() {
+        assert!(is_blocked_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("10.0.0.5".parse().unwrap()));
+        assert!(is_blocked_ip("172.16.0.10".parse().unwrap()));
+        assert!(is_blocked_ip("192.168.1.10".parse().unwrap()));
+        assert!(is_blocked_ip("169.254.169.254".parse().unwrap()));
+        assert!(is_blocked_ip("100.64.1.1".parse().unwrap()));
+        assert!(is_blocked_ip("::1".parse().unwrap()));
+        assert!(is_blocked_ip("fc00::1".parse().unwrap()));
+        assert!(is_blocked_ip("fe80::1".parse().unwrap()));
+        assert!(!is_blocked_ip("93.184.216.34".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn validate_link_preview_url_rejects_unsafe_targets() {
+        assert!(validate_link_preview_url("file:///etc/passwd")
+            .await
+            .is_err());
+        assert!(validate_link_preview_url("http://user:pass@example.com")
+            .await
+            .is_err());
+        assert!(validate_link_preview_url("http://127.0.0.1:8080")
+            .await
+            .is_err());
+        assert!(validate_link_preview_url("http://[::1]/").await.is_err());
     }
 }
