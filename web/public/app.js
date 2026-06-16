@@ -43,6 +43,7 @@ class WhatsAppClient {
   constructor() {
     this.ws = null;
     this.connected = false;
+    this.qrData = null;
     this.demoMode = false;
     this.contacts = [];
     this.currentContactId = null;
@@ -1828,6 +1829,7 @@ class WhatsAppClient {
         this.messages.clear();
         this.avatarCache.clear();
         this.currentContactId = null;
+        this.qrData = null;
 
         // Clear the UI
         document.getElementById('contacts-list').innerHTML = `
@@ -1990,6 +1992,10 @@ class WhatsAppClient {
   // Show connecting overlay
   showConnecting() {
     if (this.demoMode) return;
+    if (this.qrData) {
+      this.showQRCode(this.qrData);
+      return;
+    }
 
     this.updateConnectionIndicator(false, 'Connecting');
     document.getElementById('qr-overlay').classList.add('hidden');
@@ -2028,6 +2034,8 @@ class WhatsAppClient {
 
   // Show QR code
   showQRCode(qrData) {
+    this.qrData = qrData;
+    this.updateConnectionIndicator(false, 'QR ready');
     document.getElementById('connecting-overlay').classList.add('hidden');
     document.getElementById('qr-overlay').classList.remove('hidden');
     document.getElementById('main-container').classList.add('hidden');
@@ -2074,6 +2082,7 @@ class WhatsAppClient {
   // Handle connected state
   handleConnected(data) {
     this.connected = true;
+    this.qrData = null;
     this.notificationsReadyAt = Date.now() + 10000;
     
     document.getElementById('qr-overlay').classList.add('hidden');
@@ -2105,11 +2114,43 @@ class WhatsAppClient {
 
     this.connected = false;
 
+    if (this.qrData) {
+      this.showQRCode(this.qrData);
+      return;
+    }
+
+    const qrData = await this.fetchCurrentQRCode();
+    if (qrData) {
+      this.showQRCode(qrData);
+      return;
+    }
+
     const loadedContacts = await this.loadContacts();
+    if (this.connected) return;
+    if (this.qrData) {
+      this.showQRCode(this.qrData);
+      return;
+    }
+
     if (loadedContacts && this.contacts.length > 0) {
       this.showCachedWorkspaceDisconnected();
     } else {
       this.showConnecting();
+    }
+  }
+
+  async fetchCurrentQRCode() {
+    try {
+      const response = await this.apiFetch('/api/qr');
+      if (!response.ok) {
+        return null;
+      }
+
+      const data = await response.json();
+      return data.qr || null;
+    } catch (err) {
+      console.warn('Failed to check current QR code:', err);
+      return null;
     }
   }
 

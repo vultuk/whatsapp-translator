@@ -89,6 +89,7 @@ test('disconnected bridge shows cached contacts instead of permanent connecting 
   const disconnectedBody = extractMethodBody(appJs, 'handleDisconnected');
   const cachedWorkspaceBody = extractMethodBody(appJs, 'showCachedWorkspaceDisconnected');
 
+  assert.match(disconnectedBody, /await this\.fetchCurrentQRCode\(\)/);
   assert.match(disconnectedBody, /await this\.loadContacts\(\)/);
   assert.match(disconnectedBody, /this\.contacts\.length > 0/);
   assert.match(disconnectedBody, /this\.showCachedWorkspaceDisconnected\(\)/);
@@ -97,6 +98,22 @@ test('disconnected bridge shows cached contacts instead of permanent connecting 
   assert.match(cachedWorkspaceBody, /this\.updateConnectionIndicator\(false, 'Disconnected'\)/);
   assert.match(cachedWorkspaceBody, /WhatsApp disconnected/);
   assert.match(cachedWorkspaceBody, /Cached inbox available/);
+});
+
+test('qr pairing view is not hidden by disconnected status races', () => {
+  const constructorBody = extractMethodBody(appJs, 'constructor');
+  const showConnectingBody = extractMethodBody(appJs, 'showConnecting');
+  const showQrBody = extractMethodBody(appJs, 'showQRCode');
+  const connectedBody = extractMethodBody(appJs, 'handleConnected');
+  const logoutBody = extractMethodBody(appJs, 'handleLogout');
+
+  assert.match(constructorBody, /this\.qrData = null/);
+  assert.match(showConnectingBody, /if \(this\.qrData\)/);
+  assert.match(showConnectingBody, /this\.showQRCode\(this\.qrData\)/);
+  assert.match(showQrBody, /this\.qrData = qrData/);
+  assert.match(showQrBody, /this\.updateConnectionIndicator\(false, 'QR ready'\)/);
+  assert.match(connectedBody, /this\.qrData = null/);
+  assert.match(logoutBody, /this\.qrData = null/);
 });
 
 test('composer send controls require a live bridge connection', () => {
