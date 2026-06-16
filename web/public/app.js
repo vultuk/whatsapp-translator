@@ -4622,15 +4622,16 @@ class WhatsAppClient {
         throw new Error(result.error || 'AI compose failed');
       }
       
-      // Clear the input and set the AI-composed message
-      // Use WhatsApp formatting: *bold* and newline
-      const aiMessage = `*ClaudAI Says:*\n${result.message}`;
+      const aiMessage = String(result.message || '').trim();
+      if (!aiMessage) {
+        throw new Error('AI compose returned an empty draft');
+      }
+
       input.value = aiMessage;
       this.autoResizeTextarea(input);
       this.updateSendButton();
-      
-      // Automatically send the message
-      await this.sendMessage();
+      this.handleDraftInput();
+      input.focus();
       
       // Log cost if available
       if (result.costUsd) {
