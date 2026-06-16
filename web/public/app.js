@@ -26,18 +26,16 @@ import {
   getVisibleContacts,
   isContactSnoozed,
   isMessageStarred,
-  parseLabelsInput,
   removeQuickReply,
   resolveAppearanceTheme,
   simulateTranslation,
   suggestDemoReply,
   toggleChecklistItem,
   toggleStarredMessage,
-  upsertChecklistItems,
   upsertDraft,
   upsertQuickReply,
-} from './app-state.js?v=20260616-simplified-ui';
-import { calculateViewportLayout } from './viewport.js?v=20260616-simplified-ui';
+} from './app-state.js?v=20260616-settings-ui';
+import { calculateViewportLayout } from './viewport.js?v=20260616-settings-ui';
 
 class WhatsAppClient {
   constructor() {
@@ -1151,8 +1149,8 @@ class WhatsAppClient {
           id: 'action-chat-settings',
           kind: 'action',
           title: 'Edit current conversation settings',
-          subtitle: 'Open alias, notes, labels, reminder, and translation settings',
-          keywords: 'settings edit notes labels reminder translation',
+          subtitle: 'Open nickname, timezone, and translation settings',
+          keywords: 'settings edit nickname timezone translation language style',
           run: () => {
             this.closeCommandPalette();
             this.openSettingsModal();
@@ -6142,36 +6140,35 @@ class WhatsAppClient {
     }
 
     const localSettings = this.getContactMetadata(contactId);
+    const contact = this.contacts.find(item => item.id === contactId);
     const mergedSettings = {
       ...settings,
       ...localSettings,
-      alias: localSettings.alias || '',
-      notes: localSettings.notes || '',
-      pinnedAt: localSettings.pinnedAt || null,
-      priority: this.getPriorityInfo(contactId).value,
-      timezone: localSettings.timezone || '',
-      checklist: localSettings.checklist || [],
-      reminderText: localSettings.reminderText || '',
-      reminderAt: localSettings.reminderAt || null,
-      snoozedUntil: localSettings.snoozedUntil || null,
-      labels: this.getContactLabels(contactId),
+      alias: localSettings.alias || contact?.alias || '',
+      timezone: localSettings.timezone || contact?.timezone || '',
+      languageOverride:
+        localSettings.languageOverride ||
+        localSettings.targetLanguage ||
+        contact?.languageOverride ||
+        contact?.targetLanguage ||
+        settings.languageOverride ||
+        '',
+      translationStyle:
+        localSettings.translationStyle ||
+        contact?.translationStyle ||
+        settings.translationStyle ||
+        '',
     };
 
-    document.getElementById('contact-alias').value = mergedSettings.alias || '';
-    document.getElementById('conversation-priority').value = mergedSettings.priority || 'normal';
-    document.getElementById('conversation-timezone').value = mergedSettings.timezone || '';
-    document.getElementById('language-override').value = mergedSettings.languageOverride || '';
-    document.getElementById('translation-style').value = mergedSettings.translationStyle || '';
-    document.getElementById('conversation-notes').value = mergedSettings.notes || '';
-    document.getElementById('conversation-checklist').value = this.formatChecklistForTextarea(contactId);
-    document.getElementById('conversation-labels').value = (mergedSettings.labels || []).join(', ');
-    document.getElementById('conversation-reminder-text').value = mergedSettings.reminderText || '';
-    document.getElementById('conversation-reminder-at').value = mergedSettings.reminderAt ? this.toDateTimeLocalValue(mergedSettings.reminderAt) : '';
-    document.getElementById('conversation-snooze-until').value = mergedSettings.snoozedUntil ? this.toDateTimeLocalValue(mergedSettings.snoozedUntil) : '';
-    const pinToggle = document.getElementById('settings-pinned');
-    if (pinToggle) {
-      pinToggle.checked = Boolean(mergedSettings.pinnedAt);
-    }
+    const setFieldValue = (id, value = '') => {
+      const field = document.getElementById(id);
+      if (field) field.value = value || '';
+    };
+
+    setFieldValue('contact-alias', mergedSettings.alias);
+    setFieldValue('conversation-timezone', mergedSettings.timezone);
+    setFieldValue('language-override', mergedSettings.languageOverride);
+    setFieldValue('translation-style', mergedSettings.translationStyle);
 
     modal.classList.remove('hidden');
   }
@@ -6206,39 +6203,14 @@ class WhatsAppClient {
     const languageOverride = document.getElementById('language-override')?.value?.trim() || null;
     const translationStyle = document.getElementById('translation-style')?.value?.trim() || null;
     const alias = document.getElementById('contact-alias')?.value?.trim() || null;
-    const priority = document.getElementById('conversation-priority')?.value || 'normal';
     const timezone = document.getElementById('conversation-timezone')?.value?.trim() || null;
-    const notes = document.getElementById('conversation-notes')?.value?.trim() || null;
-    const checklistText = document.getElementById('conversation-checklist')?.value || '';
-    const existingChecklist = this.getContactMetadata(targetContactId).checklist || [];
-    const checklist = upsertChecklistItems(existingChecklist, checklistText);
-    const labels = parseLabelsInput(document.getElementById('conversation-labels')?.value || '');
-    const reminderText = document.getElementById('conversation-reminder-text')?.value?.trim() || null;
-    const reminderAt = this.parseDateTimeLocalValue(document.getElementById('conversation-reminder-at')?.value || '');
-    const snoozedUntil = this.parseDateTimeLocalValue(document.getElementById('conversation-snooze-until')?.value || '');
-    if ((reminderText && !reminderAt) || (!reminderText && reminderAt)) {
-      alert('To save a follow-up reminder, add both the reminder text and the reminder time.');
-      return;
-    }
-    const pinned = Boolean(document.getElementById('settings-pinned')?.checked);
-    const pinnedAt = pinned ? (this.getContactMetadata(targetContactId).pinnedAt || Date.now()) : null;
 
     this.updateContactMetadata(targetContactId, {
       alias,
       languageOverride,
       targetLanguage: languageOverride,
       translationStyle,
-      priority,
       timezone,
-      notes,
-      notePreview: notes || null,
-      pinnedAt,
-      checklist,
-      labels,
-      labelsText: labels.join(', '),
-      reminderText: reminderText && reminderAt ? reminderText : null,
-      reminderAt: reminderText && reminderAt ? reminderAt : null,
-      snoozedUntil,
     });
 
     const contact = this.contacts.find(item => item.id === targetContactId);
@@ -6247,16 +6219,7 @@ class WhatsAppClient {
       contact.languageOverride = languageOverride;
       contact.targetLanguage = languageOverride;
       contact.translationStyle = translationStyle;
-      contact.priority = priority;
       contact.timezone = timezone;
-      contact.notes = notes;
-      contact.notePreview = notes || null;
-      contact.pinnedAt = pinnedAt;
-      contact.checklist = checklist;
-      contact.labels = labels;
-      contact.reminderText = reminderText && reminderAt ? reminderText : null;
-      contact.reminderAt = reminderText && reminderAt ? reminderAt : null;
-      contact.snoozedUntil = snoozedUntil;
     }
 
     try {
@@ -6282,7 +6245,7 @@ class WhatsAppClient {
       }
     } catch (err) {
       console.error('Failed to save conversation settings:', err);
-      alert('Saved local labels, reminders, snooze state, and notes, but failed to save translation settings. Please try again.');
+      alert('Saved local nickname and timezone, but failed to save translation settings. Please try again.');
       return;
     }
 

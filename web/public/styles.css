@@ -3266,6 +3266,40 @@ select {
   max-width: 480px;
 }
 
+.settings-modal-content {
+  max-width: 400px;
+}
+
+.settings-modal-body {
+  padding: 18px 20px 20px;
+}
+
+.settings-section + .settings-section {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--surface-outline);
+}
+
+.settings-section-label {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-modal-body .form-group {
+  margin-bottom: 16px;
+}
+
+.settings-modal-body .form-group:last-child {
+  margin-bottom: 0;
+}
+
+.settings-modal-body .form-hint {
+  max-width: 34ch;
+}
+
 .appearance-preview-card {
   display: flex;
   flex-direction: column;
@@ -3773,9 +3807,6 @@ select {
   box-shadow: inset 3px 0 0 rgba(246, 196, 69, 0.8);
 }
 
-#conversation-notes,
-#conversation-checklist,
-#conversation-priority,
 #conversation-timezone {
   width: 100%;
   border-radius: 10px;
@@ -3783,12 +3814,6 @@ select {
   background: var(--bg-primary);
   color: var(--text-primary);
   padding: 10px 12px;
-}
-
-#conversation-notes,
-#conversation-checklist {
-  resize: vertical;
-  min-height: 96px;
 }
 
 .checkbox-row {

@@ -52,7 +52,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="styles.css?v=20260616-simplified-ui">
+  <link rel="stylesheet" href="styles.css?v=20260616-settings-ui">
   <!-- QR Code library -->
   <script src="https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"></script>
   <!-- Prevent phone number detection on iOS -->
@@ -444,82 +444,42 @@
     <!-- Conversation Settings Modal -->
     <div id="settings-modal" class="modal hidden">
       <div class="modal-backdrop"></div>
-      <div class="modal-content">
+      <div class="modal-content settings-modal-content">
         <div class="modal-header">
-          <h3>Conversation Settings</h3>
+          <h3>Chat settings</h3>
           <button class="modal-close" aria-label="Close">
             <svg viewBox="0 0 24 24" width="20" height="20">
               <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
             </svg>
           </button>
         </div>
-        <div class="modal-body">
-          <div class="form-group">
-            <label for="contact-alias">Nickname / Alias</label>
-            <input type="text" id="contact-alias" placeholder="e.g., Madrid Airbnb host, plumber, Zoe from yoga">
-            <p class="form-hint">Rename chats locally so your inbox is recognizable at a glance.</p>
-          </div>
-          <div class="form-group compact-grid compact-grid-visitor-meta">
-            <div>
-              <label for="conversation-priority">Priority</label>
-              <select id="conversation-priority">
-                <option value="normal">Normal</option>
-                <option value="urgent">Urgent</option>
-                <option value="high">High</option>
-                <option value="low">Low</option>
-              </select>
-              <p class="form-hint">Use this to bubble the conversations that matter most to the top.</p>
+        <div class="modal-body settings-modal-body">
+          <section class="settings-section" aria-label="Chat display settings">
+            <span class="settings-section-label">Display</span>
+            <div class="form-group">
+              <label for="contact-alias">Nickname</label>
+              <input type="text" id="contact-alias" placeholder="e.g., Madrid Airbnb host">
+              <p class="form-hint">Only changes the name in this app.</p>
             </div>
-            <div>
+            <div class="form-group">
               <label for="conversation-timezone">Contact timezone</label>
-              <input type="text" id="conversation-timezone" placeholder="e.g., Europe/Madrid, America/Los_Angeles">
-              <p class="form-hint">Show their local time so you do not message people at awkward hours.</p>
+              <input type="text" id="conversation-timezone" placeholder="e.g., Europe/Madrid">
+              <p class="form-hint">Used to show their local time.</p>
             </div>
-          </div>
-          <div class="form-group">
-            <label for="language-override">Language Override</label>
-            <input type="text" id="language-override" placeholder="e.g., Spanish, French, Japanese">
-            <p class="form-hint">Leave empty to use the default language (English). Translations will be done to this language.</p>
-          </div>
-          <div class="form-group">
-            <label for="translation-style">Translation Style</label>
-            <input type="text" id="translation-style" placeholder="e.g., formal, informal, family, geek">
-            <p class="form-hint">Leave empty for standard translation. This affects how the translation is phrased.</p>
-          </div>
-          <div class="form-group">
-            <label for="conversation-notes">Private Notes</label>
-            <textarea id="conversation-notes" rows="4" placeholder="Remember the follow-up, tone, or next step for this conversation"></textarea>
-            <p class="form-hint">Visible only in this browser. Great for visitor-style context you don't want to send by accident.</p>
-          </div>
-          <div class="form-group">
-            <label for="conversation-checklist">Checklist</label>
-            <textarea id="conversation-checklist" rows="5" placeholder="- [ ] Confirm the check-in code&#10;- [ ] Book the airport taxi&#10;- [x] Save the reservation link"></textarea>
-            <p class="form-hint">Keep a simple per-conversation task list. These tasks also show up in the chat workspace card.</p>
-          </div>
-          <div class="form-group">
-            <label for="conversation-labels">Labels</label>
-            <input type="text" id="conversation-labels" placeholder="e.g., VIP, travel, follow-up">
-            <p class="form-hint">Comma-separated labels make it easy to search and triage this conversation later.</p>
-          </div>
-          <div class="form-group">
-            <label for="conversation-reminder-text">Follow-up Reminder</label>
-            <input type="text" id="conversation-reminder-text" placeholder="What do you need to remember?">
-            <p class="form-hint">Keep yourself honest about the next action you wanted to take.</p>
-          </div>
-          <div class="form-group compact-grid">
-            <div>
-              <label for="conversation-reminder-at">Reminder time</label>
-              <input type="datetime-local" id="conversation-reminder-at">
+          </section>
+          <section class="settings-section" aria-label="Translation settings">
+            <span class="settings-section-label">Translation</span>
+            <div class="form-group">
+              <label for="language-override">Translate this chat to</label>
+              <input type="text" id="language-override" placeholder="Default: English">
+              <p class="form-hint">Set a different target language for this chat.</p>
             </div>
-            <div>
-              <label for="conversation-snooze-until">Snooze until</label>
-              <input type="datetime-local" id="conversation-snooze-until">
+            <div class="form-group">
+              <label for="translation-style">Translation style</label>
+              <input type="text" id="translation-style" placeholder="e.g., informal, formal, family">
+              <p class="form-hint">Optional tone instruction for translations.</p>
             </div>
-          </div>
-          <label class="checkbox-row" for="settings-pinned">
-            <input type="checkbox" id="settings-pinned">
-            <span>Pin this conversation to the top of the inbox</span>
-          </label>
+          </section>
         </div>
         <div class="modal-footer">
           <button class="modal-button secondary" id="settings-cancel">Cancel</button>
@@ -603,6 +563,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=20260616-simplified-ui"></script>
+  <script type="module" src="app.js?v=20260616-settings-ui"></script>
 </body>
 </html>

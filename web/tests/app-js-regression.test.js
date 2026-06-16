@@ -146,6 +146,32 @@ test('contact previews prefer translated message text when available', () => {
   );
 });
 
+test('conversation settings modal only exposes translator-facing fields', () => {
+  assert.match(indexHtml, /id="contact-alias"/);
+  assert.match(indexHtml, /id="conversation-timezone"/);
+  assert.match(indexHtml, /id="language-override"/);
+  assert.match(indexHtml, /id="translation-style"/);
+
+  for (const removedField of [
+    'conversation-priority',
+    'conversation-notes',
+    'conversation-checklist',
+    'conversation-labels',
+    'conversation-reminder-text',
+    'conversation-reminder-at',
+    'conversation-snooze-until',
+    'settings-pinned',
+  ]) {
+    assert.doesNotMatch(indexHtml, new RegExp(`id="${removedField}"`));
+  }
+
+  const saveSettingsBody = extractMethodBody(appJs, 'saveConversationSettings');
+  assert.match(saveSettingsBody, /conversation-timezone/);
+  assert.doesNotMatch(saveSettingsBody, /conversation-priority/);
+  assert.doesNotMatch(saveSettingsBody, /conversation-checklist/);
+  assert.doesNotMatch(saveSettingsBody, /conversation-reminder/);
+});
+
 test('static and generated markup do not use inline event attributes', () => {
   const renderedSources = `${indexHtml}\n${appJs}`;
 
