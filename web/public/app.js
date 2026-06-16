@@ -311,11 +311,153 @@ class WhatsAppClient {
     this.saveStoredArray(this.quickRepliesStorageKey, this.quickReplies);
   }
 
+  persistRecentEmojis() {
+    this.saveStoredArray('wa_recent_emojis', this.recentEmojis);
+  }
+
   persistInboxPreferences() {
     this.saveStoredJson(this.inboxPreferencesStorageKey, {
       searchQuery: this.sidebarSearchQuery,
       ...this.contactFilters,
     });
+  }
+
+  cloneWorkspaceObject(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (err) {
+      console.warn('Failed to clone workspace object:', err);
+      return {};
+    }
+  }
+
+  cloneWorkspaceArray(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (err) {
+      console.warn('Failed to clone workspace array:', err);
+      return [];
+    }
+  }
+
+  getInboxPreferencesSnapshot() {
+    return {
+      searchQuery: this.sidebarSearchQuery,
+      ...this.contactFilters,
+    };
+  }
+
+  getWorkspaceStateExport() {
+    return {
+      app: 'whatsapp-translator',
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      state: {
+        drafts: this.cloneWorkspaceObject(this.drafts),
+        starredMessages: this.cloneWorkspaceObject(this.starredMessages),
+        contactMetadata: this.cloneWorkspaceObject(this.contactMetadata),
+        inboxPreferences: this.getInboxPreferencesSnapshot(),
+        quickReplies: this.cloneWorkspaceArray(this.quickReplies),
+        appearancePreferences: this.cloneWorkspaceObject(this.appearancePreferences),
+        recentEmojis: this.cloneWorkspaceArray(this.recentEmojis),
+      },
+    };
+  }
+
+  downloadWorkspaceStateExport() {
+    const payload = JSON.stringify(this.getWorkspaceStateExport(), null, 2);
+    const blob = new Blob([payload], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `whatsapp-translator-workspace-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  applyWorkspaceStateImport(payload) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error('Workspace import must be a JSON object.');
+    }
+    if (payload.app !== 'whatsapp-translator' || payload.schemaVersion !== 1) {
+      throw new Error('Workspace import uses an unsupported schema.');
+    }
+    if (!payload.state || typeof payload.state !== 'object' || Array.isArray(payload.state)) {
+      throw new Error('Workspace import is missing state.');
+    }
+
+    const state = payload.state;
+    const inboxPreferences = this.cloneWorkspaceObject(state.inboxPreferences);
+
+    this.drafts = this.cloneWorkspaceObject(state.drafts);
+    this.starredMessages = this.cloneWorkspaceObject(state.starredMessages);
+    this.contactMetadata = this.cloneWorkspaceObject(state.contactMetadata);
+    this.quickReplies = this.cloneWorkspaceArray(state.quickReplies);
+    this.appearancePreferences = this.cloneWorkspaceObject(state.appearancePreferences);
+    this.recentEmojis = this.cloneWorkspaceArray(state.recentEmojis)
+      .filter(emoji => typeof emoji === 'string' && emoji.trim())
+      .slice(0, 32);
+
+    this.sidebarSearchQuery = typeof inboxPreferences.searchQuery === 'string'
+      ? inboxPreferences.searchQuery
+      : '';
+    for (const key of Object.keys(this.contactFilters)) {
+      this.contactFilters[key] = Boolean(inboxPreferences[key]);
+    }
+
+    this.persistDrafts();
+    this.persistStarredMessages();
+    this.persistContactMetadata();
+    this.persistQuickReplies();
+    this.persistAppearancePreferences();
+    this.persistRecentEmojis();
+    this.persistInboxPreferences();
+
+    this.applyAppearanceTheme();
+    this.syncInboxControls();
+    this.restoreDraftForCurrentContact();
+    this.updateSendButton();
+    this.updateDraftBanner();
+    this.renderQuickReplies();
+    this.renderContacts();
+    this.updateChatHeaderNote();
+    this.updateWorkspaceUI();
+    this.renderComposerAssist();
+
+    const currentContact = this.contacts.find(contact => contact.id === this.currentContactId);
+    if (currentContact) {
+      const displayName = this.getContactDisplayName(currentContact);
+      const nameEl = document.getElementById('chat-name');
+      if (nameEl) nameEl.textContent = displayName;
+      const avatarContainer = document.querySelector('.chat-header .avatar');
+      if (avatarContainer && !this.avatarCache.get(currentContact.id)) {
+        const initial = (displayName || '?').charAt(0).toUpperCase();
+        avatarContainer.innerHTML = `<span>${this.escapeHtml(initial)}</span>`;
+      }
+    }
+  }
+
+  async importWorkspaceStateFromFile(file) {
+    if (!file) return;
+
+    try {
+      const payload = JSON.parse(await file.text());
+      this.applyWorkspaceStateImport(payload);
+      alert('Workspace data imported.');
+    } catch (err) {
+      console.error('Failed to import workspace data:', err);
+      alert(`Workspace import failed: ${err.message}`);
+    }
   }
 
   getContactMetadata(contactId) {
@@ -5249,6 +5391,20 @@ class WhatsAppClient {
       this.saveAppearanceSettings();
     });
 
+    document.getElementById('workspace-export-button')?.addEventListener('click', () => {
+      this.downloadWorkspaceStateExport();
+    });
+
+    document.getElementById('workspace-import-button')?.addEventListener('click', () => {
+      document.getElementById('workspace-import-input')?.click();
+    });
+
+    document.getElementById('workspace-import-input')?.addEventListener('change', async (event) => {
+      const file = event.target.files?.[0];
+      await this.importWorkspaceStateFromFile(file);
+      event.target.value = '';
+    });
+
     document.getElementById('appearance-theme-select')?.addEventListener('change', () => {
       this.syncAppearanceControls({
         theme: document.getElementById('appearance-theme-select')?.value,
@@ -5997,7 +6153,7 @@ class WhatsAppClient {
     // Keep only last 32 emojis
     this.recentEmojis = this.recentEmojis.slice(0, 32);
     // Save to localStorage
-    localStorage.setItem('wa_recent_emojis', JSON.stringify(this.recentEmojis));
+    this.persistRecentEmojis();
   }
 
   // ==================== Conversation Settings ====================

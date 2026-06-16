@@ -3063,6 +3063,30 @@ select {
   color: var(--text-secondary);
 }
 
+.workspace-data-section {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-color);
+}
+
+.workspace-data-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.workspace-data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.workspace-data-actions .modal-button {
+  flex: 1 1 150px;
+}
+
 /* Mobile adjustments for modal */
 @media (max-width: 768px) {
   .modal-content {

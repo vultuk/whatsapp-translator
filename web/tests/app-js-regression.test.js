@@ -9,8 +9,9 @@ const appJs = readFileSync(join(__dirname, '..', 'public', 'app.js'), 'utf8');
 const indexHtml = readFileSync(join(__dirname, '..', 'public', 'index.html'), 'utf8');
 
 function extractMethodBody(source, methodName) {
-  const marker = `async ${methodName}()`;
-  const start = source.indexOf(marker);
+  const methodPattern = new RegExp(`(?:async\\s+)?${methodName}\\s*\\([^)]*\\)\\s*\\{`);
+  const match = methodPattern.exec(source);
+  const start = match?.index ?? -1;
   assert.notEqual(start, -1, `${methodName} should exist`);
 
   const braceStart = source.indexOf('{', start);
@@ -30,6 +31,50 @@ function extractMethodBody(source, methodName) {
 
   assert.fail(`${methodName} body should terminate`);
 }
+
+test('workspace export carries portable local state but not auth', () => {
+  const exportBody = extractMethodBody(appJs, 'getWorkspaceStateExport');
+
+  assert.match(exportBody, /app:\s*'whatsapp-translator'/);
+  assert.match(exportBody, /schemaVersion:\s*1/);
+  for (const stateKey of [
+    'drafts',
+    'starredMessages',
+    'contactMetadata',
+    'inboxPreferences',
+    'quickReplies',
+    'appearancePreferences',
+    'recentEmojis',
+  ]) {
+    assert.match(exportBody, new RegExp(`${stateKey}:`));
+  }
+  assert.doesNotMatch(exportBody, /authToken|wa_auth_token/);
+});
+
+test('workspace import validates schema and refreshes local UI state', () => {
+  const importBody = extractMethodBody(appJs, 'applyWorkspaceStateImport');
+
+  assert.match(importBody, /payload\.app !== 'whatsapp-translator'/);
+  assert.match(importBody, /payload\.schemaVersion !== 1/);
+  assert.match(importBody, /this\.persistDrafts\(\)/);
+  assert.match(importBody, /this\.persistStarredMessages\(\)/);
+  assert.match(importBody, /this\.persistContactMetadata\(\)/);
+  assert.match(importBody, /this\.persistQuickReplies\(\)/);
+  assert.match(importBody, /this\.persistAppearancePreferences\(\)/);
+  assert.match(importBody, /this\.persistRecentEmojis\(\)/);
+  assert.match(importBody, /this\.persistInboxPreferences\(\)/);
+  assert.match(importBody, /this\.syncInboxControls\(\)/);
+  assert.match(importBody, /this\.restoreDraftForCurrentContact\(\)/);
+  assert.match(importBody, /this\.renderQuickReplies\(\)/);
+  assert.match(importBody, /this\.updateWorkspaceUI\(\)/);
+  assert.doesNotMatch(importBody, /authToken|wa_auth_token/);
+});
+
+test('workspace import export controls are present in global settings', () => {
+  assert.match(indexHtml, /id="workspace-export-button"/);
+  assert.match(indexHtml, /id="workspace-import-button"/);
+  assert.match(indexHtml, /id="workspace-import-input"/);
+});
 
 test('AI compose drafts generated text instead of auto-sending it', () => {
   const sendWithAiBody = extractMethodBody(appJs, 'sendWithAI');
