@@ -41,6 +41,16 @@ impl OAuthMetadata {
     }
 }
 
+/// Registered public OAuth client for MCP access.
+#[derive(Debug, Clone, Serialize)]
+pub struct OAuthClientRegistration {
+    pub client_id: String,
+    pub client_name: Option<String>,
+    pub redirect_uris: Vec<String>,
+    pub scope: String,
+    pub created_at: i64,
+}
+
 /// Authorization code stored in the database
 #[derive(Debug, Clone)]
 pub struct AuthorizationCode {

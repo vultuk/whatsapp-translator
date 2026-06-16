@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 
 use crate::link_preview::LinkPreview;
-use crate::oauth::{AccessToken, AuthorizationCode, PendingAuthorization, RefreshToken};
+use crate::oauth::{
+    AccessToken, AuthorizationCode, OAuthClientRegistration, PendingAuthorization, RefreshToken,
+};
 use crate::translation::UsageInfo;
 
 /// Stored message with translation info
@@ -228,6 +230,13 @@ impl MessageStore {
             CREATE INDEX IF NOT EXISTS idx_link_previews_fetched ON link_previews(fetched_at);
 
             -- OAuth 2.0 tables for MCP authentication
+            CREATE TABLE IF NOT EXISTS oauth_clients (
+                client_id TEXT PRIMARY KEY,
+                client_name TEXT,
+                redirect_uris_json TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
             
             -- Pending authorization requests (before user approves)
             CREATE TABLE IF NOT EXISTS oauth_pending_auth (
@@ -1442,6 +1451,116 @@ impl MessageStore {
 
     // ==================== OAuth 2.0 Methods ====================
 
+    /// Store a registered OAuth client.
+    pub fn oauth_store_client(&self, client: &OAuthClientRegistration) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let redirect_uris_json = serde_json::to_string(&client.redirect_uris)?;
+
+        conn.execute(
+            r#"
+            INSERT OR REPLACE INTO oauth_clients
+            (client_id, client_name, redirect_uris_json, scope, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![
+                client.client_id,
+                client.client_name,
+                redirect_uris_json,
+                client.scope,
+                client.created_at,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Get a registered OAuth client.
+    pub fn oauth_get_client(&self, client_id: &str) -> Result<Option<OAuthClientRegistration>> {
+        let conn = self.conn.lock().unwrap();
+
+        let result = conn.query_row(
+            r#"
+            SELECT client_id, client_name, redirect_uris_json, scope, created_at
+            FROM oauth_clients
+            WHERE client_id = ?
+            "#,
+            params![client_id],
+            |row| {
+                let redirect_uris_json: String = row.get(2)?;
+                let redirect_uris =
+                    serde_json::from_str(&redirect_uris_json).unwrap_or_else(|_| Vec::new());
+                Ok(OAuthClientRegistration {
+                    client_id: row.get(0)?,
+                    client_name: row.get(1)?,
+                    redirect_uris,
+                    scope: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(client) => Ok(Some(client)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// List registered OAuth clients.
+    pub fn oauth_list_clients(&self) -> Result<Vec<OAuthClientRegistration>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT client_id, client_name, redirect_uris_json, scope, created_at
+            FROM oauth_clients
+            ORDER BY created_at DESC, client_id ASC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let redirect_uris_json: String = row.get(2)?;
+            let redirect_uris =
+                serde_json::from_str(&redirect_uris_json).unwrap_or_else(|_| Vec::new());
+            Ok(OAuthClientRegistration {
+                client_id: row.get(0)?,
+                client_name: row.get(1)?,
+                redirect_uris,
+                scope: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+
+        Ok(rows.filter_map(|row| row.ok()).collect())
+    }
+
+    /// Revoke a registered OAuth client and all tokens/codes issued to it.
+    pub fn oauth_revoke_client(&self, client_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            "DELETE FROM oauth_pending_auth WHERE client_id = ?",
+            params![client_id],
+        )?;
+        conn.execute(
+            "DELETE FROM oauth_authorization_codes WHERE client_id = ?",
+            params![client_id],
+        )?;
+        conn.execute(
+            "DELETE FROM oauth_access_tokens WHERE client_id = ?",
+            params![client_id],
+        )?;
+        conn.execute(
+            "DELETE FROM oauth_refresh_tokens WHERE client_id = ?",
+            params![client_id],
+        )?;
+        let deleted = conn.execute(
+            "DELETE FROM oauth_clients WHERE client_id = ?",
+            params![client_id],
+        )?;
+
+        Ok(deleted > 0)
+    }
+
     /// Clean up expired OAuth entries (call periodically)
     pub fn oauth_cleanup_expired(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
@@ -1690,6 +1809,10 @@ impl MessageStore {
             SELECT token, client_id, scope, created_at, expires_at
             FROM oauth_access_tokens 
             WHERE token = ? AND expires_at > ?
+              AND EXISTS (
+                SELECT 1 FROM oauth_clients
+                WHERE oauth_clients.client_id = oauth_access_tokens.client_id
+              )
             "#,
             params![token, now],
             |row| {
@@ -1744,6 +1867,10 @@ impl MessageStore {
             SELECT token, client_id, scope, created_at, expires_at
             FROM oauth_refresh_tokens 
             WHERE token = ? AND expires_at > ?
+              AND EXISTS (
+                SELECT 1 FROM oauth_clients
+                WHERE oauth_clients.client_id = oauth_refresh_tokens.client_id
+              )
             "#,
             params![token, now],
             |row| {
@@ -1790,6 +1917,7 @@ impl MessageStore {
             DELETE FROM oauth_authorization_codes;
             DELETE FROM oauth_access_tokens;
             DELETE FROM oauth_refresh_tokens;
+            DELETE FROM oauth_clients;
             "#,
         )?;
 
@@ -2146,6 +2274,16 @@ mod tests {
         messages.iter().map(|message| message.id.clone()).collect()
     }
 
+    fn test_oauth_client(client_id: &str) -> OAuthClientRegistration {
+        OAuthClientRegistration {
+            client_id: client_id.to_string(),
+            client_name: Some("Test MCP Client".to_string()),
+            redirect_uris: vec!["http://127.0.0.1:9000/callback".to_string()],
+            scope: "mcp".to_string(),
+            created_at: 1_700_000_000,
+        }
+    }
+
     fn insert_test_contact(store: &MessageStore) {
         store
             .upsert_contact(
@@ -2264,6 +2402,62 @@ mod tests {
             .expect("messages");
         assert_eq!(message_ids(&messages), vec!["real_1"]);
         assert_eq!(messages[0].timestamp, 1_700_000_006_000);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn oauth_tokens_require_persisted_client_and_revoke_with_client() {
+        let (store, data_dir) = test_store();
+        let access_token = AccessToken {
+            token: "access-token".to_string(),
+            client_id: "client_test".to_string(),
+            scope: "mcp".to_string(),
+            created_at: 1_700_000_000,
+            expires_at: i64::MAX,
+        };
+        let refresh_token = RefreshToken {
+            token: "refresh-token".to_string(),
+            client_id: "client_test".to_string(),
+            scope: "mcp".to_string(),
+            created_at: 1_700_000_000,
+            expires_at: i64::MAX,
+        };
+
+        store
+            .oauth_store_access_token(&access_token)
+            .expect("store access token");
+        store
+            .oauth_store_refresh_token(&refresh_token)
+            .expect("store refresh token");
+        assert!(store
+            .oauth_validate_access_token("access-token")
+            .expect("validate without client")
+            .is_none());
+
+        store
+            .oauth_store_client(&test_oauth_client("client_test"))
+            .expect("store client");
+        assert!(store
+            .oauth_validate_access_token("access-token")
+            .expect("validate with client")
+            .is_some());
+        assert!(store
+            .oauth_get_refresh_token("refresh-token")
+            .expect("refresh with client")
+            .is_some());
+
+        assert!(store
+            .oauth_revoke_client("client_test")
+            .expect("revoke client"));
+        assert!(store
+            .oauth_validate_access_token("access-token")
+            .expect("validate after revoke")
+            .is_none());
+        assert!(store
+            .oauth_get_refresh_token("refresh-token")
+            .expect("refresh after revoke")
+            .is_none());
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

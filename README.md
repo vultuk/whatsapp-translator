@@ -45,9 +45,14 @@ Optional:
 
 Hosted deploy recommendation:
 
-- `WA_PASSWORD` is strongly recommended if the web UI is publicly reachable
+- `WA_PASSWORD` is strongly recommended if the web UI is publicly reachable, and
+  is required before OAuth clients can be approved on non-loopback hosts
 - attach a persistent volume at `/data`
 - if `WA_PORT` is not set, the app will use Railway's `PORT`
+- MCP OAuth is intended for local MCP clients you explicitly approve. Dynamic
+  client registration only accepts loopback `http://localhost`, `http://127.0.0.1`,
+  or `http://[::1]` redirect URIs, and authorization requires an exact registered
+  redirect match.
 
 ## Run Locally
 
@@ -134,5 +139,10 @@ The app stores local state in the data directory, including:
 
 - `session.db` for WhatsApp session state
 - `messages.db` for chats, settings, and usage
+- OAuth client registrations and bearer/refresh tokens for approved MCP clients
 
-Do not commit those files or any `.env` file with real secrets.
+Treat the data directory as secret material. OAuth tokens in `messages.db` are
+bearer credentials for local MCP clients; protect the volume, set `WA_PASSWORD`
+on reachable deployments, and use logout or the protected OAuth client revocation
+API to revoke access. Do not commit those files or any `.env` file with real
+secrets.

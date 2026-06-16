@@ -11,7 +11,7 @@ use axum::{
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Json, Redirect, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Form, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -30,9 +30,9 @@ use tracing::{error, info, warn};
 use crate::bridge::BridgeCommand;
 use crate::mcp::WhatsAppMcpServer;
 use crate::oauth::{
-    generate_token, AccessToken, AuthorizationCode, AuthorizeRequest, OAuthError,
-    OAuthErrorResponse, PendingAuthorization, RefreshToken, RevokeRequest, TokenRequest,
-    TokenResponse,
+    generate_token, AccessToken, AuthorizationCode, AuthorizeRequest, OAuthClientRegistration,
+    OAuthError, OAuthErrorResponse, PendingAuthorization, RefreshToken, RevokeRequest,
+    TokenRequest, TokenResponse,
 };
 use crate::storage::{MessageStore, StoredMessage};
 use crate::translation::TranslationService;
@@ -42,6 +42,7 @@ const WEB_AUTH_TOKEN_TTL_SECONDS: i64 = 12 * 60 * 60;
 const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_IMAGE_BASE64_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4;
 const SEND_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
+const OAUTH_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone)]
 struct ValidatedImagePayload {
@@ -723,6 +724,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/usage", get(get_global_usage))
         .route("/api/usage/:contact_id", get(get_conversation_usage))
         .route("/api/link-preview", get(get_link_preview))
+        .route("/api/oauth/clients", get(list_oauth_clients))
+        .route("/api/oauth/clients/:client_id", delete(revoke_oauth_client))
+        .route("/api/oauth/revoke-all", post(revoke_all_oauth_clients))
         .route("/ws", get(websocket_handler))
         .route_layer(middleware::from_fn(move |req: Request, next: Next| {
             let state = auth_state.clone();
@@ -760,6 +764,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 /// Start the web server
 pub async fn start_server(state: Arc<AppState>, host: &str, port: u16) -> anyhow::Result<()> {
     let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
+    cleanup_expired_oauth(&state, "startup");
+    spawn_oauth_cleanup_task(state.clone());
     let router = create_router(state);
 
     info!("Web server running at http://{}", addr);
@@ -768,6 +774,24 @@ pub async fn start_server(state: Arc<AppState>, host: &str, port: u16) -> anyhow
     axum::serve(listener, router).await?;
 
     Ok(())
+}
+
+fn cleanup_expired_oauth(state: &Arc<AppState>, reason: &str) {
+    if let Err(e) = state.store.oauth_cleanup_expired() {
+        warn!(
+            "Failed to clean expired OAuth records during {}: {}",
+            reason, e
+        );
+    }
+}
+
+fn spawn_oauth_cleanup_task(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(OAUTH_CLEANUP_INTERVAL).await;
+            cleanup_expired_oauth(&state, "periodic cleanup");
+        }
+    });
 }
 
 // Auth Handlers
@@ -2307,6 +2331,103 @@ fn get_base_url(host: &str, is_https: bool) -> String {
     format!("{}://{}", scheme, host)
 }
 
+fn request_host_is_loopback(host: &str) -> bool {
+    let normalized = if let Some(rest) = host.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(host)
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+
+    matches!(normalized, "localhost" | "127.0.0.1" | "::1")
+}
+
+fn now_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
+fn normalize_oauth_scope(scope: Option<&str>) -> Result<String, String> {
+    let scope = scope.unwrap_or("mcp").trim();
+    if scope.is_empty() {
+        return Ok("mcp".to_string());
+    }
+
+    let scopes: Vec<&str> = scope.split_whitespace().collect();
+    if scopes.iter().all(|entry| *entry == "mcp") {
+        Ok("mcp".to_string())
+    } else {
+        Err("Only the mcp OAuth scope is supported".to_string())
+    }
+}
+
+fn validate_oauth_redirect_uri(redirect_uri: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(redirect_uri)
+        .map_err(|_| "redirect_uri must be an absolute URL".to_string())?;
+
+    if parsed.fragment().is_some() {
+        return Err("redirect_uri must not contain a fragment".to_string());
+    }
+
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("redirect_uri must use loopback http or https".to_string());
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "redirect_uri must include a loopback host".to_string())?;
+    if matches!(host, "localhost" | "127.0.0.1" | "::1") {
+        Ok(())
+    } else {
+        Err("redirect_uri host must be localhost, 127.0.0.1, or ::1".to_string())
+    }
+}
+
+fn validate_oauth_client_request(req: &ClientRegistrationRequest) -> Result<String, String> {
+    if req.redirect_uris.is_empty() {
+        return Err("redirect_uris must include at least one loopback URI".to_string());
+    }
+
+    for redirect_uri in &req.redirect_uris {
+        validate_oauth_redirect_uri(redirect_uri)?;
+    }
+
+    if let Some(grant_types) = &req.grant_types {
+        let allowed = ["authorization_code", "refresh_token"];
+        if grant_types.is_empty()
+            || grant_types
+                .iter()
+                .any(|grant| !allowed.contains(&grant.as_str()))
+            || !grant_types
+                .iter()
+                .any(|grant| grant == "authorization_code")
+        {
+            return Err(
+                "grant_types must contain authorization_code and may contain refresh_token"
+                    .to_string(),
+            );
+        }
+    }
+
+    if let Some(response_types) = &req.response_types {
+        if response_types.is_empty() || response_types.iter().any(|response| response != "code") {
+            return Err("Only the code response type is supported".to_string());
+        }
+    }
+
+    if let Some(method) = &req.token_endpoint_auth_method {
+        if method != "none" {
+            return Err(
+                "Only public OAuth clients with token_endpoint_auth_method=none are supported"
+                    .to_string(),
+            );
+        }
+    }
+
+    normalize_oauth_scope(req.scope.as_deref())
+}
+
 /// OAuth 2.0 Authorization Server Metadata (RFC 8414)
 async fn oauth_metadata(Host(host): Host) -> impl IntoResponse {
     // Assume HTTPS in production (Railway sets this)
@@ -2358,12 +2479,49 @@ struct ClientRegistrationRequest {
 
 /// Dynamic Client Registration endpoint (RFC 7591)
 /// Allows public MCP clients to register before starting OAuth flow
-async fn oauth_register(Json(req): Json<ClientRegistrationRequest>) -> impl IntoResponse {
+async fn oauth_register(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ClientRegistrationRequest>,
+) -> impl IntoResponse {
+    let scope = match validate_oauth_client_request(&req) {
+        Ok(scope) => scope,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "invalid_client_metadata",
+                    "error_description": error
+                })),
+            )
+                .into_response();
+        }
+    };
+
     // Generate a client_id for this registration
-    let client_id = format!("client_{}", generate_token()[..16].to_string());
+    let client_id = format!("client_{}", &generate_token()[..16]);
+    let now = now_unix_seconds();
 
     // For public clients, we don't issue a client_secret
     // The client will use PKCE for security instead
+    let client = OAuthClientRegistration {
+        client_id: client_id.clone(),
+        client_name: req.client_name.clone(),
+        redirect_uris: req.redirect_uris.clone(),
+        scope: scope.clone(),
+        created_at: now,
+    };
+
+    if let Err(e) = state.store.oauth_store_client(&client) {
+        error!("Failed to store OAuth client registration: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "server_error",
+                "error_description": "Failed to store OAuth client registration"
+            })),
+        )
+            .into_response();
+    }
 
     info!(
         "OAuth client registered: {} ({:?}) with redirect_uris: {:?}",
@@ -2380,9 +2538,10 @@ async fn oauth_register(Json(req): Json<ClientRegistrationRequest>) -> impl Into
             "grant_types": req.grant_types.unwrap_or_else(|| vec!["authorization_code".to_string(), "refresh_token".to_string()]),
             "response_types": req.response_types.unwrap_or_else(|| vec!["code".to_string()]),
             "token_endpoint_auth_method": "none",
-            "scope": req.scope.unwrap_or_else(|| "mcp".to_string()),
+            "scope": scope,
         })),
     )
+        .into_response()
 }
 
 /// OAuth Authorization endpoint - shows approval page
@@ -2391,6 +2550,14 @@ async fn oauth_authorize(
     Host(host): Host,
     Query(params): Query<AuthorizeRequest>,
 ) -> impl IntoResponse {
+    if state.password.is_none() && !request_host_is_loopback(&host) {
+        return (
+            StatusCode::FORBIDDEN,
+            Html("<html><body><h1>Error</h1><p>WA_PASSWORD is required before OAuth clients can be approved on a non-loopback host.</p></body></html>".to_string()),
+        )
+            .into_response();
+    }
+
     // Validate request
     if params.response_type != "code" {
         return (
@@ -2411,12 +2578,68 @@ async fn oauth_authorize(
             .into_response();
     }
 
+    let client = match state.store.oauth_get_client(&params.client_id) {
+        Ok(Some(client)) => client,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Html(
+                    "<html><body><h1>Error</h1><p>Unknown OAuth client. Register the client before authorizing.</p></body></html>"
+                        .to_string(),
+                ),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to look up OAuth client: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(
+                    "<html><body><h1>Error</h1><p>Internal server error</p></body></html>"
+                        .to_string(),
+                ),
+            )
+                .into_response();
+        }
+    };
+
+    if !client
+        .redirect_uris
+        .iter()
+        .any(|redirect_uri| redirect_uri == &params.redirect_uri)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html("<html><body><h1>Error</h1><p>redirect_uri is not registered for this OAuth client.</p></body></html>".to_string()),
+        )
+            .into_response();
+    }
+
+    let requested_scope = match normalize_oauth_scope(params.scope.as_deref()) {
+        Ok(scope) => scope,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Html(format!(
+                    "<html><body><h1>Error</h1><p>{}</p></body></html>",
+                    html_escape(&error)
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    if requested_scope != client.scope {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html("<html><body><h1>Error</h1><p>Requested scope is not registered for this OAuth client.</p></body></html>".to_string()),
+        )
+            .into_response();
+    }
+
     // Generate a session key for this authorization request
     let session_key = generate_token();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = now_unix_seconds();
 
     let pending = PendingAuthorization {
         session_key: session_key.clone(),
@@ -2424,7 +2647,7 @@ async fn oauth_authorize(
         redirect_uri: params.redirect_uri.clone(),
         code_challenge: params.code_challenge.clone(),
         code_challenge_method: params.code_challenge_method.clone(),
-        scope: params.scope.clone().unwrap_or_else(|| "mcp".to_string()),
+        scope: requested_scope.clone(),
         state: params.state.clone(),
         created_at: now,
         expires_at: now + 600, // 10 minutes
@@ -2479,6 +2702,7 @@ async fn oauth_authorize(
         <p>An application is requesting access to your WhatsApp Translator:</p>
         
         <div class="client-info">
+            <strong>Client:</strong> {client_name}<br>
             <strong>Client ID:</strong> {client_id}<br>
             <strong>Redirect URI:</strong> {redirect_uri}
         </div>
@@ -2501,9 +2725,15 @@ async fn oauth_authorize(
     </div>
 </body>
 </html>"#,
+        client_name = html_escape(
+            client
+                .client_name
+                .as_deref()
+                .unwrap_or("Unnamed MCP client")
+        ),
         client_id = html_escape(&params.client_id),
         redirect_uri = html_escape(&params.redirect_uri),
-        scope = html_escape(&params.scope.clone().unwrap_or_else(|| "mcp".to_string())),
+        scope = html_escape(&requested_scope),
         base_url = base_url,
         session_key = session_key,
         password_field = if requires_password {
@@ -2709,6 +2939,35 @@ async fn handle_authorization_code_grant(
         return (StatusCode::BAD_REQUEST, Json(error)).into_response();
     }
 
+    if let Some(client_id) = &req.client_id {
+        if client_id != &auth_code.client_id {
+            let error = OAuthErrorResponse::from(OAuthError::InvalidClient);
+            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        }
+    }
+
+    let client = match state.store.oauth_get_client(&auth_code.client_id) {
+        Ok(Some(client)) => client,
+        Ok(None) => {
+            let error = OAuthErrorResponse::from(OAuthError::InvalidClient);
+            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        }
+        Err(e) => {
+            error!("Failed to look up OAuth client: {}", e);
+            let error = OAuthErrorResponse::from(OAuthError::ServerError);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response();
+        }
+    };
+
+    if !client
+        .redirect_uris
+        .iter()
+        .any(|registered| registered == redirect_uri)
+    {
+        let error = OAuthErrorResponse::from(OAuthError::InvalidGrant);
+        return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+    }
+
     // Verify PKCE
     if !auth_code.verify_pkce(code_verifier) {
         let error = OAuthErrorResponse::from(OAuthError::InvalidGrant);
@@ -2716,10 +2975,7 @@ async fn handle_authorization_code_grant(
     }
 
     // Generate tokens
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = now_unix_seconds();
 
     let access_token_str = generate_token();
     let refresh_token_str = generate_token();
@@ -2797,11 +3053,15 @@ async fn handle_refresh_token_grant(
         }
     };
 
+    if let Some(client_id) = &req.client_id {
+        if client_id != &refresh_token.client_id {
+            let error = OAuthErrorResponse::from(OAuthError::InvalidClient);
+            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        }
+    }
+
     // Generate new access token
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = now_unix_seconds();
 
     let access_token_str = generate_token();
 
@@ -2853,6 +3113,62 @@ async fn oauth_revoke(
     }
 
     StatusCode::OK
+}
+
+async fn list_oauth_clients(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.store.oauth_list_clients() {
+        Ok(clients) => Json(serde_json::json!({ "clients": clients })).into_response(),
+        Err(e) => {
+            error!("Failed to list OAuth clients: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to list OAuth clients: {}", e)
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn revoke_oauth_client(
+    State(state): State<Arc<AppState>>,
+    Path(client_id): Path<String>,
+) -> impl IntoResponse {
+    match state.store.oauth_revoke_client(&client_id) {
+        Ok(revoked) => Json(serde_json::json!({
+            "success": true,
+            "clientId": client_id,
+            "revoked": revoked
+        }))
+        .into_response(),
+        Err(e) => {
+            error!("Failed to revoke OAuth client {}: {}", client_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to revoke OAuth client: {}", e)
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn revoke_all_oauth_clients(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.store.oauth_clear_all() {
+        Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(e) => {
+            error!("Failed to revoke all OAuth clients: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to revoke OAuth clients: {}", e)
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 // WebSocket handler
@@ -3124,6 +3440,82 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn oauth_redirect_validation_allows_only_loopback_http_callbacks() {
+        assert!(validate_oauth_redirect_uri("http://127.0.0.1:8787/callback").is_ok());
+        assert!(validate_oauth_redirect_uri("http://localhost/callback").is_ok());
+        assert!(validate_oauth_redirect_uri("https://example.com/callback").is_err());
+        assert!(validate_oauth_redirect_uri("file:///tmp/callback").is_err());
+        assert!(validate_oauth_redirect_uri("http://127.0.0.1/callback#fragment").is_err());
+    }
+
+    #[test]
+    fn request_host_loopback_detection_is_exact() {
+        assert!(request_host_is_loopback("localhost:3000"));
+        assert!(request_host_is_loopback("127.0.0.1:3000"));
+        assert!(request_host_is_loopback("[::1]:3000"));
+        assert!(!request_host_is_loopback("localhost.example.com"));
+        assert!(!request_host_is_loopback("translator.example.com"));
+    }
+
+    #[tokio::test]
+    async fn oauth_registration_rejects_non_loopback_redirects() {
+        let (state, data_dir) = test_state(None);
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri("/oauth/register")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "redirect_uris": ["https://example.com/callback"],
+                    "client_name": "Remote Client"
+                })
+                .to_string(),
+            ))
+            .expect("request");
+
+        let response = create_router(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn oauth_registration_persists_loopback_client() {
+        let (state, data_dir) = test_state(None);
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri("/oauth/register")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "redirect_uris": ["http://127.0.0.1:8787/callback"],
+                    "client_name": "Local MCP Client"
+                })
+                .to_string(),
+            ))
+            .expect("request");
+
+        let response = create_router(state.clone())
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let clients = state.store.oauth_list_clients().expect("clients");
+        assert_eq!(clients.len(), 1);
+        assert_eq!(clients[0].client_name.as_deref(), Some("Local MCP Client"));
+        assert_eq!(
+            clients[0].redirect_uris,
+            vec!["http://127.0.0.1:8787/callback".to_string()]
+        );
+
         let _ = std::fs::remove_dir_all(data_dir);
     }
 
