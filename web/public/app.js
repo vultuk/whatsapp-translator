@@ -3400,7 +3400,7 @@ class WhatsAppClient {
         } else {
           // No media available
           return `
-            <div class="message-media image">[ Image ]${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
+            <div class="message-media image">[ Image unavailable ]${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
             ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
           `;
         }
@@ -3438,7 +3438,7 @@ class WhatsAppClient {
           `;
         } else {
           return `
-            <div class="message-media video">[ Video ]${content.duration_seconds ? ' - ' + this.formatDuration(content.duration_seconds) : ''}${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
+            <div class="message-media video">[ Video unavailable ]${content.duration_seconds ? ' - ' + this.formatDuration(content.duration_seconds) : ''}${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
             ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
           `;
         }
@@ -3477,7 +3477,7 @@ class WhatsAppClient {
           `;
         } else {
           const audioType = isVoiceNote ? 'Voice Note' : 'Audio';
-          return `<div class="message-media audio">[ ${audioType} ]${content.duration_seconds ? ' - ' + this.formatDuration(content.duration_seconds) : ''}</div>`;
+          return `<div class="message-media audio">[ ${audioType} unavailable ]${content.duration_seconds ? ' - ' + this.formatDuration(content.duration_seconds) : ''}</div>`;
         }
       
       case 'document':
@@ -3522,7 +3522,7 @@ class WhatsAppClient {
           `;
         } else {
           return `
-            <div class="message-media document">[ Document: ${this.escapeHtml(fileName)} ]${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
+            <div class="message-media document">[ Document unavailable: ${this.escapeHtml(fileName)} ]${content.file_size ? ' - ' + this.formatSize(content.file_size) : ''}</div>
             ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
           `;
         }
@@ -3554,7 +3554,7 @@ class WhatsAppClient {
             </div>
           `;
         } else {
-          return `<div class="message-media">[ ${isAnimated ? 'Animated ' : ''}Sticker ]</div>`;
+          return `<div class="message-media">[ ${isAnimated ? 'Animated ' : ''}Sticker unavailable ]</div>`;
         }
       
       case 'location':
