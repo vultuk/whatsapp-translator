@@ -4,9 +4,13 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::time::Duration;
+use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/responses";
+const OPENAI_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const OPENAI_MAX_ATTEMPTS: usize = 3;
 
 const GPT_5_4_INPUT_COST_PER_M: f64 = 2.50;
 const GPT_5_4_CACHED_INPUT_COST_PER_M: f64 = 0.25;
@@ -118,6 +122,20 @@ struct LanguageDetection {
     is_target_language: bool,
 }
 
+fn should_retry_reqwest_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
+}
+
+fn should_retry_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::REQUEST_TIMEOUT
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status.is_server_error()
+}
+
+fn openai_retry_delay(attempt: usize) -> Duration {
+    Duration::from_millis(200 * (attempt as u64 + 1))
+}
+
 impl TranslationService {
     pub fn new(
         api_key: String,
@@ -131,7 +149,7 @@ impl TranslationService {
             default_language
         );
         Self {
-            client: Client::new(),
+            client: Self::build_http_client(),
             api_url: OPENAI_API_URL.to_string(),
             api_key,
             detection_model,
@@ -144,7 +162,7 @@ impl TranslationService {
     #[cfg(test)]
     fn new_with_api_url(api_url: String) -> Self {
         Self {
-            client: Client::new(),
+            client: Self::build_http_client(),
             api_url,
             api_key: "test-api-key".to_string(),
             detection_model: "test-detect".to_string(),
@@ -152,6 +170,13 @@ impl TranslationService {
             high_end_model: "test-high-end".to_string(),
             default_language: "English".to_string(),
         }
+    }
+
+    fn build_http_client() -> Client {
+        Client::builder()
+            .timeout(OPENAI_REQUEST_TIMEOUT)
+            .build()
+            .expect("OpenAI HTTP client should build")
     }
 
     pub fn get_api_key(&self) -> String {
@@ -230,26 +255,56 @@ impl TranslationService {
     }
 
     async fn send_request(&self, body: Value) -> Result<OpenAiResponse> {
-        let response = self
-            .client
-            .post(&self.api_url)
-            .bearer_auth(&self.api_key)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .context("Failed to send OpenAI Responses API request")?;
+        for attempt in 0..OPENAI_MAX_ATTEMPTS {
+            let response = self
+                .client
+                .post(&self.api_url)
+                .bearer_auth(&self.api_key)
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("OpenAI Responses API error: {} - {}", status, body);
+            let response = match response {
+                Ok(response) => response,
+                Err(error)
+                    if should_retry_reqwest_error(&error) && attempt + 1 < OPENAI_MAX_ATTEMPTS =>
+                {
+                    warn!(
+                        "OpenAI request attempt {} failed, retrying: {}",
+                        attempt + 1,
+                        error
+                    );
+                    sleep(openai_retry_delay(attempt)).await;
+                    continue;
+                }
+                Err(error) => {
+                    return Err(error).context("Failed to send OpenAI Responses API request")
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                if should_retry_status(status) && attempt + 1 < OPENAI_MAX_ATTEMPTS {
+                    warn!(
+                        "OpenAI request attempt {} returned {}, retrying",
+                        attempt + 1,
+                        status
+                    );
+                    sleep(openai_retry_delay(attempt)).await;
+                    continue;
+                }
+                anyhow::bail!("OpenAI Responses API error: {} - {}", status, body);
+            }
+
+            return response
+                .json()
+                .await
+                .context("Failed to parse OpenAI response");
         }
 
-        response
-            .json()
-            .await
-            .context("Failed to parse OpenAI response")
+        unreachable!("OpenAI retry loop should return or error");
     }
 
     async fn request_text_output(
@@ -987,6 +1042,14 @@ mod tests {
             MockResponse {
                 status: "500 Internal Server Error",
                 body: r#"{"error":"translation unavailable"}"#.to_string(),
+            },
+            MockResponse {
+                status: "500 Internal Server Error",
+                body: r#"{"error":"translation still unavailable"}"#.to_string(),
+            },
+            MockResponse {
+                status: "500 Internal Server Error",
+                body: r#"{"error":"translation failed"}"#.to_string(),
             },
         ]);
         let service = TranslationService::new_with_api_url(api_url);
