@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, oneshot, RwLock};
@@ -81,6 +81,8 @@ pub struct AppState {
     pub password: Option<String>,
     /// Valid web auth tokens and their expiration timestamps.
     pub auth_tokens: RwLock<HashMap<String, i64>>,
+    /// Whether the bridge restart loop should clear WhatsApp session files before respawning.
+    pub session_reset_requested: AtomicBool,
 }
 
 /// Bridge send result normalized for Rust/web consumers.
@@ -436,7 +438,46 @@ impl AppState {
             request_id_counter: AtomicI32::new(1),
             password,
             auth_tokens: RwLock::new(HashMap::new()),
+            session_reset_requested: AtomicBool::new(false),
         })
+    }
+
+    pub fn request_session_reset_before_bridge_restart(&self) {
+        self.session_reset_requested.store(true, Ordering::SeqCst);
+    }
+
+    pub fn take_session_reset_request(&self) -> bool {
+        self.session_reset_requested.swap(false, Ordering::SeqCst)
+    }
+
+    pub fn clear_session_files(&self) -> std::io::Result<()> {
+        for filename in ["session.db", "session.db-wal", "session.db-shm"] {
+            let path = self.data_dir.join(filename);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn clear_orphaned_session_sidecars(&self) -> std::io::Result<()> {
+        if self.data_dir.join("session.db").try_exists()? {
+            return Ok(());
+        }
+
+        for filename in ["session.db-wal", "session.db-shm"] {
+            let path = self.data_dir.join(filename);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(())
     }
 
     /// Set the bridge command sender
@@ -961,23 +1002,23 @@ async fn logout(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             .into_response();
     }
 
-    // 2. Send logout command to bridge (this will notify WhatsApp and clear the session)
+    // 2. Send logout command to bridge (this will notify WhatsApp and stop the bridge).
+    // The bridge restart loop clears session files after the process exits and before respawn.
+    state.request_session_reset_before_bridge_restart();
+    let mut sent_logout_to_bridge = false;
     if let Some(tx) = state.command_tx.read().await.as_ref() {
         if let Err(e) = tx.send(BridgeCommand::Logout).await {
             warn!("Failed to send logout command to bridge: {}", e);
         } else {
-            // Give the bridge time to send logout signal to WhatsApp
-            // before we delete the session file
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            sent_logout_to_bridge = true;
         }
     }
 
-    // 3. Clear the session database file (cleanup after WhatsApp logout)
-    let session_db = state.data_dir.join("session.db");
-    if session_db.exists() {
-        if let Err(e) = std::fs::remove_file(&session_db) {
-            warn!("Failed to remove session database: {}", e);
+    if !sent_logout_to_bridge {
+        if let Err(e) = state.clear_session_files() {
+            warn!("Failed to remove session files: {}", e);
         }
+        state.take_session_reset_request();
     }
 
     // 4. Clear auth tokens
@@ -3396,6 +3437,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn clear_orphaned_session_sidecars_removes_sidecars_without_session_db() {
+        let (state, data_dir) = test_state(None);
+        std::fs::write(data_dir.join("session.db-wal"), b"wal").expect("write wal");
+        std::fs::write(data_dir.join("session.db-shm"), b"shm").expect("write shm");
+
+        state
+            .clear_orphaned_session_sidecars()
+            .expect("clear sidecars");
+
+        assert!(!data_dir.join("session.db-wal").exists());
+        assert!(!data_dir.join("session.db-shm").exists());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn clear_orphaned_session_sidecars_keeps_sidecars_with_session_db() {
+        let (state, data_dir) = test_state(None);
+        std::fs::write(data_dir.join("session.db"), b"session").expect("write session");
+        std::fs::write(data_dir.join("session.db-wal"), b"wal").expect("write wal");
+        std::fs::write(data_dir.join("session.db-shm"), b"shm").expect("write shm");
+
+        state
+            .clear_orphaned_session_sidecars()
+            .expect("clear sidecars");
+
+        assert!(data_dir.join("session.db").exists());
+        assert!(data_dir.join("session.db-wal").exists());
+        assert!(data_dir.join("session.db-shm").exists());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
     #[tokio::test]
     async fn protected_api_allows_requests_when_password_is_not_configured() {
         let (state, data_dir) = test_state(None);
@@ -3497,6 +3572,9 @@ mod tests {
     #[tokio::test]
     async fn logout_clears_messages_oauth_clients_and_ui_tokens() {
         let (state, data_dir) = test_state(Some("secret"));
+        for filename in ["session.db", "session.db-wal", "session.db-shm"] {
+            std::fs::write(data_dir.join(filename), b"session").expect("write session file");
+        }
         state
             .store
             .upsert_contact(
@@ -3586,6 +3664,45 @@ mod tests {
             .expect("refresh token")
             .is_none());
         assert!(state.auth_tokens.read().await.is_empty());
+        for filename in ["session.db", "session.db-wal", "session.db-shm"] {
+            assert!(
+                !data_dir.join(filename).exists(),
+                "{filename} should be removed"
+            );
+        }
+        assert!(!state.take_session_reset_request());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn logout_defers_session_file_cleanup_until_bridge_restart_when_bridge_is_running() {
+        let (state, data_dir) = test_state(Some("secret"));
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        state.set_command_tx(command_tx).await;
+
+        let ui_token = generate_token();
+        state
+            .auth_tokens
+            .write()
+            .await
+            .insert(ui_token.clone(), chrono::Utc::now().timestamp() + 60);
+
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri("/api/logout")
+            .header(header::AUTHORIZATION, format!("Bearer {}", ui_token))
+            .body(Body::empty())
+            .expect("request");
+
+        let response = create_router(state.clone())
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(matches!(command_rx.try_recv(), Ok(BridgeCommand::Logout)));
+        assert!(state.take_session_reset_request());
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

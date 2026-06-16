@@ -111,11 +111,18 @@ fn init_logging(verbose: bool) {
 
 /// Handle logout by removing session data
 async fn handle_logout(data_dir: &std::path::Path) -> Result<()> {
-    let session_db = data_dir.join("session.db");
-    if session_db.exists() {
-        tokio::fs::remove_file(&session_db)
-            .await
-            .context("Failed to remove session database")?;
+    let mut removed = false;
+
+    for filename in ["session.db", "session.db-wal", "session.db-shm"] {
+        let path = data_dir.join(filename);
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => removed = true,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err).context("Failed to remove session database"),
+        }
+    }
+
+    if removed {
         print_info("Session cleared. You will need to scan a new QR code.");
     } else {
         print_info("No existing session found.");
@@ -168,6 +175,13 @@ async fn run_web_mode(
         // Channel for receiving events from the bridge
         let (event_tx, mut event_rx) = mpsc::channel::<BridgeEvent>(100);
 
+        if let Err(e) = state.clear_orphaned_session_sidecars() {
+            warn!(
+                "Failed to clear orphaned WhatsApp session sidecar files: {}",
+                e
+            );
+        }
+
         // Spawn the bridge process
         print_info("Starting WhatsApp bridge...");
         let bridge = match BridgeProcess::spawn(config.clone(), event_tx).await {
@@ -212,6 +226,16 @@ async fn run_web_mode(
             break;
         }
 
+        if state.take_session_reset_request() {
+            info!("Clearing WhatsApp session files before bridge restart");
+            if let Err(e) = state.clear_session_files() {
+                error!(
+                    "Failed to clear WhatsApp session files before restart: {}",
+                    e
+                );
+            }
+        }
+
         // Small delay before restarting
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
@@ -238,8 +262,21 @@ async fn handle_web_event(
         }
 
         BridgeEvent::ConnectionState { state: conn_state } => match conn_state {
-            ConnectionState::Disconnected | ConnectionState::LoggedOut => {
+            ConnectionState::Disconnected => {
                 state.set_connected(false, None, None).await;
+            }
+            ConnectionState::LoggedOut => {
+                state.set_connected(false, None, None).await;
+                state.request_session_reset_before_bridge_restart();
+                if let Err(e) = state
+                    .send_bridge_command(bridge::BridgeCommand::Disconnect)
+                    .await
+                {
+                    warn!(
+                        "Failed to request bridge restart after logged-out state: {}",
+                        e
+                    );
+                }
             }
             _ => {}
         },
@@ -293,6 +330,13 @@ async fn handle_web_event(
         BridgeEvent::LoggedOut { reason } => {
             warn!("Logged out: {}", reason);
             state.set_connected(false, None, None).await;
+            state.request_session_reset_before_bridge_restart();
+            if let Err(e) = state
+                .send_bridge_command(bridge::BridgeCommand::Disconnect)
+                .await
+            {
+                warn!("Failed to request bridge restart after logout event: {}", e);
+            }
         }
 
         BridgeEvent::SendResult {
