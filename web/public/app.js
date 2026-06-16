@@ -2178,13 +2178,13 @@ class WhatsAppClient {
       renotify: false,
     });
 
-    notification.onclick = () => {
+    notification.addEventListener('click', () => {
       window.focus();
       if (message.contactId) {
         this.selectContact(message.contactId);
       }
       notification.close();
-    };
+    });
   }
 
   // Handle incoming reaction message
@@ -2437,14 +2437,14 @@ class WhatsAppClient {
     // Update in contacts list
     const contactItem = document.querySelector(`.contact-item[data-contact-id="${jid}"] .avatar`);
     if (contactItem) {
-      contactItem.innerHTML = `<img src="${url}" alt="" onerror="this.parentElement.innerHTML='<span>${initial}</span>'">`;
+      contactItem.innerHTML = this.renderAvatarImage(url, initial);
     }
 
     // Update in chat header if this is the current contact
     if (this.currentContactId === jid) {
       const chatAvatar = document.querySelector('.chat-header .avatar');
       if (chatAvatar) {
-        chatAvatar.innerHTML = `<img src="${url}" alt="" onerror="this.parentElement.innerHTML='<span>${initial}</span>'">`;
+        chatAvatar.innerHTML = this.renderAvatarImage(url, initial);
       }
     }
   }
@@ -2453,6 +2453,10 @@ class WhatsAppClient {
   getInitial(jid) {
     const contact = this.contacts.find(c => c.id === jid);
     return (contact?.name || contact?.phone || '?').charAt(0).toUpperCase();
+  }
+
+  renderAvatarImage(url, initial) {
+    return `<img src="${this.escapeHtml(url)}" alt="" data-avatar-fallback="${this.escapeHtml(initial)}">`;
   }
 
   // Render contacts list
@@ -2541,8 +2545,8 @@ class WhatsAppClient {
       // Check for cached avatar
       const avatarUrl = this.avatarCache.get(contact.id);
       const avatarContent = avatarUrl 
-        ? `<img src="${avatarUrl}" alt="" onerror="this.parentElement.innerHTML='<span>${initial}</span>'">`
-        : `<span>${initial}</span>`;
+        ? this.renderAvatarImage(avatarUrl, initial)
+        : `<span>${this.escapeHtml(initial)}</span>`;
       
       // Group indicator (fold mark in corner)
       const groupIndicator = isGroup ? '<div class="group-indicator"></div>' : '';
@@ -2550,7 +2554,9 @@ class WhatsAppClient {
       // Pin button (shows on hover, filled when pinned)
       const pinButton = `
         <button class="pin-button ${isPinned ? 'pinned' : ''}" 
-                onclick="event.stopPropagation(); app.togglePin('${contact.id}')" 
+                type="button"
+                data-contact-action="toggle-pin"
+                data-contact-id="${this.escapeHtml(contact.id)}"
                 title="${isPinned ? 'Unpin' : 'Pin'}">
           <svg viewBox="0 0 24 24" width="14" height="14">
             <path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
@@ -2721,9 +2727,9 @@ class WhatsAppClient {
         
         if (avatarContainer) {
           if (avatarUrl) {
-            avatarContainer.innerHTML = `<img src="${avatarUrl}" alt="" onerror="this.parentElement.innerHTML='<span>${initial}</span>'">`;
+            avatarContainer.innerHTML = this.renderAvatarImage(avatarUrl, initial);
           } else {
-            avatarContainer.innerHTML = `<span>${initial}</span>`;
+            avatarContainer.innerHTML = `<span>${this.escapeHtml(initial)}</span>`;
             // Fetch avatar if not cached
             this.fetchAvatar(contactId);
           }
@@ -3210,11 +3216,11 @@ class WhatsAppClient {
       }
       
       translationIndicator = `
-        <span class="translation-indicator" onclick="event.stopPropagation(); this.classList.toggle('show-tooltip');">
+        <span class="translation-indicator" data-message-action="toggle-translation-tooltip">
           <span class="info-icon">i</span>
           <span>Translated</span>
           <div class="original-tooltip">
-            <button class="tooltip-close" onclick="event.stopPropagation(); this.closest('.translation-indicator').classList.remove('show-tooltip');">&times;</button>
+            <button class="tooltip-close" type="button" data-message-action="close-translation-tooltip">&times;</button>
             <div class="tooltip-header">${tooltipHeader} (${this.escapeHtml(languageLabel)})</div>
             <div class="tooltip-text">${this.escapeHtml(tooltipText)}</div>
           </div>
@@ -3227,6 +3233,9 @@ class WhatsAppClient {
     const senderJid = this.getMessageSenderJid(message);
     const contactId = message.contactId || message.contact_id || this.currentContactId;
     const starred = isMessageStarred(this.starredMessages, messageId);
+    const messageIdAttr = this.escapeHtml(messageId);
+    const senderJidAttr = this.escapeHtml(senderJid);
+    const contactIdAttr = this.escapeHtml(contactId);
     
     // Check if message can be translated (incoming, has text, not already translated)
     const hasText = message.content && (message.content.body || message.content.caption || message.content.text);
@@ -3235,7 +3244,9 @@ class WhatsAppClient {
     // Translate button (for untranslated incoming messages)
     const translateButton = `
       <button class="message-action-btn translate-button ${canTranslate ? 'can-translate' : ''}" 
-              onclick="event.stopPropagation(); app.translateMessage('${messageId}')" 
+              type="button"
+              data-message-action="translate"
+              data-message-id="${messageIdAttr}"
               title="${isTranslated ? 'Already translated' : (canTranslate ? 'Translate' : 'No text to translate')}">
         <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
       </button>
@@ -3243,7 +3254,7 @@ class WhatsAppClient {
     
     // Reply button
     const replyButton = `
-      <button class="message-action-btn" onclick="event.stopPropagation(); app.handleReplyClick('${messageId}')" title="Reply">
+      <button class="message-action-btn" type="button" data-message-action="reply" data-message-id="${messageIdAttr}" title="Reply">
         <svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
       </button>
     `;
@@ -3252,7 +3263,9 @@ class WhatsAppClient {
     const canAIReply = !isOutgoing && hasText;
     const aiReplyButton = canAIReply ? `
       <button class="message-action-btn ai-reply-btn" 
-              onclick="event.stopPropagation(); app.generateAIReply('${messageId}')" 
+              type="button"
+              data-message-action="ai-reply"
+              data-message-id="${messageIdAttr}"
               title="Generate AI reply that sounds like you">
         <svg viewBox="0 0 24 24" width="18" height="18">
           <path fill="currentColor" d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
@@ -3264,23 +3277,25 @@ class WhatsAppClient {
     // Reaction button with quick emoji picker
     const reactionButton = `
       <div class="reaction-button-container">
-        <button class="message-action-btn" onclick="event.stopPropagation(); this.parentElement.querySelector('.reaction-picker').classList.toggle('show');" title="React">
+        <button class="message-action-btn" type="button" data-message-action="toggle-reactions" title="React">
           <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-6c.78 2.34 2.72 4 5 4s4.22-1.66 5-4H7zm2-3c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm6 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1z"/></svg>
         </button>
         <div class="reaction-picker">
-          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '👍')">👍</span>
-          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '❤️')">❤️</span>
-          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '😂')">😂</span>
-          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '😮')">😮</span>
-          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '😢')">😢</span>
-          <span class="reaction-emoji" onclick="app.sendReaction('${messageId}', '${contactId}', '${senderJid}', '🙏')">🙏</span>
+          <span class="reaction-emoji" role="button" tabindex="0" data-message-action="react" data-message-id="${messageIdAttr}" data-contact-id="${contactIdAttr}" data-sender-jid="${senderJidAttr}" data-reaction="👍">👍</span>
+          <span class="reaction-emoji" role="button" tabindex="0" data-message-action="react" data-message-id="${messageIdAttr}" data-contact-id="${contactIdAttr}" data-sender-jid="${senderJidAttr}" data-reaction="❤️">❤️</span>
+          <span class="reaction-emoji" role="button" tabindex="0" data-message-action="react" data-message-id="${messageIdAttr}" data-contact-id="${contactIdAttr}" data-sender-jid="${senderJidAttr}" data-reaction="😂">😂</span>
+          <span class="reaction-emoji" role="button" tabindex="0" data-message-action="react" data-message-id="${messageIdAttr}" data-contact-id="${contactIdAttr}" data-sender-jid="${senderJidAttr}" data-reaction="😮">😮</span>
+          <span class="reaction-emoji" role="button" tabindex="0" data-message-action="react" data-message-id="${messageIdAttr}" data-contact-id="${contactIdAttr}" data-sender-jid="${senderJidAttr}" data-reaction="😢">😢</span>
+          <span class="reaction-emoji" role="button" tabindex="0" data-message-action="react" data-message-id="${messageIdAttr}" data-contact-id="${contactIdAttr}" data-sender-jid="${senderJidAttr}" data-reaction="🙏">🙏</span>
         </div>
       </div>
     `;
 
     const starButton = `
       <button class="message-action-btn star-toggle ${starred ? 'active' : ''}"
-              onclick="event.stopPropagation(); app.toggleMessageStar('${messageId}')"
+              type="button"
+              data-message-action="star"
+              data-message-id="${messageIdAttr}"
               title="${starred ? 'Remove star' : 'Star message'}">
         <svg viewBox="0 0 24 24"><path fill="currentColor" d="m12 17.27 6.18 3.73-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
       </button>
@@ -3303,7 +3318,7 @@ class WhatsAppClient {
     const starredBadge = starred ? '<span class="message-starred-badge" title="Starred">★</span>' : '';
     
     return `
-      <div class="message ${isOutgoing ? 'outgoing' : 'incoming'}" data-message-id="${messageId}">
+      <div class="message ${isOutgoing ? 'outgoing' : 'incoming'}" data-message-id="${messageIdAttr}">
         ${forwarded}
         ${sender}
         ${quotedMessage}
@@ -3380,15 +3395,15 @@ class WhatsAppClient {
           const imgSrc = mediaData.startsWith('data:') ? mediaData : `data:${mimeType};base64,${mediaData}`;
           return `
             <div class="message-image">
-              <img src="${imgSrc}" alt="Image" loading="lazy" onclick="this.classList.toggle('fullscreen')">
+              <img src="${imgSrc}" alt="Image" loading="lazy" data-fullscreen-toggle="true">
             </div>
             ${displayCaption ? `<div class="message-caption">${this.escapeHtml(displayCaption)}</div>` : ''}
           `;
         } else if (hasMedia) {
           // Media needs to be lazy loaded - show placeholder
           return `
-            <div class="message-image lazy-media" data-message-id="${messageId}" data-mime-type="${mimeType}" data-media-type="image">
-              <div class="media-placeholder" onclick="app.loadMedia('${messageId}', this)">
+            <div class="message-image lazy-media" data-message-id="${this.escapeHtml(messageId)}" data-mime-type="${this.escapeHtml(mimeType)}" data-media-type="image">
+              <div class="media-placeholder">
                 <svg viewBox="0 0 24 24" width="48" height="48">
                   <path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
                 </svg>
@@ -3415,7 +3430,7 @@ class WhatsAppClient {
           const videoSrc = videoData.startsWith('data:') ? videoData : `data:${videoMime};base64,${videoData}`;
           return `
             <div class="message-video">
-              <video controls preload="metadata" onclick="event.stopPropagation()">
+              <video controls preload="metadata">
                 <source src="${videoSrc}" type="${videoMime}">
                 Your browser does not support video playback.
               </video>
@@ -3426,8 +3441,8 @@ class WhatsAppClient {
           // Media needs to be lazy loaded - show placeholder
           const durationText = content.duration_seconds ? this.formatDuration(content.duration_seconds) : '';
           return `
-            <div class="message-video lazy-media" data-message-id="${videoMsgId}" data-mime-type="${videoMime}" data-media-type="video">
-              <div class="media-placeholder" onclick="app.loadMedia('${videoMsgId}', this)">
+            <div class="message-video lazy-media" data-message-id="${this.escapeHtml(videoMsgId)}" data-mime-type="${this.escapeHtml(videoMime)}" data-media-type="video">
+              <div class="media-placeholder">
                 <svg viewBox="0 0 24 24" width="48" height="48">
                   <path fill="currentColor" d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
                 </svg>
@@ -3466,8 +3481,8 @@ class WhatsAppClient {
           const audioType = isVoiceNote ? 'voice note' : 'audio';
           const durationText = content.duration_seconds ? this.formatDuration(content.duration_seconds) : '';
           return `
-            <div class="message-audio lazy-media ${isVoiceNote ? 'voice-note' : ''}" data-message-id="${audioMsgId}" data-mime-type="${audioMime}" data-media-type="audio">
-              <div class="media-placeholder" onclick="app.loadMedia('${audioMsgId}', this)">
+            <div class="message-audio lazy-media ${isVoiceNote ? 'voice-note' : ''}" data-message-id="${this.escapeHtml(audioMsgId)}" data-mime-type="${this.escapeHtml(audioMime)}" data-media-type="audio">
+              <div class="media-placeholder">
                 <svg viewBox="0 0 24 24" width="32" height="32">
                   <path fill="currentColor" d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/>
                 </svg>
@@ -3507,8 +3522,8 @@ class WhatsAppClient {
           // Media needs to be lazy loaded - show placeholder
           const sizeText = content.file_size ? this.formatSize(content.file_size) : '';
           return `
-            <div class="message-document lazy-media" data-message-id="${docMsgId}" data-mime-type="${docMime}" data-media-type="document" data-file-name="${this.escapeHtml(fileName)}">
-              <div class="media-placeholder document-placeholder" onclick="app.loadMedia('${docMsgId}', this)">
+            <div class="message-document lazy-media" data-message-id="${this.escapeHtml(docMsgId)}" data-mime-type="${this.escapeHtml(docMime)}" data-media-type="document" data-file-name="${this.escapeHtml(fileName)}">
+              <div class="media-placeholder document-placeholder">
                 <svg viewBox="0 0 24 24" width="24" height="24">
                   <path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/>
                 </svg>
@@ -3544,8 +3559,8 @@ class WhatsAppClient {
         } else if (stickerHasMedia) {
           // Media needs to be lazy loaded - show placeholder
           return `
-            <div class="message-sticker lazy-media" data-message-id="${stickerMsgId}" data-mime-type="${stickerMime}" data-media-type="sticker">
-              <div class="media-placeholder sticker-placeholder" onclick="app.loadMedia('${stickerMsgId}', this)">
+            <div class="message-sticker lazy-media" data-message-id="${this.escapeHtml(stickerMsgId)}" data-mime-type="${this.escapeHtml(stickerMime)}" data-media-type="sticker">
+              <div class="media-placeholder sticker-placeholder">
                 <svg viewBox="0 0 24 24" width="48" height="48">
                   <path fill="currentColor" d="M21.99 4c0-1.1-.89-2-1.99-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4-.01-18zM17 11h-4v4h-2v-4H7V9h4V5h2v4h4v2z"/>
                 </svg>
@@ -3570,7 +3585,7 @@ class WhatsAppClient {
               <a href="${mapsUrl}" target="_blank" rel="noopener" class="location-link">
                 <div class="location-preview">
                   <img src="https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=15&size=300x150&markers=color:red%7C${lat},${lng}&key=" 
-                       onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"
+                       data-show-next-on-error="true"
                        alt="Map">
                   <div class="location-placeholder" style="display:none;">
                     <svg viewBox="0 0 24 24" width="32" height="32">
@@ -4831,7 +4846,19 @@ class WhatsAppClient {
 
     // Contact click
     document.getElementById('contacts-list').addEventListener('click', (e) => {
-      const contactItem = e.target.closest('.contact-item');
+      const target = e.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      const pinButton = target.closest('[data-contact-action="toggle-pin"]');
+      if (pinButton) {
+        e.stopPropagation();
+        this.togglePin(pinButton.dataset.contactId);
+        return;
+      }
+
+      const contactItem = target.closest('.contact-item');
       if (contactItem) {
         const contactId = contactItem.dataset.contactId;
         this.selectContact(contactId);
@@ -4884,6 +4911,10 @@ class WhatsAppClient {
 
     document.getElementById('composer-use-suggestion')?.addEventListener('click', () => {
       this.useComposerSuggestedReply();
+    });
+
+    document.getElementById('reply-preview-close')?.addEventListener('click', () => {
+      this.clearReply();
     });
 
     document.getElementById('composer-remind-tomorrow')?.addEventListener('click', () => {
@@ -4953,11 +4984,55 @@ class WhatsAppClient {
 
     // Prevent pull-to-refresh on mobile when scrolling messages
     const messagesList = document.getElementById('messages-list');
+    messagesList.addEventListener('click', (e) => {
+      this.handleMessagesListClick(e);
+    });
+
+    messagesList.addEventListener('keydown', (e) => {
+      const target = e.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      if ((e.key === 'Enter' || e.key === ' ') && target.closest('.reaction-emoji')) {
+        e.preventDefault();
+        this.handleMessagesListClick(e);
+      }
+    });
+
     messagesList.addEventListener('touchstart', (e) => {
       if (messagesList.scrollTop === 0) {
         messagesList.scrollTop = 1;
       }
     }, { passive: true });
+
+    document.addEventListener('error', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLImageElement)) {
+        return;
+      }
+
+      if (target.dataset.avatarFallback !== undefined) {
+        const fallback = document.createElement('span');
+        fallback.textContent = target.dataset.avatarFallback || '?';
+        target.parentElement?.replaceChildren(fallback);
+        return;
+      }
+
+      if (target.dataset.hideOnError !== undefined) {
+        if (target.parentElement) {
+          target.parentElement.style.display = 'none';
+        }
+        return;
+      }
+
+      if (target.dataset.showNextOnError !== undefined) {
+        target.style.display = 'none';
+        if (target.nextElementSibling instanceof HTMLElement) {
+          target.nextElementSibling.style.display = 'flex';
+        }
+      }
+    }, true);
 
     // Close reaction pickers and emoji picker when clicking outside
     document.addEventListener('click', (e) => {
@@ -5556,7 +5631,7 @@ class WhatsAppClient {
       <a href="${this.escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="link-preview-card">
         ${hasImage ? `
           <div class="link-preview-image">
-            <img src="${this.escapeHtml(preview.imageUrl)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+            <img src="${this.escapeHtml(preview.imageUrl)}" alt="" loading="lazy" data-hide-on-error="true">
           </div>
         ` : ''}
         <div class="link-preview-content">
@@ -5575,6 +5650,89 @@ class WhatsAppClient {
       return urlObj.hostname.replace(/^www\./, '');
     } catch {
       return url;
+    }
+  }
+
+  handleMessagesListClick(event) {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const tooltipClose = target.closest('[data-message-action="close-translation-tooltip"]');
+    if (tooltipClose) {
+      event.stopPropagation();
+      tooltipClose.closest('.translation-indicator')?.classList.remove('show-tooltip');
+      return;
+    }
+
+    const translationIndicator = target.closest('.translation-indicator');
+    if (translationIndicator) {
+      event.stopPropagation();
+      translationIndicator.classList.toggle('show-tooltip');
+      return;
+    }
+
+    const fullscreenImage = target.closest('img[data-fullscreen-toggle]');
+    if (fullscreenImage) {
+      event.stopPropagation();
+      fullscreenImage.classList.toggle('fullscreen');
+      return;
+    }
+
+    const mediaPlaceholder = target.closest('.media-placeholder');
+    if (mediaPlaceholder) {
+      event.stopPropagation();
+      const mediaContainer = mediaPlaceholder.closest('.lazy-media');
+      const messageId = mediaContainer?.dataset.messageId || mediaPlaceholder.closest('.message')?.dataset.messageId;
+      if (messageId) {
+        this.loadMedia(messageId, mediaPlaceholder);
+      }
+      return;
+    }
+
+    const actionTarget = target.closest('[data-message-action]');
+    if (!actionTarget) {
+      return;
+    }
+
+    const messageId = actionTarget.dataset.messageId || actionTarget.closest('.message')?.dataset.messageId;
+
+    switch (actionTarget.dataset.messageAction) {
+      case 'translate':
+        event.stopPropagation();
+        if (messageId) this.translateMessage(messageId);
+        break;
+      case 'reply':
+        event.stopPropagation();
+        if (messageId) this.handleReplyClick(messageId);
+        break;
+      case 'ai-reply':
+        event.stopPropagation();
+        if (messageId) this.generateAIReply(messageId);
+        break;
+      case 'star':
+        event.stopPropagation();
+        if (messageId) this.toggleMessageStar(messageId);
+        break;
+      case 'toggle-reactions':
+        event.stopPropagation();
+        actionTarget.parentElement?.querySelector('.reaction-picker')?.classList.toggle('show');
+        break;
+      case 'react':
+        event.stopPropagation();
+        if (messageId && actionTarget.dataset.contactId && actionTarget.dataset.senderJid) {
+          this.sendReaction(
+            messageId,
+            actionTarget.dataset.contactId,
+            actionTarget.dataset.senderJid,
+            actionTarget.dataset.reaction || ''
+          );
+        }
+        actionTarget.closest('.reaction-picker')?.classList.remove('show');
+        break;
+      default:
+        break;
     }
   }
 
@@ -5698,12 +5856,12 @@ class WhatsAppClient {
       
       switch (mediaType) {
         case 'image':
-          mediaHtml = `<img src="${mediaSrc}" alt="Image" loading="lazy" onclick="this.classList.toggle('fullscreen')">`;
+          mediaHtml = `<img src="${mediaSrc}" alt="Image" loading="lazy" data-fullscreen-toggle="true">`;
           break;
           
         case 'video':
           mediaHtml = `
-            <video controls preload="metadata" onclick="event.stopPropagation()">
+            <video controls preload="metadata">
               <source src="${mediaSrc}" type="${actualMimeType}">
               Your browser does not support video playback.
             </video>
@@ -5762,8 +5920,6 @@ class WhatsAppClient {
         </svg>
         <span>Failed to load. Click to retry.</span>
       `;
-      // Allow retry on click
-      placeholderEl.onclick = () => this.loadMedia(messageId, placeholderEl);
     }
   }
 

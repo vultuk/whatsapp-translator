@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appJs = readFileSync(join(__dirname, '..', 'public', 'app.js'), 'utf8');
+const indexHtml = readFileSync(join(__dirname, '..', 'public', 'index.html'), 'utf8');
 
 function extractMethodBody(source, methodName) {
   const marker = `async ${methodName}()`;
@@ -37,4 +38,13 @@ test('AI compose drafts generated text instead of auto-sending it', () => {
   assert.match(sendWithAiBody, /this\.handleDraftInput\(\)/);
   assert.doesNotMatch(sendWithAiBody, /this\.sendMessage\(\)/);
   assert.doesNotMatch(sendWithAiBody, /ClaudAI Says/);
+});
+
+test('static and generated markup do not use inline event attributes', () => {
+  const renderedSources = `${indexHtml}\n${appJs}`;
+
+  assert.doesNotMatch(
+    renderedSources,
+    /\son(?:click|error|change|input|submit|keydown|load)=/i
+  );
 });
