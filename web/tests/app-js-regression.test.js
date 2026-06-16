@@ -172,6 +172,21 @@ test('conversation settings modal only exposes translator-facing fields', () => 
   assert.doesNotMatch(saveSettingsBody, /conversation-reminder/);
 });
 
+test('loaded reaction records are merged instead of rendered as standalone messages', () => {
+  const normalizeBody = extractMethodBody(appJs, 'normalizeLoadedMessages');
+  const loadMessagesBody = extractMethodBody(appJs, 'loadMessages');
+  const loadOlderMessagesBody = extractMethodBody(appJs, 'loadOlderMessages');
+  const renderContentBody = extractMethodBody(appJs, 'renderContent');
+  const getMessagePreviewBody = extractMethodBody(appJs, 'getMessagePreview');
+
+  assert.match(normalizeBody, /this\.applyReactionToMessages\(/);
+  assert.match(normalizeBody, /this\.isDisplayableMessage\(message\)/);
+  assert.match(loadMessagesBody, /this\.normalizeLoadedMessages\(contactId,\s*messages\)/);
+  assert.match(loadOlderMessagesBody, /this\.normalizeLoadedMessages\(contactId,\s*olderMessages,\s*existingMessages\)/);
+  assert.doesNotMatch(renderContentBody, /case 'reaction'/);
+  assert.doesNotMatch(getMessagePreviewBody, /case 'reaction'/);
+});
+
 test('static and generated markup do not use inline event attributes', () => {
   const renderedSources = `${indexHtml}\n${appJs}`;
 

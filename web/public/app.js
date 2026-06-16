@@ -34,8 +34,8 @@ import {
   toggleStarredMessage,
   upsertDraft,
   upsertQuickReply,
-} from './app-state.js?v=20260616-settings-ui';
-import { calculateViewportLayout } from './viewport.js?v=20260616-settings-ui';
+} from './app-state.js?v=20260616-reactions-ui';
+import { calculateViewportLayout } from './viewport.js?v=20260616-reactions-ui';
 
 class WhatsAppClient {
   constructor() {
@@ -846,7 +846,7 @@ class WhatsAppClient {
     const previewByContact = {};
     for (const contact of this.contacts) {
       const messages = this.messages.get(contact.id) || [];
-      const lastMessage = messages[messages.length - 1];
+      const lastMessage = this.getLastDisplayableMessage(messages);
       if (lastMessage) {
         previewByContact[contact.id] = this.getMessagePreview(lastMessage);
       } else if (contact.lastMessagePreview) {
@@ -1996,24 +1996,148 @@ class WhatsAppClient {
     }
   }
 
-  // Handle new message
-  handleNewMessage(message) {
+  getMessageContentType(message) {
+    return String(
+      message?.content?.type ||
+      message?.contentType ||
+      message?.content_type ||
+      ''
+    ).toLowerCase();
+  }
+
+  isReactionMessage(message) {
+    return this.getMessageContentType(message) === 'reaction';
+  }
+
+  isDisplayableMessage(message) {
+    const contentType = this.getMessageContentType(message);
+    return Boolean(contentType) && !['reaction', 'protocol', 'unknown'].includes(contentType);
+  }
+
+  prepareMessageForCache(message) {
+    if (!message || typeof message !== 'object') return message;
+
     if (!message.senderJid) {
       message.senderJid = this.getMessageSenderJid(message);
     }
     if (!message.replyContext && message.content?.reply_context) {
       message.replyContext = message.content.reply_context;
     }
+    return message;
+  }
+
+  getReactionTargetMessageId(reactionMsg) {
+    const content = reactionMsg?.content || {};
+    return (
+      content.target_message_id ||
+      content.targetMessageId ||
+      content.targetMessageID ||
+      reactionMsg?.target_message_id ||
+      reactionMsg?.targetMessageId ||
+      reactionMsg?.targetMessageID ||
+      ''
+    );
+  }
+
+  getReactionActor(reactionMsg) {
+    const isFromMe = reactionMsg?.isFromMe || reactionMsg?.is_from_me;
+    if (isFromMe) {
+      return document.getElementById('user-phone')?.textContent?.replace('+', '') || 'me';
+    }
+    return reactionMsg?.senderPhone || reactionMsg?.sender_phone || reactionMsg?.senderJid || 'unknown';
+  }
+
+  applyReactionToMessage(targetMessage, reactionMsg) {
+    const content = reactionMsg?.content || {};
+    const emoji = content.emoji || '';
+    const reactor = this.getReactionActor(reactionMsg);
+
+    if (!targetMessage.reactions) {
+      targetMessage.reactions = {};
+    }
+
+    for (const [existingEmoji, reactors] of Object.entries(targetMessage.reactions)) {
+      targetMessage.reactions[existingEmoji] = (reactors || []).filter(entry => entry !== reactor);
+      if (targetMessage.reactions[existingEmoji].length === 0) {
+        delete targetMessage.reactions[existingEmoji];
+      }
+    }
+
+    if (emoji) {
+      if (!targetMessage.reactions[emoji]) {
+        targetMessage.reactions[emoji] = [];
+      }
+      if (!targetMessage.reactions[emoji].includes(reactor)) {
+        targetMessage.reactions[emoji].push(reactor);
+      }
+    }
+  }
+
+  applyReactionToMessages(messages = [], reactionMsg) {
+    const targetMessageId = this.getReactionTargetMessageId(reactionMsg);
+    if (!targetMessageId) return false;
+
+    const targetMessage = messages.find(message => message.id === targetMessageId);
+    if (!targetMessage) return false;
+
+    this.applyReactionToMessage(targetMessage, reactionMsg);
+    return true;
+  }
+
+  normalizeLoadedMessages(contactId, rawMessages = [], additionalReactionTargets = []) {
+    const displayMessages = [];
+    const reactionMessages = [];
+
+    for (const message of rawMessages || []) {
+      this.prepareMessageForCache(message);
+      if (this.isReactionMessage(message)) {
+        reactionMessages.push(message);
+        continue;
+      }
+      if (this.isDisplayableMessage(message)) {
+        displayMessages.push(message);
+      }
+    }
+
+    const reactionTargets = additionalReactionTargets.length > 0
+      ? [...displayMessages, ...additionalReactionTargets]
+      : displayMessages;
+
+    for (const message of reactionMessages) {
+      if (!this.applyReactionToMessages(reactionTargets, message)) {
+        console.log('Skipping reaction whose target is not loaded:', {
+          contactId,
+          targetMessageId: this.getReactionTargetMessageId(message),
+        });
+      }
+    }
+
+    return displayMessages;
+  }
+
+  getLastDisplayableMessage(messages = []) {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (this.isDisplayableMessage(message)) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  // Handle new message
+  handleNewMessage(message) {
+    this.prepareMessageForCache(message);
 
     // Check if this is a reaction message
-    if (message.content && message.content.type === 'reaction') {
+    if (this.isReactionMessage(message)) {
       this.handleReactionMessage(message);
       return;
     }
     
     // Skip protocol and unknown messages - these shouldn't be displayed
-    if (message.content && (message.content.type === 'protocol' || message.content.type === 'unknown')) {
-      console.log('Skipping non-displayable message type:', message.content.type);
+    if (!this.isDisplayableMessage(message)) {
+      console.log('Skipping non-displayable message type:', this.getMessageContentType(message));
       return;
     }
     
@@ -2254,10 +2378,7 @@ class WhatsAppClient {
   // Handle incoming reaction message
   handleReactionMessage(reactionMsg) {
     const contactId = reactionMsg.contactId;
-    const targetMessageId = reactionMsg.content.target_message_id || reactionMsg.content.targetMessageId;
-    const emoji = reactionMsg.content.emoji || '';
-    const senderPhone = reactionMsg.senderPhone || reactionMsg.sender_phone || 'unknown';
-    const isFromMe = reactionMsg.isFromMe || reactionMsg.is_from_me;
+    const targetMessageId = this.getReactionTargetMessageId(reactionMsg);
     
     if (!targetMessageId) {
       console.warn('Reaction message missing target_message_id');
@@ -2268,36 +2389,9 @@ class WhatsAppClient {
     const messages = this.messages.get(contactId);
     if (!messages) return;
     
-    const targetMessage = messages.find(m => m.id === targetMessageId);
-    if (!targetMessage) {
+    if (!this.applyReactionToMessages(messages, reactionMsg)) {
       console.log('Target message not found for reaction:', targetMessageId);
       return;
-    }
-    
-    // Initialize reactions if needed
-    if (!targetMessage.reactions) {
-      targetMessage.reactions = {};
-    }
-    
-    // Determine reactor identifier
-    const reactor = isFromMe ? (document.getElementById('user-phone')?.textContent?.replace('+', '') || 'me') : senderPhone;
-    
-    // Remove previous reaction from this sender
-    for (const [existingEmoji, reactors] of Object.entries(targetMessage.reactions)) {
-      targetMessage.reactions[existingEmoji] = reactors.filter(r => r !== reactor);
-      if (targetMessage.reactions[existingEmoji].length === 0) {
-        delete targetMessage.reactions[existingEmoji];
-      }
-    }
-    
-    // Add new reaction (empty emoji means removal)
-    if (emoji) {
-      if (!targetMessage.reactions[emoji]) {
-        targetMessage.reactions[emoji] = [];
-      }
-      if (!targetMessage.reactions[emoji].includes(reactor)) {
-        targetMessage.reactions[emoji].push(reactor);
-      }
     }
     
     // Update display if viewing this chat
@@ -2305,7 +2399,11 @@ class WhatsAppClient {
       this.updateMessageReactions(targetMessageId);
     }
     
-    console.log('Reaction updated:', { targetMessageId, emoji, reactor });
+    console.log('Reaction updated:', {
+      targetMessageId,
+      emoji: reactionMsg.content?.emoji || '',
+      reactor: this.getReactionActor(reactionMsg),
+    });
   }
 
   // Handle typing indicator
@@ -2401,7 +2499,7 @@ class WhatsAppClient {
       const contact = this.contacts.find(c => c.id === chatId);
       if (contact) {
         const messages = this.messages.get(chatId) || [];
-        const lastMessage = messages[messages.length - 1];
+        const lastMessage = this.getLastDisplayableMessage(messages);
         const preview = lastMessage ? this.getMessagePreview(lastMessage) : '';
         previewEl.textContent = preview;
       }
@@ -2566,7 +2664,7 @@ class WhatsAppClient {
       
       // Get last message preview - prefer saved drafts, then cached messages, then backend preview
       const messages = this.messages.get(contact.id) || [];
-      const lastMessage = messages[messages.length - 1];
+      const lastMessage = this.getLastDisplayableMessage(messages);
       const draftPreview = getDraftPreview(this.drafts, contact.id);
       let preview = '';
       let previewClass = draftPreview ? 'preview-text draft-preview' : 'preview-text';
@@ -2681,8 +2779,6 @@ class WhatsAppClient {
         return prefix + '[ Location ]';
       case 'contact':
         return prefix + '[ Contact: ' + content.name + ' ]';
-      case 'reaction':
-        return prefix + content.emoji;
       case 'revoked':
         return '[ Message deleted ]';
       case 'poll':
@@ -2800,8 +2896,10 @@ class WhatsAppClient {
 
       const cachedMessages = this.messages.get(contactId);
       if (cachedMessages && cachedMessages.length > 0) {
-        const visibleMessages = this.getRecentVisibleMessages(cachedMessages);
-        if (visibleMessages.length !== cachedMessages.length) {
+        const normalizedMessages = this.normalizeLoadedMessages(contactId, cachedMessages);
+        this.messages.set(contactId, normalizedMessages);
+        const visibleMessages = this.getRecentVisibleMessages(normalizedMessages);
+        if (visibleMessages.length !== normalizedMessages.length) {
           this.messages.set(contactId, visibleMessages);
           this.messagesHasMore.set(contactId, true);
         }
@@ -2949,16 +3047,9 @@ class WhatsAppClient {
       const messages = Array.isArray(data) ? data : data.messages;
       const hasMore = Array.isArray(data) ? false : data.hasMore;
 
-      messages.forEach(message => {
-        if (!message.senderJid) {
-          message.senderJid = this.getMessageSenderJid(message);
-        }
-        if (!message.replyContext && message.content?.reply_context) {
-          message.replyContext = message.content.reply_context;
-        }
-      });
+      const normalizedMessages = this.normalizeLoadedMessages(contactId, messages);
       
-      this.messages.set(contactId, messages);
+      this.messages.set(contactId, normalizedMessages);
       this.messagesHasMore.set(contactId, hasMore);
       if (hasMore) {
         this.fullyLoadedContacts.delete(contactId);
@@ -2993,16 +3084,9 @@ class WhatsAppClient {
       const data = await response.json();
       const messages = Array.isArray(data) ? data : data.messages;
 
-      messages.forEach(message => {
-        if (!message.senderJid) {
-          message.senderJid = this.getMessageSenderJid(message);
-        }
-        if (!message.replyContext && message.content?.reply_context) {
-          message.replyContext = message.content.reply_context;
-        }
-      });
+      const normalizedMessages = this.normalizeLoadedMessages(contactId, messages);
 
-      this.messages.set(contactId, messages);
+      this.messages.set(contactId, normalizedMessages);
       this.messagesHasMore.set(contactId, false);
       this.fullyLoadedContacts.add(contactId);
     } catch (err) {
@@ -3047,18 +3131,11 @@ class WhatsAppClient {
       const olderMessages = Array.isArray(data) ? data : data.messages;
       const hasMore = Array.isArray(data) ? false : data.hasMore;
 
-      olderMessages.forEach(message => {
-        if (!message.senderJid) {
-          message.senderJid = this.getMessageSenderJid(message);
-        }
-        if (!message.replyContext && message.content?.reply_context) {
-          message.replyContext = message.content.reply_context;
-        }
-      });
+      const normalizedOlderMessages = this.normalizeLoadedMessages(contactId, olderMessages, existingMessages);
       
-      if (olderMessages.length > 0) {
+      if (normalizedOlderMessages.length > 0) {
         // Prepend older messages
-        const allMessages = [...olderMessages, ...existingMessages];
+        const allMessages = [...normalizedOlderMessages, ...existingMessages];
         this.messages.set(contactId, allMessages);
         this.messagesHasMore.set(contactId, hasMore);
         if (!hasMore) {
@@ -3069,7 +3146,12 @@ class WhatsAppClient {
         if (this.messageSearchQuery || this.starredOnly) {
           this.refreshCurrentConversationView();
         } else {
-          this.prependMessages(olderMessages);
+          this.prependMessages(normalizedOlderMessages);
+        }
+      } else if (olderMessages.length > 0) {
+        this.messagesHasMore.set(contactId, hasMore);
+        if (!hasMore) {
+          this.fullyLoadedContacts.add(contactId);
         }
       } else {
         this.messagesHasMore.set(contactId, false);
@@ -3128,7 +3210,8 @@ class WhatsAppClient {
   // Prepend older messages to the list (maintaining scroll position)
   prependMessages(olderMessages) {
     const container = document.getElementById('messages-list');
-    if (!container || olderMessages.length === 0) return;
+    const displayMessages = (olderMessages || []).filter(message => this.isDisplayableMessage(message));
+    if (!container || displayMessages.length === 0) return;
     
     // Remember scroll position from bottom
     const scrollHeightBefore = container.scrollHeight;
@@ -3138,7 +3221,7 @@ class WhatsAppClient {
     let html = '';
     let lastDate = null;
     
-    for (const message of olderMessages) {
+    for (const message of displayMessages) {
       const messageDate = new Date(message.timestamp).toDateString();
       if (messageDate !== lastDate) {
         html += `<div class="date-separator"><span>${this.formatDate(message.timestamp)}</span></div>`;
@@ -3149,11 +3232,9 @@ class WhatsAppClient {
     
     // Remove loading indicator and first date separator if it will be duplicated
     const firstDateSep = container.querySelector('.date-separator');
-    if (firstDateSep && olderMessages.length > 0) {
-      const lastOlderDate = new Date(olderMessages[olderMessages.length - 1].timestamp).toDateString();
-      const firstExistingDate = firstDateSep.textContent;
+    if (firstDateSep && displayMessages.length > 0) {
       // Check if dates match (approximately)
-      if (firstDateSep.textContent.includes(this.formatDate(olderMessages[olderMessages.length - 1].timestamp).split(',')[0])) {
+      if (firstDateSep.textContent.includes(this.formatDate(displayMessages[displayMessages.length - 1].timestamp).split(',')[0])) {
         firstDateSep.remove();
       }
     }
@@ -3172,8 +3253,9 @@ class WhatsAppClient {
   // Render messages
   renderMessages(messages) {
     const container = document.getElementById('messages-list');
+    const displayMessages = (messages || []).filter(message => this.isDisplayableMessage(message));
     
-    if (messages.length === 0) {
+    if (displayMessages.length === 0) {
       const emptyMessage = this.messageSearchQuery
         ? 'No messages match your search yet'
         : (this.starredOnly ? 'No starred messages in this conversation yet' : 'No messages yet');
@@ -3186,7 +3268,7 @@ class WhatsAppClient {
     let html = '';
     let lastDate = null;
     
-    for (const message of messages) {
+    for (const message of displayMessages) {
       // Add date separator if needed
       const messageDate = new Date(message.timestamp).toDateString();
       if (messageDate !== lastDate) {
@@ -3667,9 +3749,6 @@ class WhatsAppClient {
       case 'contact':
         return `<div class="message-media">[ Contact: ${this.escapeHtml(content.name)} ]</div>`;
       
-      case 'reaction':
-        return `<div class="message-text" style="font-size: 32px;">${content.emoji}</div>`;
-      
       case 'revoked':
         return `<div class="message-text" style="font-style: italic; opacity: 0.7;">This message was deleted</div>`;
       
@@ -3689,6 +3768,8 @@ class WhatsAppClient {
 
   // Append a single message to the list
   appendMessage(message) {
+    if (!this.isDisplayableMessage(message)) return;
+
     const container = document.getElementById('messages-list');
     
     // Check if we need a date separator
@@ -3968,7 +4049,7 @@ class WhatsAppClient {
 
     const visibleMessages = this.getVisibleMessagesForCurrentConversation();
     const count = countMatchingMessages(
-      this.messages.get(this.currentContactId) || [],
+      (this.messages.get(this.currentContactId) || []).filter(message => this.isDisplayableMessage(message)),
       this.messageSearchQuery,
       { starredOnly: this.starredOnly, starredLookup: this.starredMessages },
     );
@@ -3993,7 +4074,8 @@ class WhatsAppClient {
   }
 
   getVisibleMessagesForCurrentConversation() {
-    const messages = this.messages.get(this.currentContactId) || [];
+    const messages = (this.messages.get(this.currentContactId) || [])
+      .filter(message => this.isDisplayableMessage(message));
     return filterMessagesByQuery(messages, this.messageSearchQuery, {
       starredOnly: this.starredOnly,
       starredLookup: this.starredMessages,
