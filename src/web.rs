@@ -1455,13 +1455,29 @@ async fn translate_message(
         .unwrap_or_default();
 
     // Call the translation service with conversation settings
-    let result = translator
+    let result = match translator
         .process_text(
             &req.text,
             settings.language_override.as_deref(),
             settings.translation_style.as_deref(),
         )
-        .await;
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            warn!("Manual translation failed for {}: {}", req.message_id, e);
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(TranslateMessageResponse {
+                    success: false,
+                    translated_text: None,
+                    source_language: None,
+                    error: Some(format!("Translation failed: {}", e)),
+                }),
+            )
+                .into_response();
+        }
+    };
 
     // Record usage if there was API usage
     if result.usage.input_tokens > 0 {
@@ -1469,26 +1485,57 @@ async fn translate_message(
             Some(&req.contact_id),
             Some(&req.message_id),
             &result.usage,
-            "manual_translate",
+            if result.needs_translation {
+                "manual_translate"
+            } else {
+                "detect_language"
+            },
         ) {
             warn!("Failed to record translation usage: {}", e);
         }
     }
 
-    // Update the message in the database with the translation
-    if result.needs_translation {
-        if let Err(e) = state.store.update_message_translation(
-            &req.message_id,
-            result.translated_text.as_deref(),
-            Some(&result.source_language),
-        ) {
-            warn!("Failed to update message translation in DB: {}", e);
+    if !result.needs_translation {
+        return Json(TranslateMessageResponse {
+            success: false,
+            translated_text: None,
+            source_language: Some(result.source_language.clone()),
+            error: Some(format!(
+                "Message already appears to be in {}",
+                result.source_language
+            )),
+        })
+        .into_response();
+    }
+
+    let translated_text = match result.translated_text {
+        Some(text) if !text.trim().is_empty() => text,
+        _ => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(TranslateMessageResponse {
+                    success: false,
+                    translated_text: None,
+                    source_language: Some(result.source_language),
+                    error: Some("Translation service returned no translated text".to_string()),
+                }),
+            )
+                .into_response();
         }
+    };
+
+    // Update the message in the database with the translation
+    if let Err(e) = state.store.update_message_translation(
+        &req.message_id,
+        Some(&translated_text),
+        Some(&result.source_language),
+    ) {
+        warn!("Failed to update message translation in DB: {}", e);
     }
 
     Json(TranslateMessageResponse {
         success: true,
-        translated_text: result.translated_text,
+        translated_text: Some(translated_text),
         source_language: Some(result.source_language),
         error: None,
     })

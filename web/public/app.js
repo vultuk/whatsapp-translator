@@ -4386,12 +4386,13 @@ class WhatsAppClient {
         })
       });
       
-      if (!response.ok) {
-        const result = await response.json();
+      const result = await response.json();
+      if (!response.ok || !result.success) {
         throw new Error(result.error || 'Translation failed');
       }
-      
-      const result = await response.json();
+      if (!result.translatedText || !String(result.translatedText).trim()) {
+        throw new Error(result.error || 'Translation did not return translated text');
+      }
       
       // Update the local message with translation
       message.translated_text = result.translatedText;

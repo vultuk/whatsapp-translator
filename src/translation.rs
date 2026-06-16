@@ -48,6 +48,7 @@ const CHEAP_PRICING: PricingTier = PricingTier {
 /// Translation service for processing messages and AI replies.
 pub struct TranslationService {
     client: Client,
+    api_url: String,
     api_key: String,
     detection_model: String,
     translation_model: String,
@@ -131,11 +132,25 @@ impl TranslationService {
         );
         Self {
             client: Client::new(),
+            api_url: OPENAI_API_URL.to_string(),
             api_key,
             detection_model,
             translation_model,
             high_end_model,
             default_language,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_with_api_url(api_url: String) -> Self {
+        Self {
+            client: Client::new(),
+            api_url,
+            api_key: "test-api-key".to_string(),
+            detection_model: "test-detect".to_string(),
+            translation_model: "test-translate".to_string(),
+            high_end_model: "test-high-end".to_string(),
+            default_language: "English".to_string(),
         }
     }
 
@@ -217,7 +232,7 @@ impl TranslationService {
     async fn send_request(&self, body: Value) -> Result<OpenAiResponse> {
         let response = self
             .client
-            .post(OPENAI_API_URL)
+            .post(&self.api_url)
             .bearer_auth(&self.api_key)
             .header("content-type", "application/json")
             .json(&body)
@@ -454,38 +469,34 @@ impl TranslationService {
         text: &str,
         language_override: Option<&str>,
         translation_style: Option<&str>,
-    ) -> TranslationResult {
+    ) -> Result<TranslationResult> {
         let mut total_usage = UsageInfo::default();
         let target_language = language_override.unwrap_or(&self.default_language);
 
         if text.trim().is_empty() {
-            return TranslationResult {
+            return Ok(TranslationResult {
                 needs_translation: false,
                 original_text: text.to_string(),
                 translated_text: None,
                 source_language: target_language.to_string(),
                 usage: total_usage,
-            };
+            });
         }
 
-        let (is_target_lang, detected_language, detection_usage) =
-            match self.detect_language(text, target_language).await {
-                Ok(result) => result,
-                Err(e) => {
-                    warn!("Language detection failed: {}", e);
-                    (true, target_language.to_string(), UsageInfo::default())
-                }
-            };
+        let (is_target_lang, detected_language, detection_usage) = self
+            .detect_language(text, target_language)
+            .await
+            .context("Language detection failed")?;
         total_usage = Self::combine_usage(&total_usage, &detection_usage);
 
         if is_target_lang {
-            return TranslationResult {
+            return Ok(TranslationResult {
                 needs_translation: false,
                 original_text: text.to_string(),
                 translated_text: None,
                 source_language: detected_language,
                 usage: total_usage,
-            };
+            });
         }
 
         info!(
@@ -497,16 +508,10 @@ impl TranslationService {
                 .unwrap_or_default()
         );
 
-        let (translated, translation_usage) = match self
+        let (translated, translation_usage) = self
             .translate(text, &detected_language, target_language, translation_style)
             .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                warn!("Translation failed: {}", e);
-                (text.to_string(), UsageInfo::default())
-            }
-        };
+            .context("Translation failed")?;
         total_usage = Self::combine_usage(&total_usage, &translation_usage);
 
         info!(
@@ -517,13 +522,13 @@ impl TranslationService {
             total_usage.cost_usd
         );
 
-        TranslationResult {
+        Ok(TranslationResult {
             needs_translation: true,
             original_text: text.to_string(),
             translated_text: Some(translated),
             source_language: detected_language,
             usage: total_usage,
-        }
+        })
     }
 
     pub async fn compose_ai_message(
@@ -819,6 +824,77 @@ Write my reply (keep it short and casual like my examples):"#,
 #[cfg(test)]
 mod tests {
     use super::{TranslationService, UsageInfo, CHEAP_PRICING};
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+    use std::time::Duration;
+
+    struct MockResponse {
+        status: &'static str,
+        body: String,
+    }
+
+    fn spawn_openai_mock(responses: Vec<MockResponse>) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let addr = listener.local_addr().expect("mock server addr");
+        let handle = thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept mock request");
+                read_http_request(&mut stream);
+                let body = response.body.as_bytes();
+                write!(
+                    stream,
+                    "HTTP/1.1 {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    response.status,
+                    body.len()
+                )
+                .expect("write response headers");
+                stream.write_all(body).expect("write response body");
+            }
+        });
+
+        (format!("http://{}", addr), handle)
+    }
+
+    fn read_http_request(stream: &mut TcpStream) {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set read timeout");
+
+        let mut data = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        let header_end = loop {
+            let bytes_read = stream.read(&mut buffer).expect("read mock request");
+            if bytes_read == 0 {
+                break data.len();
+            }
+            data.extend_from_slice(&buffer[..bytes_read]);
+            if let Some(position) = data.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+
+        let headers = String::from_utf8_lossy(&data[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length:"))
+            .or_else(|| {
+                headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Content-Length:"))
+            })
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let expected_len = header_end + content_length;
+
+        while data.len() < expected_len {
+            let bytes_read = stream.read(&mut buffer).expect("read mock body");
+            if bytes_read == 0 {
+                break;
+            }
+            data.extend_from_slice(&buffer[..bytes_read]);
+        }
+    }
 
     #[test]
     fn calculates_cost_with_cached_input_tokens() {
@@ -885,5 +961,45 @@ mod tests {
         assert_eq!(combined.cached_input_tokens, 5);
         assert_eq!(combined.output_tokens, 9);
         assert_eq!(combined.cost_usd, 3.0);
+    }
+
+    #[tokio::test]
+    async fn process_text_returns_error_when_translation_request_fails() {
+        let detection_response = r#"{
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": "{\"language\":\"Spanish\",\"isTargetLanguage\":false}"
+                }]
+            }],
+            "usage": {
+                "input_tokens": 12,
+                "output_tokens": 4,
+                "input_tokens_details": { "cached_tokens": 2 }
+            }
+        }"#;
+        let (api_url, server) = spawn_openai_mock(vec![
+            MockResponse {
+                status: "200 OK",
+                body: detection_response.to_string(),
+            },
+            MockResponse {
+                status: "500 Internal Server Error",
+                body: r#"{"error":"translation unavailable"}"#.to_string(),
+            },
+        ]);
+        let service = TranslationService::new_with_api_url(api_url);
+
+        let error = service
+            .process_text("hola, podemos hablar mañana?", None, None)
+            .await
+            .expect_err("translation failure should be returned");
+
+        assert!(
+            error.to_string().contains("Translation failed"),
+            "unexpected error: {error:#}"
+        );
+        server.join().expect("mock server should finish");
     }
 }

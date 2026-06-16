@@ -397,38 +397,50 @@ async fn process_message(
             if let Some(text) = extract_text_content(&msg.content) {
                 if !msg.is_from_me && !msg.is_history {
                     // Only translate incoming messages (not history sync)
-                    let result = translator
+                    match translator
                         .process_text(
                             &text,
                             settings.language_override.as_deref(),
                             settings.translation_style.as_deref(),
                         )
-                        .await;
-
-                    // Record usage if we have a store and there was actual API usage
-                    if let Some(store) = store {
-                        if result.usage.input_tokens > 0 {
-                            if let Err(e) = store.record_usage(
-                                Some(&contact_id),
-                                Some(&msg.id),
-                                &result.usage,
-                                if result.needs_translation {
-                                    "translate_incoming"
-                                } else {
-                                    "detect_language"
-                                },
-                            ) {
-                                tracing::warn!("Failed to record usage: {}", e);
+                        .await
+                    {
+                        Ok(result) => {
+                            // Record usage if we have a store and there was actual API usage
+                            if let Some(store) = store {
+                                if result.usage.input_tokens > 0 {
+                                    if let Err(e) = store.record_usage(
+                                        Some(&contact_id),
+                                        Some(&msg.id),
+                                        &result.usage,
+                                        if result.needs_translation {
+                                            "translate_incoming"
+                                        } else {
+                                            "detect_language"
+                                        },
+                                    ) {
+                                        tracing::warn!("Failed to record usage: {}", e);
+                                    }
+                                }
                             }
+
+                            (
+                                Some(result.original_text),
+                                result.translated_text,
+                                Some(result.source_language),
+                                result.needs_translation,
+                            )
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to translate incoming message {} from {}: {}",
+                                msg.id,
+                                contact_id,
+                                e
+                            );
+                            (Some(text), None, None, false)
                         }
                     }
-
-                    (
-                        Some(result.original_text),
-                        result.translated_text,
-                        Some(result.source_language),
-                        result.needs_translation,
-                    )
                 } else {
                     (Some(text), None, None, false)
                 }
@@ -665,15 +677,20 @@ async fn handle_terminal_event(
                 if !msg.is_from_me {
                     if let Some(text) = extract_text_content(&msg.content) {
                         // CLI mode doesn't have per-conversation settings
-                        let result = translator.process_text(&text, None, None).await;
-                        if result.needs_translation {
-                            // Display with translation
-                            message_display.display_with_translation(
-                                &msg,
-                                &result.translated_text.unwrap_or(text),
-                                &result.source_language,
-                            )?;
-                            return Ok(());
+                        match translator.process_text(&text, None, None).await {
+                            Ok(result) if result.needs_translation => {
+                                // Display with translation
+                                message_display.display_with_translation(
+                                    &msg,
+                                    &result.translated_text.unwrap_or(text),
+                                    &result.source_language,
+                                )?;
+                                return Ok(());
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!("Failed to translate CLI message {}: {}", msg.id, e);
+                            }
                         }
                     }
                 }
