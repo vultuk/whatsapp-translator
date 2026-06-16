@@ -179,7 +179,7 @@ func (c *Client) handleEvent(evt interface{}) {
 	case *events.Presence:
 		// Online/offline status - could be useful in future
 		if c.verbose {
-			SendEvent(NewLogEvent("debug", fmt.Sprintf("Presence: %s is %s", v.From, v.Unavailable)))
+			SendEvent(NewLogEvent("debug", fmt.Sprintf("Presence: %s unavailable=%t", v.From, v.Unavailable)))
 		}
 
 	case *events.ChatPresence:

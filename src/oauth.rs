@@ -147,23 +147,12 @@ impl PendingAuthorization {
 
 /// Generate a cryptographically secure random token
 pub fn generate_token() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-        .hash(&mut hasher);
-    uuid::Uuid::new_v4().hash(&mut hasher);
-
-    // Use SHA256 for better randomness
-    let mut sha = Sha256::new();
-    sha.update(hasher.finish().to_le_bytes());
-    sha.update(uuid::Uuid::new_v4().as_bytes());
-    let hash = sha.finalize();
-    URL_SAFE_NO_PAD.encode(&hash[..])
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    let mut bytes = [0_u8; 32];
+    bytes[..16].copy_from_slice(first.as_bytes());
+    bytes[16..].copy_from_slice(second.as_bytes());
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// OAuth error types (RFC 6749 Section 4.1.2.1)

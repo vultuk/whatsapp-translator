@@ -1564,7 +1564,7 @@ class WhatsAppClient {
   async verifyToken() {
     try {
       // Try to make an authenticated request to verify token is valid
-      const response = await fetch('/api/status', {
+      const response = await this.apiFetch('/api/status', {
         headers: this.getAuthHeaders()
       });
       return response.ok;
@@ -1640,12 +1640,19 @@ class WhatsAppClient {
   }
 
   // Get auth headers for API requests
-  getAuthHeaders() {
-    const headers = {};
+  getAuthHeaders(baseHeaders = {}) {
+    const headers = { ...baseHeaders };
     if (this.authToken) {
       headers['Authorization'] = `Bearer ${this.authToken}`;
     }
     return headers;
+  }
+
+  apiFetch(url, options = {}) {
+    return fetch(url, {
+      ...options,
+      headers: this.getAuthHeaders(options.headers || {})
+    });
   }
 
   // Handle logout
@@ -1662,7 +1669,7 @@ class WhatsAppClient {
     if (!confirmed) return;
 
     try {
-      const response = await fetch('/api/logout', {
+      const response = await this.apiFetch('/api/logout', {
         method: 'POST',
         headers: this.getAuthHeaders()
       });
@@ -1734,7 +1741,8 @@ class WhatsAppClient {
     if (this.demoMode) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const tokenQuery = this.authToken ? `?token=${encodeURIComponent(this.authToken)}` : '';
+    const wsUrl = `${protocol}//${window.location.host}/ws${tokenQuery}`;
     
     this.ws = new WebSocket(wsUrl);
     
@@ -2373,7 +2381,7 @@ class WhatsAppClient {
   // Load contacts from server
   async loadContacts() {
     try {
-      const response = await fetch('/api/contacts', {
+      const response = await this.apiFetch('/api/contacts', {
         headers: this.getAuthHeaders()
       });
       this.contacts = (await response.json()).map(contact => this.applyStoredContactMetadata(contact));
@@ -2405,7 +2413,7 @@ class WhatsAppClient {
     this.avatarFetching.add(jid);
 
     try {
-      const response = await fetch(`/api/avatar/${encodeURIComponent(jid)}`, {
+      const response = await this.apiFetch(`/api/avatar/${encodeURIComponent(jid)}`, {
         headers: this.getAuthHeaders()
       });
       const data = await response.json();
@@ -2658,7 +2666,7 @@ class WhatsAppClient {
         senderJid: targetMessage.senderJid || this.getMessageSenderJid(targetMessage) || null
       } : {};
 
-      await fetch(`/api/contacts/${encodeURIComponent(contactId)}/read`, {
+      await this.apiFetch(`/api/contacts/${encodeURIComponent(contactId)}/read`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2867,7 +2875,7 @@ class WhatsAppClient {
         return;
       }
 
-      const response = await fetch(`/api/messages/${encodeURIComponent(contactId)}?limit=${this.initialMessageLimit}`, {
+      const response = await this.apiFetch(`/api/messages/${encodeURIComponent(contactId)}?limit=${this.initialMessageLimit}`, {
         headers: this.getAuthHeaders()
       });
       const data = await response.json();
@@ -2914,7 +2922,7 @@ class WhatsAppClient {
 
     try {
       this.messagesLoading.set(contactId, true);
-      const response = await fetch(`/api/messages/${encodeURIComponent(contactId)}?limit=0`, {
+      const response = await this.apiFetch(`/api/messages/${encodeURIComponent(contactId)}?limit=0`, {
         headers: this.getAuthHeaders()
       });
       const data = await response.json();
@@ -2955,7 +2963,7 @@ class WhatsAppClient {
       this.messagesLoading.set(contactId, true);
       this.showLoadingIndicator();
       
-      const response = await fetch(
+      const response = await this.apiFetch(
         `/api/messages/${encodeURIComponent(contactId)}?before=${oldestTimestamp}&limit=50`,
         {
           headers: this.getAuthHeaders()
@@ -3989,7 +3997,7 @@ class WhatsAppClient {
         requestBody.replyToSenderName = this.replyingTo?.senderName || null;
       }
       
-      const response = await fetch('/api/send', {
+      const response = await this.apiFetch('/api/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
@@ -4111,7 +4119,7 @@ class WhatsAppClient {
         requestBody.replyToSenderName = this.replyingTo?.senderName || null;
       }
       
-      const response = await fetch('/api/send-image', {
+      const response = await this.apiFetch('/api/send-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
@@ -4194,7 +4202,7 @@ class WhatsAppClient {
     }
 
     try {
-      const response = await fetch('/api/react', {
+      const response = await this.apiFetch('/api/react', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4368,10 +4376,10 @@ class WhatsAppClient {
     
     try {
       // Call the translation API
-      const response = await fetch('/api/translate', {
+      const response = await this.apiFetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           text: text,
           messageId: messageId,
           contactId: this.currentContactId
@@ -4602,7 +4610,7 @@ class WhatsAppClient {
         }
       }
       
-      const response = await fetch('/api/ai-compose', {
+      const response = await this.apiFetch('/api/ai-compose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
@@ -4676,9 +4684,9 @@ class WhatsAppClient {
         return;
       }
 
-      const response = await fetch('/api/ai-reply', {
+      const response = await this.apiFetch('/api/ai-reply', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           ...this.getAuthHeaders()
         },
@@ -5426,7 +5434,7 @@ class WhatsAppClient {
     }
 
     try {
-      const response = await fetch('/api/usage');
+      const response = await this.apiFetch('/api/usage');
       const usage = await response.json();
       this.globalUsage = usage;
       this.updateGlobalUsageDisplay();
@@ -5457,7 +5465,7 @@ class WhatsAppClient {
     }
 
     try {
-      const response = await fetch(`/api/usage/${encodeURIComponent(contactId)}`, {
+      const response = await this.apiFetch(`/api/usage/${encodeURIComponent(contactId)}`, {
         headers: this.getAuthHeaders()
       });
       const usage = await response.json();
@@ -5507,7 +5515,7 @@ class WhatsAppClient {
     this.linkPreviewFetching.add(url);
 
     try {
-      const response = await fetch(`/api/link-preview?url=${encodeURIComponent(url)}`);
+      const response = await this.apiFetch(`/api/link-preview?url=${encodeURIComponent(url)}`);
       const preview = await response.json();
       
       // Cache the result
@@ -5656,7 +5664,7 @@ class WhatsAppClient {
 
     try {
       // Fetch media from the API
-      const response = await fetch(`/api/media/${encodeURIComponent(messageId)}`);
+      const response = await this.apiFetch(`/api/media/${encodeURIComponent(messageId)}`);
       
       if (!response.ok) {
         throw new Error('Failed to load media');
@@ -5881,7 +5889,7 @@ class WhatsAppClient {
     this.settingsContactId = contactId;
     let settings = {};
     try {
-      const response = await fetch(`/api/contacts/${encodeURIComponent(contactId)}/settings`, {
+      const response = await this.apiFetch(`/api/contacts/${encodeURIComponent(contactId)}/settings`, {
         headers: this.getAuthHeaders()
       });
       if (response.ok) {
@@ -6010,7 +6018,7 @@ class WhatsAppClient {
     }
 
     try {
-      const response = await fetch(`/api/contacts/${encodeURIComponent(targetContactId)}/settings`, {
+      const response = await this.apiFetch(`/api/contacts/${encodeURIComponent(targetContactId)}/settings`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

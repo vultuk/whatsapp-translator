@@ -3,12 +3,14 @@
 //! Provides REST API endpoints and WebSocket support for real-time updates.
 
 use axum::{
+    extract::Request,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Host, Path, Query, State,
     },
     http::{header, StatusCode},
-    response::{Html, IntoResponse, Json, Redirect},
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Json, Redirect, Response},
     routing::{get, post},
     Form, Router,
 };
@@ -20,7 +22,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot, RwLock};
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tracing::{error, info, warn};
 
@@ -28,12 +29,14 @@ use crate::bridge::BridgeCommand;
 use crate::mcp::WhatsAppMcpServer;
 use crate::oauth::{
     generate_token, AccessToken, AuthorizationCode, AuthorizeRequest, OAuthError,
-    OAuthErrorResponse, OAuthMetadata, PendingAuthorization, RefreshToken, RevokeRequest,
-    TokenRequest, TokenResponse,
+    OAuthErrorResponse, PendingAuthorization, RefreshToken, RevokeRequest, TokenRequest,
+    TokenResponse,
 };
 use crate::storage::{MessageStore, StoredMessage};
 use crate::translation::TranslationService;
 use tokio::sync::mpsc;
+
+const WEB_AUTH_TOKEN_TTL_SECONDS: i64 = 12 * 60 * 60;
 
 /// Profile picture cache entry
 #[derive(Debug, Clone)]
@@ -62,8 +65,8 @@ pub struct AppState {
     pub request_id_counter: AtomicI32,
     /// Password for web interface (None = no password required)
     pub password: Option<String>,
-    /// Valid auth tokens (simple session management)
-    pub auth_tokens: RwLock<std::collections::HashSet<String>>,
+    /// Valid web auth tokens and their expiration timestamps.
+    pub auth_tokens: RwLock<HashMap<String, i64>>,
 }
 
 /// Events sent to WebSocket clients
@@ -323,7 +326,7 @@ impl AppState {
             pending_avatar_requests: RwLock::new(HashMap::new()),
             request_id_counter: AtomicI32::new(1),
             password,
-            auth_tokens: RwLock::new(std::collections::HashSet::new()),
+            auth_tokens: RwLock::new(HashMap::new()),
         })
     }
 
@@ -476,36 +479,12 @@ impl AppState {
 
 /// Create the web server router
 pub fn create_router(state: Arc<AppState>) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
     // Serve static files from the web directory
     let serve_dir = ServeDir::new(&state.web_dir);
+    let auth_state = state.clone();
 
-    Router::new()
-        .route("/", get(serve_index))
-        .route("/index.html", get(serve_index))
-        // OAuth 2.0 routes for MCP authentication
-        .route(
-            "/.well-known/oauth-authorization-server",
-            get(oauth_metadata),
-        )
-        .route(
-            "/.well-known/oauth-protected-resource",
-            get(oauth_protected_resource_metadata),
-        )
-        .route("/oauth/register", post(oauth_register))
-        .route("/oauth/authorize", get(oauth_authorize))
-        .route("/oauth/approve", post(oauth_approve))
-        .route("/oauth/token", post(oauth_token))
-        .route("/oauth/revoke", post(oauth_revoke))
-        // Auth routes (no auth required)
-        .route("/api/auth/check", get(auth_check))
-        .route("/api/auth", post(auth_login))
+    let protected_api = Router::new()
         .route("/api/logout", post(logout))
-        // API routes
         .route("/api/status", get(get_status))
         .route("/api/contacts", get(get_contacts))
         .route("/api/contacts/:contact_id/read", post(mark_contact_as_read))
@@ -528,13 +507,37 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/usage", get(get_global_usage))
         .route("/api/usage/:contact_id", get(get_conversation_usage))
         .route("/api/link-preview", get(get_link_preview))
-        // WebSocket
         .route("/ws", get(websocket_handler))
+        .route_layer(middleware::from_fn(move |req: Request, next: Next| {
+            let state = auth_state.clone();
+            async move { require_web_auth(state, req, next).await }
+        }));
+
+    Router::new()
+        .route("/", get(serve_index))
+        .route("/index.html", get(serve_index))
+        // OAuth 2.0 routes for MCP authentication
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth_metadata),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(oauth_protected_resource_metadata),
+        )
+        .route("/oauth/register", post(oauth_register))
+        .route("/oauth/authorize", get(oauth_authorize))
+        .route("/oauth/approve", post(oauth_approve))
+        .route("/oauth/token", post(oauth_token))
+        .route("/oauth/revoke", post(oauth_revoke))
+        // Auth routes (no auth required)
+        .route("/api/auth/check", get(auth_check))
+        .route("/api/auth", post(auth_login))
+        .merge(protected_api)
         // MCP (Model Context Protocol) endpoint - HTTP transport
         .route("/mcp", post(mcp_handler))
         // Serve static files
         .fallback_service(serve_dir)
-        .layer(cors)
         .with_state(state)
 }
 
@@ -577,21 +580,14 @@ async fn auth_login(
 
     // Check password
     if req.password == *expected_password {
-        // Generate a simple token (hash of password + timestamp for uniqueness)
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        let token = generate_token();
+        let expires_at = chrono::Utc::now().timestamp() + WEB_AUTH_TOKEN_TTL_SECONDS;
 
-        let mut hasher = DefaultHasher::new();
-        expected_password.hash(&mut hasher);
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-            .hash(&mut hasher);
-        let token = format!("{:x}", hasher.finish());
-
-        // Store the token
-        state.auth_tokens.write().await.insert(token.clone());
+        state
+            .auth_tokens
+            .write()
+            .await
+            .insert(token.clone(), expires_at);
 
         info!("User authenticated successfully");
         Json(AuthResponse {
@@ -611,21 +607,82 @@ async fn auth_login(
     }
 }
 
-/// Verify auth token from request header
-async fn verify_auth(state: &Arc<AppState>, auth_header: Option<&str>) -> bool {
-    // If no password is set, no auth required
+async fn require_web_auth(state: Arc<AppState>, req: Request, next: Next) -> Response {
+    let auth_header = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .map(str::to_string);
+    let websocket_token = if req.uri().path() == "/ws" {
+        token_query_param(req.uri().query())
+    } else {
+        None
+    };
+
+    if verify_auth_values(&state, auth_header.as_deref(), websocket_token.as_deref()).await {
+        next.run(req).await
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
+async fn verify_auth_values(
+    state: &Arc<AppState>,
+    auth_header: Option<&str>,
+    websocket_token: Option<&str>,
+) -> bool {
+    if verify_auth_header(state, auth_header).await {
+        return true;
+    }
+
+    if let Some(token) = websocket_token {
+        return verify_auth_token(state, token).await;
+    }
+
+    false
+}
+
+fn token_query_param(query: Option<&str>) -> Option<String> {
+    let query = query?;
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        if key == "token" {
+            urlencoding::decode(value)
+                .ok()
+                .map(|token| token.into_owned())
+        } else {
+            None
+        }
+    })
+}
+
+async fn verify_auth_header(state: &Arc<AppState>, auth_header: Option<&str>) -> bool {
     if state.password.is_none() {
         return true;
     }
 
-    // Check for valid token in header
     if let Some(header) = auth_header {
         if let Some(token) = header.strip_prefix("Bearer ") {
-            return state.auth_tokens.read().await.contains(token);
+            return verify_auth_token(state, token).await;
         }
     }
 
     false
+}
+
+async fn verify_auth_token(state: &Arc<AppState>, token: &str) -> bool {
+    if state.password.is_none() {
+        return true;
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let mut tokens = state.auth_tokens.write().await;
+    tokens.retain(|_, expires_at| *expires_at > now);
+
+    tokens
+        .get(token)
+        .map(|expires_at| *expires_at > now)
+        .unwrap_or(false)
 }
 
 /// Logout - clear all data and session
@@ -640,6 +697,18 @@ async fn logout(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             Json(serde_json::json!({
                 "success": false,
                 "error": format!("Failed to clear data: {}", e)
+            })),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = state.store.oauth_clear_all() {
+        error!("Failed to clear OAuth tokens: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to clear OAuth tokens: {}", e)
             })),
         )
             .into_response();
@@ -2510,4 +2579,100 @@ async fn mcp_handler(
     let service = create_mcp_service(store, command_tx, translator);
     // StreamableHttpService has an async handle method we can call directly
     service.handle(request).await.into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use std::path::PathBuf;
+    use tower::ServiceExt;
+
+    fn test_state(password: Option<&str>) -> (Arc<AppState>, PathBuf) {
+        let data_dir = std::env::temp_dir().join(format!(
+            "whatsapp-translator-web-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = MessageStore::new(&data_dir).expect("test message store");
+        let web_dir = std::env::current_dir()
+            .expect("current dir")
+            .join("web/public");
+        let state = AppState::new(
+            store,
+            web_dir,
+            data_dir.clone(),
+            None,
+            password.map(str::to_string),
+        );
+        (state, data_dir)
+    }
+
+    fn empty_request(uri: &str) -> HttpRequest<Body> {
+        HttpRequest::builder()
+            .uri(uri)
+            .body(Body::empty())
+            .expect("request")
+    }
+
+    #[tokio::test]
+    async fn protected_api_allows_requests_when_password_is_not_configured() {
+        let (state, data_dir) = test_state(None);
+        let response = create_router(state)
+            .oneshot(empty_request("/api/status"))
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn protected_api_rejects_missing_token_when_password_is_configured() {
+        let (state, data_dir) = test_state(Some("secret"));
+        let response = create_router(state)
+            .oneshot(empty_request("/api/status"))
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn protected_api_accepts_valid_bearer_token() {
+        let (state, data_dir) = test_state(Some("secret"));
+        let token = generate_token();
+        state
+            .auth_tokens
+            .write()
+            .await
+            .insert(token.clone(), chrono::Utc::now().timestamp() + 60);
+
+        let request = HttpRequest::builder()
+            .uri("/api/status")
+            .header(header::AUTHORIZATION, format!("Bearer {}", token))
+            .body(Body::empty())
+            .expect("request");
+
+        let response = create_router(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn websocket_route_rejects_missing_token_before_upgrade() {
+        let (state, data_dir) = test_state(Some("secret"));
+        let response = create_router(state)
+            .oneshot(empty_request("/ws"))
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
 }

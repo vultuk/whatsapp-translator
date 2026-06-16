@@ -282,13 +282,14 @@ impl MessageStore {
         // Add translation columns if they don't exist (migration for existing databases)
         self.migrate_add_translation_columns(&conn)?;
         self.migrate_add_cached_usage_column(&conn)?;
-        self.migrate_add_query_indexes(&conn)?;
 
         // Fix contact types based on JID suffix
         self.migrate_fix_contact_types(&conn)?;
 
         // Add pinned_at column for pinning contacts
         self.migrate_add_pinned_column(&conn)?;
+
+        self.migrate_add_query_indexes(&conn)?;
 
         // Add last_message_preview column and backfill it for faster contact list loads
         self.migrate_add_last_message_preview_column(&conn)?;

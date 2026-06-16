@@ -39,8 +39,8 @@ futures = "0.3"
 
 # HTTP server for web frontend
 axum = { version = "0.7", features = ["ws"] }
-tower = "0.5"
-tower-http = { version = "0.5", features = ["cors", "fs"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.5", features = ["fs"] }
 
 # HTTP client for OpenAI Responses API
 reqwest = { version = "0.12", features = ["json"] }
