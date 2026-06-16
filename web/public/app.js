@@ -4086,8 +4086,9 @@ class WhatsAppClient {
     }
 
     // Check file type
-    if (!file.type.startsWith('image/')) {
-      alert('Please select an image file.');
+    const allowedImageTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+    if (!allowedImageTypes.has(String(file.type || '').toLowerCase())) {
+      alert('Please select a JPEG, PNG, GIF, or WebP image file.');
       return;
     }
 

@@ -14,6 +14,7 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,6 +38,14 @@ use crate::translation::TranslationService;
 use tokio::sync::mpsc;
 
 const WEB_AUTH_TOKEN_TTL_SECONDS: i64 = 12 * 60 * 60;
+const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_IMAGE_BASE64_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4;
+
+#[derive(Debug, Clone)]
+struct ValidatedImagePayload {
+    mime_type: String,
+    decoded_size: usize,
+}
 
 /// Profile picture cache entry
 #[derive(Debug, Clone)]
@@ -171,6 +180,64 @@ pub struct SendImageRequest {
 pub struct SendImageResponse {
     pub message_id: String,
     pub timestamp: i64,
+}
+
+fn validate_image_payload(
+    media_data: &str,
+    mime_type: &str,
+) -> Result<ValidatedImagePayload, String> {
+    if media_data.starts_with("data:") {
+        return Err("media_data must be raw base64 without a data URL prefix".to_string());
+    }
+
+    let mime_type = normalize_image_mime_type(mime_type)?;
+    if media_data.len() > MAX_IMAGE_BASE64_BYTES {
+        return Err("Image is too large. Maximum decoded size is 16MB.".to_string());
+    }
+
+    let decoded = BASE64_STANDARD
+        .decode(media_data)
+        .map_err(|_| "media_data must be valid base64".to_string())?;
+    if decoded.is_empty() {
+        return Err("media_data must not decode to an empty image".to_string());
+    }
+    if decoded.len() > MAX_IMAGE_BYTES {
+        return Err("Image is too large. Maximum decoded size is 16MB.".to_string());
+    }
+    if !image_signature_matches(&decoded, &mime_type) {
+        return Err(format!("media_data does not match MIME type {}", mime_type));
+    }
+
+    Ok(ValidatedImagePayload {
+        mime_type,
+        decoded_size: decoded.len(),
+    })
+}
+
+fn normalize_image_mime_type(mime_type: &str) -> Result<String, String> {
+    let normalized = mime_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+
+    match normalized.as_str() {
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp" => Ok(normalized),
+        _ => Err("Unsupported image MIME type".to_string()),
+    }
+}
+
+fn image_signature_matches(decoded: &[u8], mime_type: &str) -> bool {
+    match mime_type {
+        "image/jpeg" => decoded.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/png" => decoded.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/gif" => decoded.starts_with(b"GIF87a") || decoded.starts_with(b"GIF89a"),
+        "image/webp" => {
+            decoded.len() >= 12 && decoded.starts_with(b"RIFF") && &decoded[8..12] == b"WEBP"
+        }
+        _ => false,
+    }
 }
 
 /// Send reaction request
@@ -1264,6 +1331,19 @@ async fn send_image(
             .into_response();
     }
 
+    let validated_image = match validate_image_payload(&req.media_data, &req.mime_type) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": error
+                })),
+            )
+                .into_response();
+        }
+    };
+
     // Check if connected
     if !*state.connected.read().await {
         return (
@@ -1280,7 +1360,7 @@ async fn send_image(
         request_id: None,
         to: req.contact_id.clone(),
         media_data: req.media_data.clone(),
-        mime_type: req.mime_type.clone(),
+        mime_type: validated_image.mime_type.clone(),
         caption: req.caption.clone(),
         reply_to: req.reply_to.clone(),
         reply_to_sender: req.reply_to_sender.clone(),
@@ -1326,9 +1406,10 @@ async fn send_image(
         content_type: "Image".to_string(),
         content_json: serde_json::json!({
             "type": "image",
-            "mime_type": req.mime_type,
+            "mime_type": validated_image.mime_type,
             "caption": req.caption,
             "media_data": req.media_data,
+            "file_size": validated_image.decoded_size,
             "reply_context": req.reply_to.as_ref().map(|reply_to| serde_json::json!({
                 "messageId": reply_to,
                 "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
@@ -1340,9 +1421,10 @@ async fn send_image(
         .to_string(),
         content: Some(serde_json::json!({
             "type": "image",
-            "mime_type": req.mime_type,
+            "mime_type": validated_image.mime_type,
             "caption": req.caption,
             "media_data": req.media_data,
+            "file_size": validated_image.decoded_size,
             "reply_context": req.reply_to.as_ref().map(|reply_to| serde_json::json!({
                 "messageId": reply_to,
                 "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
@@ -2729,5 +2811,48 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn image_payload_validation_accepts_valid_png() {
+        let png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+        let payload =
+            validate_image_payload(png_base64, "image/png; charset=binary").expect("valid png");
+
+        assert_eq!(payload.mime_type, "image/png");
+        assert!(payload.decoded_size > 0);
+    }
+
+    #[test]
+    fn image_payload_validation_rejects_invalid_base64() {
+        let error = validate_image_payload("not valid base64", "image/png").unwrap_err();
+        assert_eq!(error, "media_data must be valid base64");
+    }
+
+    #[test]
+    fn image_payload_validation_rejects_mime_mismatch() {
+        let png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+        let error = validate_image_payload(png_base64, "image/jpeg").unwrap_err();
+
+        assert_eq!(error, "media_data does not match MIME type image/jpeg");
+    }
+
+    #[test]
+    fn image_payload_validation_rejects_data_url_prefix() {
+        let error =
+            validate_image_payload("data:image/png;base64,iVBORw0KGgo=", "image/png").unwrap_err();
+
+        assert_eq!(
+            error,
+            "media_data must be raw base64 without a data URL prefix"
+        );
+    }
+
+    #[test]
+    fn image_payload_validation_rejects_oversized_encoded_payload() {
+        let oversized = "A".repeat(MAX_IMAGE_BASE64_BYTES + 1);
+        let error = validate_image_payload(&oversized, "image/png").unwrap_err();
+
+        assert_eq!(error, "Image is too large. Maximum decoded size is 16MB.");
     }
 }
