@@ -85,6 +85,26 @@ test('AI compose drafts generated text instead of auto-sending it', () => {
   assert.doesNotMatch(sendWithAiBody, /ClaudAI Says/);
 });
 
+test('disconnected bridge shows cached contacts instead of permanent connecting state', () => {
+  const disconnectedBody = extractMethodBody(appJs, 'handleDisconnected');
+  const cachedWorkspaceBody = extractMethodBody(appJs, 'showCachedWorkspaceDisconnected');
+
+  assert.match(disconnectedBody, /await this\.loadContacts\(\)/);
+  assert.match(disconnectedBody, /this\.contacts\.length > 0/);
+  assert.match(disconnectedBody, /this\.showCachedWorkspaceDisconnected\(\)/);
+  assert.match(disconnectedBody, /this\.showConnecting\(\)/);
+  assert.match(cachedWorkspaceBody, /main-container'\)\?\.classList\.remove\('hidden'\)/);
+  assert.match(cachedWorkspaceBody, /this\.updateConnectionIndicator\(false, 'Disconnected'\)/);
+  assert.match(cachedWorkspaceBody, /WhatsApp disconnected/);
+  assert.match(cachedWorkspaceBody, /Cached inbox available/);
+});
+
+test('composer send controls require a live bridge connection', () => {
+  const updateSendButtonBody = extractMethodBody(appJs, 'updateSendButton');
+
+  assert.match(updateSendButtonBody, /this\.currentContactId && this\.connected/);
+});
+
 test('static and generated markup do not use inline event attributes', () => {
   const renderedSources = `${indexHtml}\n${appJs}`;
 

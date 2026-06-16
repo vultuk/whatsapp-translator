@@ -1912,7 +1912,7 @@ class WhatsAppClient {
   handleMessage(data) {
     switch (data.type) {
       case 'status':
-        this.handleStatus(data);
+        void this.handleStatus(data);
         break;
       
       case 'qr':
@@ -1924,7 +1924,7 @@ class WhatsAppClient {
         break;
       
       case 'disconnected':
-        this.handleDisconnected();
+        void this.handleDisconnected();
         break;
       
       case 'message':
@@ -1970,12 +1970,20 @@ class WhatsAppClient {
   }
 
   // Handle status update
-  handleStatus(data) {
+  async handleStatus(data) {
     if (data.connected) {
       this.handleConnected(data);
     } else {
-      // Show connecting overlay
-      this.showConnecting();
+      await this.handleDisconnected();
+    }
+  }
+
+  updateConnectionIndicator(connected, label) {
+    const statusDot = document.querySelector('.status-dot');
+    const statusText = document.querySelector('#status-indicator span:last-child');
+    statusDot?.classList.toggle('connected', connected);
+    if (statusText && label) {
+      statusText.textContent = label;
     }
   }
 
@@ -1983,9 +1991,39 @@ class WhatsAppClient {
   showConnecting() {
     if (this.demoMode) return;
 
+    this.updateConnectionIndicator(false, 'Connecting');
     document.getElementById('qr-overlay').classList.add('hidden');
     document.getElementById('connecting-overlay').classList.remove('hidden');
     document.getElementById('main-container').classList.add('hidden');
+  }
+
+  showCachedWorkspaceDisconnected() {
+    document.getElementById('qr-overlay')?.classList.add('hidden');
+    document.getElementById('connecting-overlay')?.classList.add('hidden');
+    document.getElementById('main-container')?.classList.remove('hidden');
+    this.updateConnectionIndicator(false, 'Disconnected');
+
+    const userName = document.getElementById('user-name');
+    const userInitial = document.getElementById('user-initial');
+    const userPhone = document.getElementById('user-phone');
+    if (userName && userName.textContent === 'Loading...') {
+      userName.textContent = 'WhatsApp disconnected';
+    }
+    if (userInitial && userInitial.textContent === '?') {
+      userInitial.textContent = '!';
+    }
+    if (userPhone && !userPhone.textContent) {
+      userPhone.textContent = 'Cached inbox available';
+    }
+
+    if (!this.currentContactId) {
+      document.getElementById('no-chat-selected')?.classList.remove('hidden');
+      document.getElementById('chat-view')?.classList.add('hidden');
+      document.getElementById('main-container')?.classList.remove('chat-open');
+    }
+
+    this.updateSendButton();
+    this.renderVisitorDashboard();
   }
 
   // Show QR code
@@ -2052,8 +2090,7 @@ class WhatsAppClient {
     }
     
     // Update status indicator
-    const statusDot = document.querySelector('.status-dot');
-    statusDot.classList.add('connected');
+    this.updateConnectionIndicator(true, 'Connected');
     
     // Load contacts
     this.loadContacts();
@@ -2063,15 +2100,17 @@ class WhatsAppClient {
   }
 
   // Handle disconnected state
-  handleDisconnected() {
+  async handleDisconnected() {
     if (this.demoMode) return;
 
     this.connected = false;
-    
-    const statusDot = document.querySelector('.status-dot');
-    statusDot.classList.remove('connected');
-    
-    this.showConnecting();
+
+    const loadedContacts = await this.loadContacts();
+    if (loadedContacts && this.contacts.length > 0) {
+      this.showCachedWorkspaceDisconnected();
+    } else {
+      this.showConnecting();
+    }
   }
 
   // Handle new message
@@ -2529,8 +2568,10 @@ class WhatsAppClient {
       this.contacts = (await response.json()).map(contact => this.applyStoredContactMetadata(contact));
       this.syncInboxControls();
       this.renderContacts();
+      return true;
     } catch (err) {
       console.error('Failed to load contacts:', err);
+      return false;
     }
   }
 
@@ -4744,7 +4785,7 @@ class WhatsAppClient {
     const input = document.getElementById('message-input');
     const sendButton = document.getElementById('send-button');
     const dropdownToggle = document.getElementById('send-dropdown-toggle');
-    const hasContent = input.value.trim() && this.currentContactId;
+    const hasContent = input.value.trim() && this.currentContactId && this.connected;
     
     sendButton.disabled = !hasContent;
     if (dropdownToggle) {
