@@ -1,5 +1,5 @@
 # Build stage for Go bridge
-FROM golang:1.24-bookworm AS go-builder
+FROM golang:1.26-bookworm AS go-builder
 
 # Install C compiler for CGO (required by go-sqlite3)
 RUN apt-get update && apt-get install -y --no-install-recommends \
