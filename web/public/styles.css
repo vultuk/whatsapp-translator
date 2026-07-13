@@ -3385,8 +3385,7 @@ select {
   white-space: nowrap;
 }
 
-.chat-search-clear,
-.draft-clear-button {
+.chat-search-clear {
   border: none;
   background: transparent;
   color: var(--accent-color);
@@ -3397,19 +3396,6 @@ select {
 
 .star-toggle.active {
   color: #f6c445;
-}
-
-.draft-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(var(--accent-rgb), 0.12);
-  color: var(--text-primary);
-  font-size: 13px;
 }
 
 .composer-assist {
@@ -3615,11 +3601,6 @@ select {
   .chat-search-count {
     order: 3;
     width: 100%;
-  }
-
-  .draft-banner {
-    align-items: flex-start;
-    flex-direction: column;
   }
 
   .composer-assist {

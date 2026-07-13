@@ -85,6 +85,17 @@ test('AI compose drafts generated text instead of auto-sending it', () => {
   assert.doesNotMatch(sendWithAiBody, /ClaudAI Says/);
 });
 
+test('drafts persist silently without a composer banner', () => {
+  const draftInputBody = extractMethodBody(appJs, 'handleDraftInput');
+  const restoreDraftBody = extractMethodBody(appJs, 'restoreDraftForCurrentContact');
+
+  assert.match(draftInputBody, /this\.persistDrafts\(\)/);
+  assert.match(restoreDraftBody, /getDraftText\(this\.drafts, this\.currentContactId\)/);
+  assert.doesNotMatch(indexHtml, /id="draft-banner"/);
+  assert.doesNotMatch(indexHtml, /Discard draft/);
+  assert.doesNotMatch(appJs, /updateDraftBanner|draft-clear-button/);
+});
+
 test('disconnected bridge shows cached contacts instead of permanent connecting state', () => {
   const disconnectedBody = extractMethodBody(appJs, 'handleDisconnected');
   const cachedWorkspaceBody = extractMethodBody(appJs, 'showCachedWorkspaceDisconnected');

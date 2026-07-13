@@ -164,7 +164,6 @@ class WhatsAppClient {
     this.setupVisualViewport();
     this.updateNotificationPrompt();
     this.setupNotificationPermissionRequest();
-    this.updateDraftBanner();
     this.renderQuickReplies();
     this.updateConversationMenuUI();
     this.updateStarredToggleUI();
@@ -448,7 +447,6 @@ class WhatsAppClient {
     this.syncInboxControls();
     this.restoreDraftForCurrentContact();
     this.updateSendButton();
-    this.updateDraftBanner();
     this.renderQuickReplies();
     this.renderContacts();
     this.updateChatHeaderNote();
@@ -1054,7 +1052,6 @@ class WhatsAppClient {
     this.syncInboxControls();
     this.renderContacts();
     this.updateGlobalUsageDisplay();
-    this.updateDraftBanner();
     this.renderQuickReplies();
     this.renderVisitorDashboard();
     this.updateWorkspaceUI();
@@ -2956,7 +2953,6 @@ class WhatsAppClient {
       // Re-render contacts to update active state and unread
       this.scheduleRenderContacts();
       this.restoreDraftForCurrentContact();
-      this.updateDraftBanner();
       this.renderQuickReplies();
       this.closeConversationMenu();
       document.getElementById('chat-search-bar')?.classList.add('hidden');
@@ -3866,48 +3862,11 @@ class WhatsAppClient {
     const input = document.getElementById('message-input');
     this.drafts = upsertDraft(this.drafts, this.currentContactId, input?.value || '');
     this.persistDrafts();
-    this.updateDraftBanner();
     this.renderQuickReplies();
     this.renderComposerAssist();
     this.scheduleRenderContacts();
     this.updateChatHeaderNote();
     this.renderConversationWorkspace();
-  }
-
-  clearCurrentDraft() {
-    if (!this.currentContactId) return;
-
-    this.drafts = upsertDraft(this.drafts, this.currentContactId, '');
-    this.persistDrafts();
-
-    const input = document.getElementById('message-input');
-    if (input) {
-      input.value = '';
-      this.autoResizeTextarea(input);
-    }
-
-    this.updateDraftBanner();
-    this.renderQuickReplies();
-    this.renderComposerAssist();
-    this.updateSendButton();
-    this.scheduleRenderContacts();
-    this.updateChatHeaderNote();
-    this.renderConversationWorkspace();
-  }
-
-  updateDraftBanner() {
-    const banner = document.getElementById('draft-banner');
-    const text = document.getElementById('draft-banner-text');
-    if (!banner || !text) return;
-
-    const preview = this.currentContactId ? getDraftPreview(this.drafts, this.currentContactId, 80) : '';
-    if (!preview) {
-      banner.classList.add('hidden');
-      return;
-    }
-
-    text.textContent = `${preview} · Restored automatically when you return.`;
-    banner.classList.remove('hidden');
   }
 
   toggleConversationMenu() {
@@ -4179,7 +4138,6 @@ class WhatsAppClient {
       input.value = '';
       this.drafts = upsertDraft(this.drafts, this.currentContactId, '');
       this.persistDrafts();
-      this.updateDraftBanner();
       this.renderQuickReplies();
       this.clearReply();
       this.updateSendButton();
@@ -4245,7 +4203,6 @@ class WhatsAppClient {
       input.value = '';
       this.drafts = upsertDraft(this.drafts, this.currentContactId, '');
       this.persistDrafts();
-      this.updateDraftBanner();
       this.renderQuickReplies();
       this.clearReply();
       this.updateSendButton();
@@ -5329,10 +5286,6 @@ class WhatsAppClient {
       this.sendWithAI();
     });
 
-    document.getElementById('draft-clear-button')?.addEventListener('click', () => {
-      this.clearCurrentDraft();
-    });
-
     document.getElementById('quick-reply-save')?.addEventListener('click', () => {
       this.saveCurrentDraftAsQuickReply();
     });
@@ -5611,7 +5564,6 @@ class WhatsAppClient {
     if (this.isMobile()) {
       this.workspaceExpanded = false;
     }
-    this.updateDraftBanner();
     this.renderQuickReplies();
     this.updateStarredToggleUI();
     this.updateChatSearchUI();
