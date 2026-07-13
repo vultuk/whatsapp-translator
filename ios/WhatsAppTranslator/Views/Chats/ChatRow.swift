@@ -30,6 +30,11 @@ struct ChatRow: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 6)
+                    if contact.pinnedAt != nil {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                     if contact.unreadCount > 0 {
                         Text("\(contact.unreadCount)")
                             .font(.caption2.bold())

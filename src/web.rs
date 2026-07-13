@@ -562,6 +562,31 @@ impl AppState {
         let Some(client) = &self.push_notifications else {
             return;
         };
+        let reaction_target = if message.content_type.eq_ignore_ascii_case("reaction") {
+            message
+                .content
+                .as_ref()
+                .and_then(|content| content.get("target_message_id"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(
+                    |message_id| match self.store.get_message_by_id(message_id) {
+                        Ok(target) => target,
+                        Err(error) => {
+                            warn!("Failed to load reaction target for push notification: {error}");
+                            None
+                        }
+                    },
+                )
+        } else {
+            None
+        };
+        if !should_send_push_notification(message, reaction_target.as_ref()) {
+            tracing::debug!(
+                "Skipping reaction push because its target was not sent by the user: {}",
+                message.id
+            );
+            return;
+        }
         let devices = match self.store.list_push_devices() {
             Ok(devices) => devices,
             Err(error) => {
@@ -594,16 +619,6 @@ impl AppState {
             .ok()
             .flatten(),
             None => None,
-        };
-        let reaction_target = if message.content_type.eq_ignore_ascii_case("reaction") {
-            message
-                .content
-                .as_ref()
-                .and_then(|content| content.get("target_message_id"))
-                .and_then(serde_json::Value::as_str)
-                .and_then(|message_id| self.store.get_message_by_id(message_id).ok().flatten())
-        } else {
-            None
         };
         let notification = PushNotification::from_message_with_context(
             message,
@@ -828,6 +843,14 @@ impl AppState {
             );
         }
     }
+}
+
+fn should_send_push_notification(
+    message: &StoredMessage,
+    reaction_target: Option<&StoredMessage>,
+) -> bool {
+    !message.content_type.eq_ignore_ascii_case("reaction")
+        || reaction_target.is_some_and(|target| target.is_from_me)
 }
 
 fn normalize_bridge_timestamp_millis(timestamp: Option<i64>) -> Option<i64> {
@@ -3894,6 +3917,32 @@ mod tests {
             source_language: None,
             is_translated: false,
         }
+    }
+
+    #[test]
+    fn reaction_push_notifications_require_a_message_sent_by_the_user() {
+        let outgoing_target = test_outgoing_message("outgoing", 1_700_000_000_000);
+        let mut incoming_target = test_outgoing_message("incoming", 1_700_000_000_001);
+        incoming_target.is_from_me = false;
+        let mut reaction = test_outgoing_message("reaction", 1_700_000_000_002);
+        reaction.is_from_me = false;
+        reaction.content_type = "Reaction".to_string();
+        reaction.content = Some(serde_json::json!({
+            "type": "reaction",
+            "emoji": "❤️",
+            "target_message_id": "outgoing",
+        }));
+
+        assert!(should_send_push_notification(
+            &reaction,
+            Some(&outgoing_target)
+        ));
+        assert!(!should_send_push_notification(
+            &reaction,
+            Some(&incoming_target)
+        ));
+        assert!(!should_send_push_notification(&reaction, None));
+        assert!(should_send_push_notification(&incoming_target, None));
     }
 
     #[test]

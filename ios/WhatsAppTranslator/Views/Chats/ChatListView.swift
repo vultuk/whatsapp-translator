@@ -19,6 +19,25 @@ struct ChatListView: View {
                             avatarURL: session.avatarURLs[contact.id]
                         )
                     }
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                        Button {
+                            Task { await session.togglePin(contact) }
+                        } label: {
+                            Label(
+                                contact.pinnedAt == nil ? "Pin" : "Unpin",
+                                systemImage: contact.pinnedAt == nil ? "pin" : "pin.slash"
+                            )
+                        }
+                        .tint(palette.accent)
+                    }
+                    .contextMenu {
+                        Button(
+                            contact.pinnedAt == nil ? "Pin conversation" : "Unpin conversation",
+                            systemImage: contact.pinnedAt == nil ? "pin" : "pin.slash"
+                        ) {
+                            Task { await session.togglePin(contact) }
+                        }
+                    }
                     .task { await session.loadAvatar(for: contact.id) }
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)

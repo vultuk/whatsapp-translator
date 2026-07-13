@@ -270,6 +270,63 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(outgoing.availableActions, [.reply, .star, .react])
     }
 
+    func testSwipeToReplyRequiresADeliberateHorizontalGesture() {
+        XCTAssertFalse(MessageSwipeReply.shouldReply(translation: CGSize(width: 42, height: 3)))
+        XCTAssertTrue(MessageSwipeReply.shouldReply(translation: CGSize(width: 64, height: 4)))
+        XCTAssertFalse(MessageSwipeReply.shouldReply(translation: CGSize(width: 70, height: 80)))
+        XCTAssertFalse(MessageSwipeReply.shouldReply(translation: CGSize(width: -80, height: 2)))
+    }
+
+    func testSwipeToReplyOffsetIgnoresVerticalAndLeftwardDragsAndClampsItsReveal() {
+        XCTAssertEqual(MessageSwipeReply.offset(translation: CGSize(width: -20, height: 0)), 0)
+        XCTAssertEqual(MessageSwipeReply.offset(translation: CGSize(width: 30, height: 40)), 0)
+        XCTAssertEqual(MessageSwipeReply.offset(translation: CGSize(width: 35, height: 2)), 35)
+        XCTAssertEqual(MessageSwipeReply.offset(translation: CGSize(width: 120, height: 2)), 72)
+    }
+
+    @MainActor
+    func testPinnedContactsStayAboveUnpinnedChatsInPinOrder() {
+        let recent = Contact(
+            id: "recent",
+            name: "Recent",
+            phone: nil,
+            type: "private",
+            lastMessageTime: 300,
+            unreadCount: 0,
+            pinnedAt: nil,
+            lastMessagePreview: nil
+        )
+        let secondPinned = Contact(
+            id: "second-pinned",
+            name: "Second pinned",
+            phone: nil,
+            type: "private",
+            lastMessageTime: 200,
+            unreadCount: 0,
+            pinnedAt: 200,
+            lastMessagePreview: nil
+        )
+        let firstPinned = Contact(
+            id: "first-pinned",
+            name: "First pinned",
+            phone: nil,
+            type: "private",
+            lastMessageTime: 100,
+            unreadCount: 0,
+            pinnedAt: 100,
+            lastMessagePreview: nil
+        )
+
+        XCTAssertEqual(
+            AppSession.orderedContacts([recent, secondPinned, firstPinned]).map(\.id),
+            ["first-pinned", "second-pinned", "recent"]
+        )
+        XCTAssertEqual(
+            APIClient.pinPath(contactID: "family/parents@g.us"),
+            "/api/contacts/family%2Fparents@g.us/pin"
+        )
+    }
+
     func testMessageExtractsEveryLinkForMultiplePreviewCards() throws {
         let message = try decodeMessage(
             id: "links",

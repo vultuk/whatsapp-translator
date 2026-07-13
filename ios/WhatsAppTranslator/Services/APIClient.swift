@@ -53,6 +53,19 @@ actor APIClient {
         try await authorizedRequest("/api/contacts")
     }
 
+    static func pinPath(contactID: String) -> String {
+        "/api/contacts/\(contactID.urlPathEncoded)/pin"
+    }
+
+    func togglePin(contactID: String) async throws -> Bool {
+        let response: PinResponse = try await authorizedRequest(
+            Self.pinPath(contactID: contactID),
+            method: "POST"
+        )
+        guard response.success else { throw APIError.server("Couldn’t update the pinned conversation.") }
+        return response.pinned
+    }
+
     func avatar(contactID: String) async throws -> URL? {
         let response: AvatarResponse = try await authorizedRequest("/api/avatar/\(contactID.urlPathEncoded)")
         return response.url
@@ -326,6 +339,10 @@ enum APIError: LocalizedError, Equatable {
 
 private struct HealthResponse: Decodable, Sendable { let ok: Bool }
 private struct SuccessResponse: Decodable, Sendable { let success: Bool }
+private struct PinResponse: Decodable, Sendable {
+    let success: Bool
+    let pinned: Bool
+}
 private struct ErrorResponse: Decodable, Sendable { let error: String }
 private struct EmptyMarkReadRequest: Encodable, Sendable {}
 

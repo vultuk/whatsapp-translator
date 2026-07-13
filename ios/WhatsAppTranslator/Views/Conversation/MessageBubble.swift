@@ -1,4 +1,20 @@
 import SwiftUI
+import UIKit
+
+enum MessageSwipeReply {
+    static let triggerDistance: CGFloat = 56
+    static let maximumReveal: CGFloat = 72
+
+    static func offset(translation: CGSize) -> CGFloat {
+        guard translation.width > 0,
+              abs(translation.width) > abs(translation.height) else { return 0 }
+        return min(translation.width, maximumReveal)
+    }
+
+    static func shouldReply(translation: CGSize) -> Bool {
+        offset(translation: translation) >= triggerDistance
+    }
+}
 
 struct MessageBubble: View {
     @Environment(\.translatorPalette) private var palette
@@ -18,102 +34,137 @@ struct MessageBubble: View {
     let retryMedia: () -> Void
     @State private var showAlternate = false
     @State private var showActions = false
+    @State private var demoSwipeOffset: CGFloat = 0
+    @GestureState private var swipeTranslation: CGSize = .zero
+
+    private var swipeOffset: CGFloat {
+        max(demoSwipeOffset, MessageSwipeReply.offset(translation: swipeTranslation))
+    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if message.isFromMe { Spacer(minLength: 52) }
-            VStack(alignment: .leading, spacing: 6) {
-                if !message.isFromMe, message.chatType == "group", let sender = message.senderName {
-                    Text(sender)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.deepAccent)
-                }
-                if let reply = message.content?.replyContext {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(reply.senderName ?? "Reply")
+            ZStack(alignment: .leading) {
+                Image(systemName: "arrowshape.turn.up.left.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(palette.deepAccent)
+                    .frame(width: 34, height: 34)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .offset(x: 6)
+                    .scaleEffect(0.75 + min(swipeOffset / MessageSwipeReply.triggerDistance, 1) * 0.25)
+                    .opacity(min(swipeOffset / 32, 1))
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    if !message.isFromMe, message.chatType == "group", let sender = message.senderName {
+                        Text(sender)
                             .font(.caption.weight(.semibold))
-                        Text(reply.text ?? "")
-                            .font(.caption)
-                            .lineLimit(2)
+                            .foregroundStyle(palette.deepAccent)
                     }
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
-                }
+                    if let reply = message.content?.replyContext {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(reply.senderName ?? "Reply")
+                                .font(.caption.weight(.semibold))
+                            Text(reply.text ?? "")
+                                .font(.caption)
+                                .lineLimit(2)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                    }
 
-                RichMessageContentView(
-                    message: message,
-                    displayText: showAlternate ? (message.alternateText ?? message.displayText) : message.displayText,
-                    image: image,
-                    mediaURL: mediaURL,
-                    isLoading: mediaIsLoading,
-                    failed: mediaFailed,
-                    retry: retryMedia
-                )
+                    RichMessageContentView(
+                        message: message,
+                        displayText: showAlternate ? (message.alternateText ?? message.displayText) : message.displayText,
+                        image: image,
+                        mediaURL: mediaURL,
+                        isLoading: mediaIsLoading,
+                        failed: mediaFailed,
+                        retry: retryMedia
+                    )
 
-                ForEach(linkPreviews, id: \.url) { preview in
-                    LinkPreviewCard(preview: preview)
-                }
+                    ForEach(linkPreviews, id: \.url) { preview in
+                        LinkPreviewCard(preview: preview)
+                    }
 
-                if let reactions = message.reactions, !reactions.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(reactions.keys.sorted(), id: \.self) { emoji in
-                            Text("\(emoji) \(reactions[emoji]?.count ?? 0)")
-                                .font(.caption2.weight(.medium))
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(.ultraThinMaterial, in: Capsule())
+                    if let reactions = message.reactions, !reactions.isEmpty {
+                        HStack(spacing: 4) {
+                            ForEach(reactions.keys.sorted(), id: \.self) { emoji in
+                                Text("\(emoji) \(reactions[emoji]?.count ?? 0)")
+                                    .font(.caption2.weight(.medium))
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
                         }
                     }
-                }
 
-                HStack(spacing: 4) {
-                    if message.isTranslated {
-                        Button(showAlternate ? "Original" : "Translated", systemImage: "character.bubble") {
-                            withAnimation(.snappy) { showAlternate.toggle() }
+                    HStack(spacing: 4) {
+                        if message.isTranslated {
+                            Button(showAlternate ? "Original" : "Translated", systemImage: "character.bubble") {
+                                withAnimation(.snappy) { showAlternate.toggle() }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        if isBusy { ProgressView().controlSize(.mini) }
+                        Spacer(minLength: 4)
+                        if isStarred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
+                        Text(message.date.formatted(date: .omitted, time: .shortened))
+                        if message.isFromMe { Image(systemName: "checkmark.done") }
+                        Button(showActions ? "Hide" : "Actions", systemImage: "ellipsis.circle") {
+                            withAnimation(.snappy) { showActions.toggle() }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityHint("Reply, translate, star or react")
                     }
-                    if isBusy { ProgressView().controlSize(.mini) }
-                    Spacer(minLength: 4)
-                    if isStarred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
-                    Text(message.date.formatted(date: .omitted, time: .shortened))
-                    if message.isFromMe { Image(systemName: "checkmark.done") }
-                    Button(showActions ? "Hide" : "Actions", systemImage: "ellipsis.circle") {
-                        withAnimation(.snappy) { showActions.toggle() }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Reply, translate, star or react")
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
 
-                if showActions {
-                    visibleActionStrip
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    if showActions {
+                        visibleActionStrip
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(
-                message.isFromMe ? palette.outgoingBubble : palette.incomingBubble,
-                in: UnevenRoundedRectangle(
-                    topLeadingRadius: message.isFromMe ? 17 : 4,
-                    bottomLeadingRadius: 17,
-                    bottomTrailingRadius: 17,
-                    topTrailingRadius: message.isFromMe ? 4 : 17,
-                    style: .continuous
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(
+                    message.isFromMe ? palette.outgoingBubble : palette.incomingBubble,
+                    in: UnevenRoundedRectangle(
+                        topLeadingRadius: message.isFromMe ? 17 : 4,
+                        bottomLeadingRadius: 17,
+                        bottomTrailingRadius: 17,
+                        topTrailingRadius: message.isFromMe ? 4 : 17,
+                        style: .continuous
+                    )
                 )
+                .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
+                .contextMenu { actionMenu }
+                .offset(x: swipeOffset)
+            }
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 12)
+                    .updating($swipeTranslation) { value, state, _ in
+                        state = value.translation
+                    }
+                    .onEnded { value in
+                        guard MessageSwipeReply.shouldReply(translation: value.translation) else { return }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        reply()
+                    }
             )
-            .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
-            .contextMenu { actionMenu }
+            .accessibilityAction(named: "Reply") { reply() }
             if !message.isFromMe { Spacer(minLength: 52) }
         }
         .frame(maxWidth: .infinity)
         .task {
             if ProcessInfo.processInfo.arguments.contains("-demoActions"), message.id == "4" {
                 showActions = true
+            }
+            if ProcessInfo.processInfo.arguments.contains("-demoSwipeReplyReveal"), message.id == "4" {
+                demoSwipeOffset = MessageSwipeReply.triggerDistance
             }
         }
     }

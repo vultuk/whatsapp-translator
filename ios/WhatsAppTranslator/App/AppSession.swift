@@ -65,10 +65,30 @@ final class AppSession {
 
     var filteredContacts: [Contact] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return contacts }
-        return contacts.filter {
+        let ordered = Self.orderedContacts(contacts)
+        guard !query.isEmpty else { return ordered }
+        return ordered.filter {
             displayName(for: $0).localizedCaseInsensitiveContains(query)
                 || ($0.lastMessagePreview?.localizedCaseInsensitiveContains(query) ?? false)
+        }
+    }
+
+    static func orderedContacts(_ contacts: [Contact]) -> [Contact] {
+        contacts.sorted { first, second in
+            switch (first.pinnedAt, second.pinnedAt) {
+            case let (firstPinned?, secondPinned?):
+                if firstPinned != secondPinned { return firstPinned < secondPinned }
+            case (.some, .none):
+                return true
+            case (.none, .some):
+                return false
+            case (.none, .none):
+                break
+            }
+            if first.lastMessageTime != second.lastMessageTime {
+                return first.lastMessageTime > second.lastMessageTime
+            }
+            return first.id < second.id
         }
     }
 
@@ -178,6 +198,36 @@ final class AppSession {
         defer { avatarRequests.remove(contactID) }
         if let url = try? await api.avatar(contactID: contactID) {
             avatarURLs[contactID] = url
+        }
+    }
+
+    func togglePin(_ contact: Contact) async {
+        do {
+            let pinned: Bool
+            if demoMode {
+                pinned = contact.pinnedAt == nil
+            } else {
+                pinned = try await api.togglePin(contactID: contact.id)
+            }
+            guard let index = contacts.firstIndex(where: { $0.id == contact.id }) else { return }
+            let current = contacts[index]
+            contacts[index] = Contact(
+                id: current.id,
+                name: current.name,
+                phone: current.phone,
+                type: current.type,
+                lastMessageTime: current.lastMessageTime,
+                unreadCount: current.unreadCount,
+                pinnedAt: pinned ? Int64(Date().timeIntervalSince1970 * 1_000) : nil,
+                lastMessagePreview: current.lastMessagePreview
+            )
+            contacts = Self.orderedContacts(contacts)
+            await persistCache()
+        } catch {
+            presentError(
+                contact.pinnedAt == nil ? "Couldn’t pin conversation" : "Couldn’t unpin conversation",
+                error
+            )
         }
     }
 
@@ -591,12 +641,7 @@ final class AppSession {
             pinnedAt: old.pinnedAt,
             lastMessagePreview: preview
         )
-        contacts.sort {
-            if ($0.pinnedAt != nil) != ($1.pinnedAt != nil) {
-                return $0.pinnedAt != nil
-            }
-            return $0.lastMessageTime > $1.lastMessageTime
-        }
+        contacts = Self.orderedContacts(contacts)
     }
 
     private func persistCache() async {
