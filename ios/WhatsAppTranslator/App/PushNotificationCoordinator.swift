@@ -58,6 +58,10 @@ final class PushNotificationCoordinator {
         }
     }
 
+    func backgroundCacheDidRefresh() async {
+        _ = await session?.restoreCachedState()
+    }
+
     private func registerCurrentTokenIfPossible() async {
         guard let deviceToken, let session else { return }
         await session.registerPushDevice(
@@ -110,6 +114,32 @@ final class NotificationAppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
         PushNotificationCoordinator.shared.failedToRegister(error: error)
+    }
+
+    @MainActor
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        guard let contactID = userInfo["contactId"] as? String else {
+            completionHandler(.noData)
+            return
+        }
+
+        Task {
+            let outcome = await BackgroundMessageSynchronizer.shared.sync(contactID: contactID)
+            switch outcome {
+            case .newData:
+                await PushNotificationCoordinator.shared.backgroundCacheDidRefresh()
+                completionHandler(.newData)
+            case .noData:
+                await PushNotificationCoordinator.shared.backgroundCacheDidRefresh()
+                completionHandler(.noData)
+            case .failed:
+                completionHandler(.failed)
+            }
+        }
     }
 
     nonisolated func userNotificationCenter(

@@ -49,4 +49,90 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(payload["token"], "0123456789abcdef")
         XCTAssertEqual(payload["environment"], "sandbox")
     }
+
+    func testChatCachePersistsMessagesForTheConfiguredServer() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "WhatsAppTranslatorTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let configuration = try ServerConfiguration.make(
+            address: "https://translator.example.com",
+            password: "secret"
+        )
+        let contact = try JSONDecoder().decode(
+            Contact.self,
+            from: Data(#"{"id":"chat@g.us","name":"Family","phone":null,"type":"group","lastMessageTime":1700000000000,"unreadCount":3,"pinnedAt":null,"lastMessagePreview":"Hello"}"#.utf8)
+        )
+        let message = try JSONDecoder().decode(
+            ChatMessage.self,
+            from: Data(#"{"id":"m1","contactId":"chat@g.us","timestamp":1700000000000,"isFromMe":false,"isForwarded":false,"senderName":"Virag","senderPhone":null,"contactName":"Family","contactPhone":null,"chatType":"group","contentType":"Text","content":{"type":"text","body":"Szia"},"originalText":"Szia","translatedText":"Hello","sourceLanguage":"Hungarian","isTranslated":true}"#.utf8)
+        )
+        let store = ChatCacheStore(directoryURL: directory)
+
+        await store.save(
+            ChatCacheSnapshot(
+                serverBaseURL: configuration.baseURL.absoluteString,
+                contacts: [contact],
+                messages: [contact.id: [message]],
+                updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        )
+
+        let restored = await store.load(for: configuration)
+        XCTAssertEqual(restored?.contacts, [contact])
+        XCTAssertEqual(restored?.messages[contact.id], [message])
+    }
+
+    func testChatCacheDoesNotRestoreAnotherServer() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "WhatsAppTranslatorTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try ServerConfiguration.make(address: "https://one.example.com", password: "secret")
+        let second = try ServerConfiguration.make(address: "https://two.example.com", password: "secret")
+        let store = ChatCacheStore(directoryURL: directory)
+
+        await store.save(
+            ChatCacheSnapshot(
+                serverBaseURL: first.baseURL.absoluteString,
+                contacts: [],
+                messages: [:],
+                updatedAt: Date()
+            )
+        )
+
+        let restored = await store.load(for: second)
+        XCTAssertNil(restored)
+    }
+
+    func testOlderChatCacheWriteCannotReplaceNewerBackgroundData() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "WhatsAppTranslatorTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = try ServerConfiguration.make(
+            address: "https://translator.example.com",
+            password: "secret"
+        )
+        let store = ChatCacheStore(directoryURL: directory)
+        let newerDate = Date(timeIntervalSince1970: 1_700_000_100)
+
+        await store.save(
+            ChatCacheSnapshot(
+                serverBaseURL: configuration.baseURL.absoluteString,
+                contacts: [],
+                messages: [:],
+                updatedAt: newerDate
+            )
+        )
+        await store.save(
+            ChatCacheSnapshot(
+                serverBaseURL: configuration.baseURL.absoluteString,
+                contacts: [],
+                messages: [:],
+                updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        )
+
+        let restored = await store.load(for: configuration)
+        XCTAssertEqual(restored?.updatedAt, newerDate)
+    }
 }

@@ -186,6 +186,7 @@ impl PushNotification {
                     "sound": "default",
                     "badge": badge,
                     "thread-id": message.contact_id,
+                    "content-available": 1,
                 },
                 "contactId": message.contact_id,
                 "messageId": message.id,
@@ -283,6 +284,7 @@ mod tests {
         assert_eq!(notification.payload["aps"]["alert"]["subtitle"], "Virág");
         assert_eq!(notification.payload["aps"]["alert"]["body"], "Hello");
         assert_eq!(notification.payload["aps"]["badge"], 7);
+        assert_eq!(notification.payload["aps"]["content-available"], 1);
         assert_eq!(notification.payload["contactId"], "family@g.us");
         assert_eq!(notification.payload["messageId"], "message-1");
     }

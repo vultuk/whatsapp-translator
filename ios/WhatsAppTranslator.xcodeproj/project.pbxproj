@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0895BC27BCE593660C12C549 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C87A75BF6020544068175DB /* APIClient.swift */; };
 		28C3CA0F67263FDDB8B56BC6 /* DraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0305EB10787A1AFD17B0763 /* DraftStore.swift */; };
+		31D3E69573488B78D0CB06CD /* BackgroundMessageSynchronizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6FFEB6CEF1DC23D84E2D6E8 /* BackgroundMessageSynchronizer.swift */; };
 		327E3FB231D4230F733DE296 /* ConnectionSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3229E151805995BAC765CA5 /* ConnectionSetupView.swift */; };
 		3680126AAB9A4B864417221B /* AppSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B02D9A460B6438D75BA42C97 /* AppSettingsView.swift */; };
 		3CCF6B3013E9F72DC0019A99 /* ChatRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E50ABB31D617C33E5D18AB3 /* ChatRow.swift */; };
@@ -19,6 +20,7 @@
 		7F84E3537A6CA594E2BC06B6 /* ServerConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5E191235093F4FC4348DD04 /* ServerConfiguration.swift */; };
 		86EFB7940AFD49BB7F76166A /* ContactAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAEF803559BBA8F957FAD8DC /* ContactAvatar.swift */; };
 		87D82D518AC005C9DFB4211D /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64F362849BF63C72671AB9F /* ComposerView.swift */; };
+		963C9A055B94E3C97AC2D614 /* ChatCacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3962C05E7905F4A73E9D2CE6 /* ChatCacheStore.swift */; };
 		AF82ECAAAB2C67500F855E2F /* ChatListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AEC105D96EBB09CD38C98D6 /* ChatListView.swift */; };
 		B9110CE3FFDCBCD2F04DCDC1 /* ConversationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D76A610B739758653D9DE58 /* ConversationSettingsView.swift */; };
 		C54AF7DDBDFBF90FCF0671F6 /* AppSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C378B31FDDE9FBDF9DA8364 /* AppSession.swift */; };
@@ -45,6 +47,7 @@
 		34A53B26A81039B43C48A49B /* WhatsAppTranslatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhatsAppTranslatorTests.swift; sourceTree = "<group>"; };
 		36B87B06CB38D86E0649AA09 /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		38664CBA8762F693B0DE2C00 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		3962C05E7905F4A73E9D2CE6 /* ChatCacheStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCacheStore.swift; sourceTree = "<group>"; };
 		3B6DC6814404AFF8D148A0D0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		485D8A29673EDFD9E9DC6B01 /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
 		4AEC105D96EBB09CD38C98D6 /* ChatListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListView.swift; sourceTree = "<group>"; };
@@ -57,6 +60,7 @@
 		B02D9A460B6438D75BA42C97 /* AppSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsView.swift; sourceTree = "<group>"; };
 		B0305EB10787A1AFD17B0763 /* DraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStore.swift; sourceTree = "<group>"; };
 		B4BF31391B23EBC8C173DBB4 /* TranslatorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslatorTheme.swift; sourceTree = "<group>"; };
+		B6FFEB6CEF1DC23D84E2D6E8 /* BackgroundMessageSynchronizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundMessageSynchronizer.swift; sourceTree = "<group>"; };
 		C34B4E13CF3BFDA915E9AB75 /* WhatsAppTranslatorTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WhatsAppTranslatorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CAEF803559BBA8F957FAD8DC /* ContactAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactAvatar.swift; sourceTree = "<group>"; };
 		D3229E151805995BAC765CA5 /* ConnectionSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSetupView.swift; sourceTree = "<group>"; };
@@ -133,6 +137,8 @@
 			isa = PBXGroup;
 			children = (
 				9C87A75BF6020544068175DB /* APIClient.swift */,
+				B6FFEB6CEF1DC23D84E2D6E8 /* BackgroundMessageSynchronizer.swift */,
+				3962C05E7905F4A73E9D2CE6 /* ChatCacheStore.swift */,
 				6010E7F3A59C4304404C23EE /* CredentialStore.swift */,
 				B0305EB10787A1AFD17B0763 /* DraftStore.swift */,
 			);
@@ -291,6 +297,8 @@
 				735F161402677A60DE279113 /* APIModels.swift in Sources */,
 				C54AF7DDBDFBF90FCF0671F6 /* AppSession.swift in Sources */,
 				3680126AAB9A4B864417221B /* AppSettingsView.swift in Sources */,
+				31D3E69573488B78D0CB06CD /* BackgroundMessageSynchronizer.swift in Sources */,
+				963C9A055B94E3C97AC2D614 /* ChatCacheStore.swift in Sources */,
 				AF82ECAAAB2C67500F855E2F /* ChatListView.swift in Sources */,
 				3CCF6B3013E9F72DC0019A99 /* ChatRow.swift in Sources */,
 				87D82D518AC005C9DFB4211D /* ComposerView.swift in Sources */,
@@ -379,7 +387,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -456,7 +464,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;

@@ -7,6 +7,8 @@ struct CredentialStore: Sendable {
     func load() -> ServerConfiguration? {
         guard let address = read(account: "server"),
               let password = read(account: "password") else { return nil }
+        makeAvailableAfterFirstUnlock(account: "server")
+        makeAvailableAfterFirstUnlock(account: "password")
         return try? ServerConfiguration.make(address: address, password: password)
     }
 
@@ -27,11 +29,15 @@ struct CredentialStore: Sendable {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        let attributes: [String: Any] = [kSecValueData as String: data]
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
         let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
             var insert = query
             insert[kSecValueData as String] = data
+            insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let insertStatus = SecItemAdd(insert as CFDictionary, nil)
             guard insertStatus == errSecSuccess else { throw KeychainError.status(insertStatus) }
         } else if status != errSecSuccess {
@@ -60,6 +66,18 @@ struct CredentialStore: Sendable {
             kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
+    }
+
+    private func makeAvailableAfterFirstUnlock(account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        let attributes: [String: Any] = [
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
     }
 
     enum KeychainError: Error { case status(OSStatus) }

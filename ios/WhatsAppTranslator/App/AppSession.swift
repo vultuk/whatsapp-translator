@@ -27,18 +27,22 @@ final class AppSession {
     let draftStore: DraftStore
     private let api: APIClient
     private let credentials: CredentialStore
+    private let cache: ChatCacheStore
     private let demoMode: Bool
     private let demoConversationMode: Bool
     private var avatarRequests: Set<String> = []
+    private var isConnecting = false
 
     init(
         api: APIClient = APIClient(),
         credentials: CredentialStore = CredentialStore(),
+        cache: ChatCacheStore = .shared,
         draftStore: DraftStore = DraftStore(),
         demoMode: Bool = ProcessInfo.processInfo.arguments.contains("-demo")
     ) {
         self.api = api
         self.credentials = credentials
+        self.cache = cache
         self.draftStore = draftStore
         self.demoMode = demoMode
         self.demoConversationMode = ProcessInfo.processInfo.arguments.contains("-demoConversation")
@@ -62,7 +66,7 @@ final class AppSession {
             phase = .needsConfiguration
             return
         }
-        await connect(configuration: stored, remember: false)
+        await connect(configuration: stored, remember: false, restoreCached: true)
     }
 
     func connect(address: String, password: String) async {
@@ -84,6 +88,7 @@ final class AppSession {
             async let contacts = api.contacts()
             backendStatus = try await status
             self.contacts = try await contacts
+            await persistCache()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -105,6 +110,7 @@ final class AppSession {
                 contacts[index].unreadCount = 0
             }
             try? await api.markRead(contactID: contactID)
+            await persistCache()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -168,7 +174,10 @@ final class AppSession {
     }
 
     func forgetServer() {
-        Task { await api.disconnectLiveEvents() }
+        Task {
+            await api.disconnectLiveEvents()
+            await cache.clear()
+        }
         credentials.clear()
         configuration = nil
         contacts = []
@@ -179,24 +188,52 @@ final class AppSession {
         phase = .needsConfiguration
     }
 
-    private func connect(configuration: ServerConfiguration, remember: Bool) async {
-        phase = .connecting
+    private func connect(
+        configuration: ServerConfiguration,
+        remember: Bool,
+        restoreCached: Bool = false
+    ) async {
+        isConnecting = true
+        defer { isConnecting = false }
         errorMessage = nil
         self.configuration = configuration
         await api.configure(configuration)
+        var restoredCache = false
+        if restoreCached {
+            restoredCache = await restoreCachedState()
+        }
+        phase = restoredCache ? .ready : .connecting
         do {
             backendStatus = try await api.authenticate()
             if remember { try credentials.save(configuration) }
             contacts = try await api.contacts()
             phase = .ready
+            await persistCache()
             await PushNotificationCoordinator.shared.activate(for: self)
             try await api.connectLiveEvents { [weak self] event in
                 self?.handle(event)
             }
         } catch {
             errorMessage = error.localizedDescription
-            phase = .needsConfiguration
+            phase = restoredCache ? .ready : .needsConfiguration
         }
+    }
+
+    func restoreCachedState() async -> Bool {
+        guard !demoMode,
+              let configuration,
+              let snapshot = await cache.load(for: configuration) else {
+            return false
+        }
+        contacts = snapshot.contacts
+        messages = snapshot.messages
+        return true
+    }
+
+    func becameActive() async {
+        guard phase == .ready, !demoMode, !isConnecting else { return }
+        _ = await restoreCachedState()
+        await refresh()
     }
 
     func registerPushDevice(token: String, installationID: String, environment: String) async {
@@ -235,6 +272,7 @@ final class AppSession {
                 preview: message.displayText,
                 timestamp: message.timestamp
             )
+            persistCacheSoon()
         case "status":
             if let connected = event.connected {
                 backendStatus = BackendStatus(connected: connected, phone: backendStatus.phone, name: backendStatus.name)
@@ -242,6 +280,7 @@ final class AppSession {
         case "mark_as_read":
             if let id = event.chatId, let index = contacts.firstIndex(where: { $0.id == id }) {
                 contacts[index].unreadCount = 0
+                persistCacheSoon()
             }
         default:
             break
@@ -272,6 +311,29 @@ final class AppSession {
             }
             return $0.lastMessageTime > $1.lastMessageTime
         }
+    }
+
+    private func persistCache() async {
+        guard let snapshot = cacheSnapshot() else { return }
+        await cache.save(snapshot)
+    }
+
+    private func persistCacheSoon() {
+        guard let snapshot = cacheSnapshot() else { return }
+        Task { await cache.save(snapshot) }
+    }
+
+    private func cacheSnapshot() -> ChatCacheSnapshot? {
+        guard let configuration else { return nil }
+        let trimmedMessages = messages.mapValues {
+            Array($0.suffix(ChatCacheSnapshot.maximumMessagesPerChat))
+        }
+        return ChatCacheSnapshot(
+            serverBaseURL: configuration.baseURL.absoluteString,
+            contacts: contacts,
+            messages: trimmedMessages,
+            updatedAt: Date()
+        )
     }
 
     private func loadDemoData() {

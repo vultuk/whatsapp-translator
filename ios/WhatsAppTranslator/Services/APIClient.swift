@@ -21,6 +21,16 @@ actor APIClient {
         let health: HealthResponse = try await request("/api/health", authenticated: false)
         guard health.ok else { throw APIError.invalidServer }
 
+        try await prepareAuthenticatedRequests(configuration: configuration)
+        return try await status()
+    }
+
+    func prepareAuthenticatedRequests() async throws {
+        guard let configuration else { throw APIError.notConfigured }
+        try await prepareAuthenticatedRequests(configuration: configuration)
+    }
+
+    private func prepareAuthenticatedRequests(configuration: ServerConfiguration) async throws {
         let check: AuthCheckResponse = try await request("/api/auth/check", authenticated: false)
         if check.required {
             let body = try JSONEncoder.backend.encode(["password": configuration.password])
@@ -33,7 +43,6 @@ actor APIClient {
             guard response.success else { throw APIError.server(response.error ?? "Incorrect password") }
             token = response.token
         }
-        return try await status()
     }
 
     func status() async throws -> BackendStatus {
