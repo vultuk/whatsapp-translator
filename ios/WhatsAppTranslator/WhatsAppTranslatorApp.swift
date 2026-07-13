@@ -39,7 +39,7 @@ private struct RootView: View {
             }
         }
         .animation(.snappy, value: session.phase)
-        .alert("Couldn’t connect", isPresented: errorPresented) {
+        .alert(session.errorTitle, isPresented: errorPresented) {
             Button("OK") { session.errorMessage = nil }
         } message: {
             Text(session.errorMessage ?? "Something went wrong.")

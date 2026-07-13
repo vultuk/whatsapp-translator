@@ -7,8 +7,6 @@ struct AppSettingsView: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var error: String?
-    @State private var selectedTheme: AppTheme = .whatsapp
-    @State private var selectedColorMode: AppColorMode = .system
 
     private let models = [
         ("", "App defaults"),
@@ -30,12 +28,17 @@ struct AppSettingsView: View {
                 }
 
                 Section {
+                    if isLoading {
+                        HStack { Spacer(); ProgressView("Loading GPT settings…"); Spacer() }
+                    }
                     Picker("GPT model", selection: modelBinding) {
                         ForEach(models, id: \.0) { Text($0.1).tag($0.0) }
                     }
+                    .disabled(isLoading || isSaving)
                     Picker("Reasoning", selection: effortBinding) {
                         ForEach(efforts, id: \.0) { Text($0.1).tag($0.0) }
                     }
+                    .disabled(isLoading || isSaving)
                 } header: {
                     Text("OpenAI")
                 } footer: {
@@ -43,13 +46,13 @@ struct AppSettingsView: View {
                 }
 
                 Section {
-                    Picker("Theme", selection: $selectedTheme) {
+                    Picker("Theme", selection: themeBinding) {
                         ForEach(AppTheme.allCases) { theme in Text(theme.title).tag(theme) }
                     }
-                    Picker("Appearance", selection: $selectedColorMode) {
+                    Picker("Appearance", selection: colorModeBinding) {
                         ForEach(AppColorMode.allCases) { mode in Text(mode.title).tag(mode) }
                     }
-                    ThemePreview(theme: selectedTheme)
+                    ThemePreview(theme: session.preferences.theme)
                 } header: {
                     Text("Appearance")
                 } footer: {
@@ -67,12 +70,12 @@ struct AppSettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .disabled(isLoading || isSaving)
-            .overlay { if isLoading { ProgressView() } }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.fontWeight(.semibold)
+                    Button("Save GPT") { save() }
+                        .fontWeight(.semibold)
+                        .disabled(isLoading || isSaving)
                 }
             }
             .task { await load() }
@@ -90,13 +93,19 @@ struct AppSettingsView: View {
         Binding(get: { settings.reasoningEffort ?? "" }, set: { settings.reasoningEffort = $0.isEmpty ? nil : $0 })
     }
 
+    private var themeBinding: Binding<AppTheme> {
+        Binding(get: { session.preferences.theme }, set: { session.preferences.theme = $0 })
+    }
+
+    private var colorModeBinding: Binding<AppColorMode> {
+        Binding(get: { session.preferences.colorMode }, set: { session.preferences.colorMode = $0 })
+    }
+
     private var errorPresented: Binding<Bool> {
         Binding(get: { error != nil }, set: { if !$0 { error = nil } })
     }
 
     private func load() async {
-        selectedTheme = session.preferences.theme
-        selectedColorMode = session.preferences.colorMode
         do { settings = try await session.openAISettings() }
         catch { self.error = error.localizedDescription }
         isLoading = false
@@ -105,8 +114,6 @@ struct AppSettingsView: View {
     private func save() {
         isSaving = true
         Task {
-            session.preferences.theme = selectedTheme
-            session.preferences.colorMode = selectedColorMode
             do {
                 try await session.saveOpenAISettings(settings)
                 dismiss()

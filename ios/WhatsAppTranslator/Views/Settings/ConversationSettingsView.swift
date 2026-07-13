@@ -9,19 +9,33 @@ struct ConversationSettingsView: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var error: String?
+    @State private var showTimezonePicker = ProcessInfo.processInfo.arguments.contains("-demoTimezonePicker")
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     TextField("Nickname", text: presentationBinding(\.nickname))
-                    TextField("Contact timezone", text: presentationBinding(\.timezoneIdentifier))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    Button {
+                        showTimezonePicker = true
+                    } label: {
+                        HStack {
+                            Text("Contact timezone").foregroundStyle(.primary)
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text(presentation.timezoneIdentifier.map(TimezonePickerView.friendlyName) ?? "Not set")
+                                if let identifier = presentation.timezoneIdentifier {
+                                    Text(TimezonePickerView.currentTime(in: identifier)).font(.caption2)
+                                }
+                            }
+                            .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                        }
+                    }
                 } header: {
                     Text("Contact")
                 } footer: {
-                    Text("Use an IANA timezone such as Europe/Budapest. Nickname and timezone stay on this iPhone.")
+                    Text("Nickname and timezone stay on this iPhone. The timezone shows the contact’s current local time in the chat header.")
                 }
 
                 Section {
@@ -52,6 +66,9 @@ struct ConversationSettingsView: View {
             .alert("Couldn’t save settings", isPresented: errorPresented) {
                 Button("OK") { error = nil }
             } message: { Text(error ?? "Please try again.") }
+            .sheet(isPresented: $showTimezonePicker) {
+                TimezonePickerView(selection: $presentation.timezoneIdentifier)
+            }
         }
     }
 

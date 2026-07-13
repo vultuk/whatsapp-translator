@@ -6,13 +6,18 @@ struct MessageBubble: View {
     let isStarred: Bool
     let isBusy: Bool
     let image: UIImage?
-    let linkPreview: LinkPreview?
+    let mediaURL: URL?
+    let mediaIsLoading: Bool
+    let mediaFailed: Bool
+    let linkPreviews: [LinkPreview]
     let reply: () -> Void
     let translate: () -> Void
     let aiReply: () -> Void
     let toggleStar: () -> Void
     let react: (String) -> Void
+    let retryMedia: () -> Void
     @State private var showAlternate = false
+    @State private var showActions = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -37,7 +42,19 @@ struct MessageBubble: View {
                     .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
                 }
 
-                messageContent
+                RichMessageContentView(
+                    message: message,
+                    displayText: showAlternate ? (message.alternateText ?? message.displayText) : message.displayText,
+                    image: image,
+                    mediaURL: mediaURL,
+                    isLoading: mediaIsLoading,
+                    failed: mediaFailed,
+                    retry: retryMedia
+                )
+
+                ForEach(linkPreviews, id: \.url) { preview in
+                    LinkPreviewCard(preview: preview)
+                }
 
                 if let reactions = message.reactions, !reactions.isEmpty {
                     HStack(spacing: 4) {
@@ -53,17 +70,29 @@ struct MessageBubble: View {
 
                 HStack(spacing: 4) {
                     if message.isTranslated {
-                        Image(systemName: "character.bubble")
-                        Text(showAlternate ? "Original" : "Translated")
+                        Button(showAlternate ? "Original" : "Translated", systemImage: "character.bubble") {
+                            withAnimation(.snappy) { showAlternate.toggle() }
+                        }
+                        .buttonStyle(.plain)
                     }
                     if isBusy { ProgressView().controlSize(.mini) }
                     Spacer(minLength: 4)
                     if isStarred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
                     Text(message.date.formatted(date: .omitted, time: .shortened))
                     if message.isFromMe { Image(systemName: "checkmark.done") }
+                    Button(showActions ? "Hide" : "Actions", systemImage: "ellipsis.circle") {
+                        withAnimation(.snappy) { showActions.toggle() }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Reply, translate, star or react")
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+
+                if showActions {
+                    visibleActionStrip
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -78,43 +107,89 @@ struct MessageBubble: View {
                 )
             )
             .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
-            .onTapGesture {
-                guard message.alternateText != nil else { return }
-                withAnimation(.snappy) { showAlternate.toggle() }
-            }
             .contextMenu { actionMenu }
             if !message.isFromMe { Spacer(minLength: 52) }
         }
         .frame(maxWidth: .infinity)
+        .task {
+            if ProcessInfo.processInfo.arguments.contains("-demoActions"), message.id == "4" {
+                showActions = true
+            }
+        }
+    }
+
+    private var visibleActionStrip: some View {
+        HStack(spacing: 10) {
+            actionButton("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
+            if message.canTranslate {
+                actionButton("Translate", systemImage: "character.bubble", action: translate)
+            }
+            if message.canGenerateAIReply {
+                actionButton("AI reply", systemImage: "sparkles", action: aiReply)
+            }
+            actionButton(isStarred ? "Unstar" : "Star", systemImage: isStarred ? "star.fill" : "star", action: toggleStar)
+            Menu {
+                ForEach(["👍", "❤️", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
+                    Button(emoji) { react(emoji) }
+                }
+            } label: {
+                actionLabel("React", systemImage: "face.smiling")
+            }
+        }
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(palette.deepAccent)
+        .padding(.top, 2)
+    }
+
+    private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            withAnimation(.snappy) { showActions = false }
+        } label: {
+            actionLabel(title, systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
+    private func actionLabel(_ title: String, systemImage: String) -> some View {
+        VStack(spacing: 2) {
+            Image(systemName: systemImage).font(.body)
+            Text(title).lineLimit(1)
+        }
+        .frame(minWidth: 42)
     }
 
     @ViewBuilder
-    private var messageContent: some View {
-        if message.isImage {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: 280, maxHeight: 280)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            } else {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.primary.opacity(0.06))
-                        .frame(width: 220, height: 150)
-                    ProgressView()
-                }
-            }
-            if let caption = message.content?.caption, !caption.isEmpty {
-                Text(caption).font(.body)
-            }
-        } else {
-            Text(showAlternate ? (message.alternateText ?? message.displayText) : message.displayText)
-                .font(.body)
-                .textSelection(.enabled)
+    private var actionMenu: some View {
+        Button("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
+        if message.canTranslate {
+            Button("Translate", systemImage: "character.bubble", action: translate)
         }
+        if message.canGenerateAIReply {
+            Button("AI reply", systemImage: "sparkles", action: aiReply)
+        }
+        Button(isStarred ? "Remove star" : "Star", systemImage: isStarred ? "star.slash" : "star", action: toggleStar)
+        Menu("React", systemImage: "face.smiling") {
+            ForEach(["👍", "❤️", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
+                Button(emoji) { react(emoji) }
+            }
+        }
+        if message.alternateText != nil {
+            Divider()
+            Button(showAlternate ? "Show translated" : "Show original", systemImage: "arrow.left.arrow.right") {
+                showAlternate.toggle()
+            }
+        }
+    }
+}
 
-        if let preview = linkPreview, preview.error == nil {
+private struct LinkPreviewCard: View {
+    @Environment(\.translatorPalette) private var palette
+    let preview: LinkPreview
+
+    var body: some View {
+        if preview.error == nil {
             Link(destination: preview.url) {
                 HStack(spacing: 10) {
                     if let imageURL = preview.imageURL {
@@ -147,23 +222,6 @@ struct MessageBubble: View {
                 .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
             }
             .buttonStyle(.plain)
-        }
-    }
-
-    @ViewBuilder
-    private var actionMenu: some View {
-        Button("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
-        if message.canTranslate {
-            Button("Translate", systemImage: "character.bubble", action: translate)
-        }
-        if message.canGenerateAIReply {
-            Button("AI reply", systemImage: "sparkles", action: aiReply)
-        }
-        Button(isStarred ? "Remove star" : "Star", systemImage: isStarred ? "star.slash" : "star", action: toggleStar)
-        Menu("React", systemImage: "face.smiling") {
-            ForEach(["👍", "❤️", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
-                Button(emoji) { react(emoji) }
-            }
         }
     }
 }

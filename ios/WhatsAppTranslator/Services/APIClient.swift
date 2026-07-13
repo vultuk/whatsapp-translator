@@ -58,13 +58,29 @@ actor APIClient {
         return response.url
     }
 
-    func messages(contactID: String, before: Int64? = nil, beforeID: String? = nil) async throws -> MessagesResponse {
+    static func messagesPath(
+        contactID: String,
+        limit: Int = 50,
+        before: Int64? = nil,
+        beforeID: String? = nil
+    ) -> String {
         var components = URLComponents()
-        components.queryItems = [URLQueryItem(name: "limit", value: "50")]
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
         if let before { components.queryItems?.append(URLQueryItem(name: "before", value: String(before))) }
         if let beforeID { components.queryItems?.append(URLQueryItem(name: "before_id", value: beforeID)) }
         let query = components.percentEncodedQuery.map { "?\($0)" } ?? ""
-        return try await authorizedRequest("/api/messages/\(contactID.urlPathEncoded)\(query)")
+        return "/api/messages/\(contactID.urlPathEncoded)\(query)"
+    }
+
+    func messages(
+        contactID: String,
+        limit: Int = 50,
+        before: Int64? = nil,
+        beforeID: String? = nil
+    ) async throws -> MessagesResponse {
+        try await authorizedRequest(
+            Self.messagesPath(contactID: contactID, limit: limit, before: before, beforeID: beforeID)
+        )
     }
 
     func send(contactID: String, text: String, reply: MessageReplyTarget? = nil) async throws -> SendMessageResponse {

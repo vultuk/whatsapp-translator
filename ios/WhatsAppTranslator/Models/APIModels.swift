@@ -39,6 +39,22 @@ struct MessagesResponse: Decodable, Sendable {
     let hasMore: Bool
 }
 
+enum MessageMediaKind: String, Equatable, Sendable {
+    case image
+    case video
+    case audio
+    case document
+    case sticker
+}
+
+enum MessageActionKind: Equatable, Sendable {
+    case reply
+    case translate
+    case aiReply
+    case star
+    case react
+}
+
 struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let contactId: String
@@ -59,10 +75,22 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     var reactions: [String: [String]]? = nil
 
     var displayText: String {
-        if isFromMe {
-            return content?.body?.nilIfBlank ?? content?.caption?.nilIfBlank ?? originalText?.nilIfBlank ?? translatedText?.nilIfBlank ?? contentType
+        let richFallback: String? = switch normalizedContentType {
+        case "audio": content?.isVoiceNote == true ? "Voice note" : "Audio"
+        case "document": content?.fileName?.nilIfBlank ?? "Document"
+        case "sticker": "Sticker"
+        case "location": content?.name?.nilIfBlank ?? content?.address?.nilIfBlank ?? "Location"
+        case "contact": content?.displayName?.nilIfBlank ?? content?.name?.nilIfBlank ?? "Contact"
+        case "poll": content?.question?.nilIfBlank ?? "Poll"
+        case "revoked": "This message was deleted"
+        case "video": "Video"
+        case "image": "Image"
+        default: nil
         }
-        return translatedText?.nilIfBlank ?? content?.body?.nilIfBlank ?? content?.caption?.nilIfBlank ?? originalText?.nilIfBlank ?? contentType
+        if isFromMe {
+            return content?.body?.nilIfBlank ?? content?.caption?.nilIfBlank ?? originalText?.nilIfBlank ?? translatedText?.nilIfBlank ?? richFallback ?? contentType
+        }
+        return translatedText?.nilIfBlank ?? content?.body?.nilIfBlank ?? content?.caption?.nilIfBlank ?? originalText?.nilIfBlank ?? richFallback ?? contentType
     }
 
     var alternateText: String? {
@@ -72,11 +100,34 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     }
 
     var date: Date { Date(timeIntervalSince1970: TimeInterval(timestamp) / 1_000) }
-    var isReaction: Bool { content?.type?.lowercased() == "reaction" }
-    var isImage: Bool { content?.type?.lowercased() == "image" }
+    var normalizedContentType: String {
+        content?.type?.lowercased().nilIfBlank ?? contentType.lowercased()
+    }
+    var isReaction: Bool { normalizedContentType == "reaction" }
+    var mediaKind: MessageMediaKind? { MessageMediaKind(rawValue: normalizedContentType) }
+    var isImage: Bool { mediaKind == .image }
     var canTranslate: Bool { !isFromMe && !isTranslated && contentText != nil }
     var canGenerateAIReply: Bool { !isFromMe && contentText != nil }
     var contentText: String? { content?.body?.nilIfBlank ?? content?.caption?.nilIfBlank }
+    var availableActions: [MessageActionKind] {
+        var actions: [MessageActionKind] = [.reply]
+        if canTranslate { actions.append(.translate) }
+        if canGenerateAIReply { actions.append(.aiReply) }
+        actions.append(contentsOf: [.star, .react])
+        return actions
+    }
+    var locationURL: URL? {
+        guard normalizedContentType == "location",
+              let latitude = content?.latitude,
+              let longitude = content?.longitude else { return nil }
+        var components = URLComponents(string: "https://maps.apple.com/")
+        let coordinate = "\(latitude),\(longitude)"
+        components?.queryItems = [
+            URLQueryItem(name: "ll", value: coordinate),
+            URLQueryItem(name: "q", value: content?.name?.nilIfBlank ?? content?.address?.nilIfBlank ?? "Location"),
+        ]
+        return components?.url
+    }
     var senderJID: String? {
         guard let senderPhone = senderPhone?.nilIfBlank else { return nil }
         return senderPhone.contains("@") ? senderPhone : "\(senderPhone)@s.whatsapp.net"
@@ -107,17 +158,36 @@ struct MessageContent: Codable, Hashable, Sendable {
     let mediaData: String?
     let hasMedia: Bool?
     let fileSize: Int?
+    let durationSeconds: Double?
+    let isVoiceNote: Bool?
+    let fileName: String?
+    let isAnimated: Bool?
+    let latitude: Double?
+    let longitude: Double?
+    let name: String?
+    let displayName: String?
+    let vcard: String?
+    let address: String?
+    let question: String?
+    let options: [String]?
+    let rawType: String?
     let emoji: String?
     let targetMessageId: String?
     let showTranslatedPrimary: Bool?
     let replyContext: ReplyContext?
 
     enum CodingKeys: String, CodingKey {
-        case type, body, caption, emoji, showTranslatedPrimary
+        case type, body, caption, emoji, showTranslatedPrimary, latitude, longitude, name, address, question, options, vcard
         case mimeType = "mime_type"
         case mediaData = "media_data"
         case hasMedia = "has_media"
         case fileSize = "file_size"
+        case durationSeconds = "duration_seconds"
+        case isVoiceNote = "is_voice_note"
+        case fileName = "file_name"
+        case isAnimated = "is_animated"
+        case rawType = "raw_type"
+        case displayName = "display_name"
         case targetMessageId = "target_message_id"
         case replyContext = "reply_context"
     }
@@ -130,6 +200,19 @@ struct MessageContent: Codable, Hashable, Sendable {
         mediaData: String? = nil,
         hasMedia: Bool? = nil,
         fileSize: Int? = nil,
+        durationSeconds: Double? = nil,
+        isVoiceNote: Bool? = nil,
+        fileName: String? = nil,
+        isAnimated: Bool? = nil,
+        latitude: Double? = nil,
+        longitude: Double? = nil,
+        name: String? = nil,
+        displayName: String? = nil,
+        vcard: String? = nil,
+        address: String? = nil,
+        question: String? = nil,
+        options: [String]? = nil,
+        rawType: String? = nil,
         emoji: String? = nil,
         targetMessageId: String? = nil,
         showTranslatedPrimary: Bool?,
@@ -142,6 +225,19 @@ struct MessageContent: Codable, Hashable, Sendable {
         self.mediaData = mediaData
         self.hasMedia = hasMedia
         self.fileSize = fileSize
+        self.durationSeconds = durationSeconds
+        self.isVoiceNote = isVoiceNote
+        self.fileName = fileName
+        self.isAnimated = isAnimated
+        self.latitude = latitude
+        self.longitude = longitude
+        self.name = name
+        self.displayName = displayName
+        self.vcard = vcard
+        self.address = address
+        self.question = question
+        self.options = options
+        self.rawType = rawType
         self.emoji = emoji
         self.targetMessageId = targetMessageId
         self.showTranslatedPrimary = showTranslatedPrimary

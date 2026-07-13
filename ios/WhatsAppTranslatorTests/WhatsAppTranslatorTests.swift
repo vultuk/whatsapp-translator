@@ -154,6 +154,102 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(reaction.targetMessageId, "m1")
     }
 
+    func testEveryWebVisibleRichMessageTypeHasANativePresentationContract() throws {
+        let video = try decodeMessage(
+            id: "video",
+            contentType: "Video",
+            content: #"{"type":"video","caption":"At the park","mime_type":"video/mp4","has_media":true,"duration_seconds":12.5}"#
+        )
+        XCTAssertEqual(video.mediaKind, .video)
+        XCTAssertEqual(video.displayText, "At the park")
+
+        let voiceNote = try decodeMessage(
+            id: "voice",
+            contentType: "Audio",
+            content: #"{"type":"audio","mime_type":"audio/ogg","has_media":true,"is_voice_note":true,"duration_seconds":9}"#
+        )
+        XCTAssertEqual(voiceNote.mediaKind, .audio)
+        XCTAssertEqual(voiceNote.displayText, "Voice note")
+
+        let document = try decodeMessage(
+            id: "document",
+            contentType: "Document",
+            content: #"{"type":"document","mime_type":"application/pdf","has_media":true,"file_name":"travel-plan.pdf","file_size":4096}"#
+        )
+        XCTAssertEqual(document.mediaKind, .document)
+        XCTAssertEqual(document.displayText, "travel-plan.pdf")
+
+        let sticker = try decodeMessage(
+            id: "sticker",
+            contentType: "Sticker",
+            content: #"{"type":"sticker","mime_type":"image/webp","has_media":true,"is_animated":false}"#
+        )
+        XCTAssertEqual(sticker.mediaKind, .sticker)
+        XCTAssertEqual(sticker.displayText, "Sticker")
+
+        let location = try decodeMessage(
+            id: "location",
+            contentType: "Location",
+            content: #"{"type":"location","name":"Budapest Parliament","address":"Kossuth Lajos tér","latitude":47.5071,"longitude":19.0457}"#
+        )
+        XCTAssertEqual(location.displayText, "Budapest Parliament")
+        XCTAssertEqual(location.locationURL?.host(), "maps.apple.com")
+
+        let contact = try decodeMessage(
+            id: "contact",
+            contentType: "Contact",
+            content: #"{"type":"contact","display_name":"Eileen Skinner","vcard":"BEGIN:VCARD\\nTEL:+447700900123\\nEND:VCARD"}"#
+        )
+        XCTAssertEqual(contact.displayText, "Eileen Skinner")
+
+        let poll = try decodeMessage(
+            id: "poll",
+            contentType: "Poll",
+            content: #"{"type":"poll","question":"Dinner?","options":["Pizza","Curry"]}"#
+        )
+        XCTAssertEqual(poll.displayText, "Dinner?")
+        XCTAssertEqual(poll.content?.options, ["Pizza", "Curry"])
+
+        let revoked = try decodeMessage(
+            id: "revoked",
+            contentType: "Revoked",
+            content: #"{"type":"revoked"}"#
+        )
+        XCTAssertEqual(revoked.displayText, "This message was deleted")
+    }
+
+    func testCompleteConversationSearchRequestsAllMessages() {
+        XCTAssertEqual(
+            APIClient.messagesPath(contactID: "family@g.us", limit: 0),
+            "/api/messages/family@g.us?limit=0"
+        )
+    }
+
+    func testMessageActionAvailabilityMatchesVisibleControls() throws {
+        let incoming = try decodeMessage(
+            id: "incoming",
+            contentType: "Text",
+            content: #"{"type":"text","body":"Szia"}"#
+        )
+        XCTAssertEqual(incoming.availableActions, [.reply, .translate, .aiReply, .star, .react])
+
+        let outgoingData = Data(#"{"id":"outgoing","contactId":"chat@g.us","timestamp":1700000000000,"isFromMe":true,"isForwarded":false,"senderName":null,"senderPhone":"447700900123","contactName":"Family","contactPhone":null,"chatType":"group","contentType":"Text","content":{"type":"text","body":"Hello"},"originalText":null,"translatedText":null,"sourceLanguage":null,"isTranslated":false}"#.utf8)
+        let outgoing = try JSONDecoder().decode(ChatMessage.self, from: outgoingData)
+        XCTAssertEqual(outgoing.availableActions, [.reply, .star, .react])
+    }
+
+    func testMessageExtractsEveryLinkForMultiplePreviewCards() throws {
+        let message = try decodeMessage(
+            id: "links",
+            contentType: "Text",
+            content: #"{"type":"text","body":"Compare https://example.com/one and https://example.org/two"}"#
+        )
+        XCTAssertEqual(message.extractedURLs.map(\.absoluteString), [
+            "https://example.com/one",
+            "https://example.org/two",
+        ])
+    }
+
     func testSendMessageRequestEncodesReplyContext() throws {
         let request = SendMessageRequest(
             contactId: "chat@g.us",
@@ -219,5 +315,14 @@ final class WhatsAppTranslatorTests: XCTestCase {
         let normalized = AppSession(demoMode: false).normalizeMessages([target, reaction])
         XCTAssertEqual(normalized.map(\.id), ["m1"])
         XCTAssertEqual(normalized.first?.reactions?["❤️"], ["3630"])
+    }
+
+    private func decodeMessage(id: String, contentType: String, content: String) throws -> ChatMessage {
+        let data = Data(
+            """
+            {"id":"\(id)","contactId":"chat@g.us","timestamp":1700000000000,"isFromMe":false,"isForwarded":false,"senderName":"Virag","senderPhone":"3630","contactName":"Family","contactPhone":null,"chatType":"group","contentType":"\(contentType)","content":\(content),"originalText":null,"translatedText":null,"sourceLanguage":null,"isTranslated":false}
+            """.utf8
+        )
+        return try JSONDecoder().decode(ChatMessage.self, from: data)
     }
 }

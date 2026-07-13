@@ -11,6 +11,7 @@ struct ConversationView: View {
     @State private var showSearch = ProcessInfo.processInfo.arguments.contains("-demoSearch")
     @State private var messageSearch = ""
     @State private var starredOnly = false
+    @State private var usage: UsageSummary?
 
     private var messages: [ChatMessage] { session.messages[contact.id] ?? [] }
     private var visibleMessages: [ChatMessage] {
@@ -53,6 +54,17 @@ struct ConversationView: View {
                     }
                     .padding(.top, 8)
                 }
+                if session.loadingCompleteHistoryContactIDs.contains(contact.id) {
+                    HStack(spacing: 7) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading the full conversation…")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .translatorGlass(in: Capsule())
+                    .padding(.top, 8)
+                }
                 messageTimeline
                 ComposerView(
                     text: $draft,
@@ -68,27 +80,40 @@ struct ConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 9) {
-                    ContactAvatar(contact: contact, url: session.avatarURLs[contact.id], size: 34)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(session.displayName(for: contact))
-                            .font(.headline)
-                            .lineLimit(1)
-                        if let localTime = session.localTimeDescription(for: contact.id) {
-                            Text(localTime)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                Button { showSettings = true } label: {
+                    HStack(spacing: 9) {
+                        ContactAvatar(contact: contact, url: session.avatarURLs[contact.id], size: 34)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(session.displayName(for: contact))
+                                .font(.headline)
+                                .lineLimit(1)
+                            HStack(spacing: 4) {
+                                if let localTime = session.localTimeDescription(for: contact.id) { Text(localTime) }
+                                if let usage {
+                                    if session.localTimeDescription(for: contact.id) != nil { Text("·") }
+                                    Text(usage.costUsd.formatted(.currency(code: "USD").precision(.fractionLength(4))))
+                                }
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                         }
                     }
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens nickname, timezone and translation settings")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Search messages", systemImage: "magnifyingglass") {
+                    Task { await activateSearch() }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(starredOnly ? "Show all messages" : "Show starred only", systemImage: starredOnly ? "star.fill" : "star") {
+                    Task { await toggleStarredFilter() }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu("Conversation", systemImage: "ellipsis") {
-                    Button("Search messages", systemImage: "magnifyingglass") { showSearch = true }
-                    Button(starredOnly ? "Show all messages" : "Show starred only", systemImage: starredOnly ? "text.bubble" : "star") {
-                        starredOnly.toggle()
-                    }
-                    Divider()
                     Button("Conversation cost", systemImage: "dollarsign.circle") { showCost = true }
                     Button("Conversation settings", systemImage: "slider.horizontal.3") { showSettings = true }
                 }
@@ -98,6 +123,7 @@ struct ConversationView: View {
             draft = ProcessInfo.processInfo.arguments.contains("-demo") ? "" : session.draftStore.text(for: contact.id)
             await session.loadAvatar(for: contact.id)
             await session.loadMessages(for: contact.id)
+            usage = try? await session.conversationUsage(for: contact.id)
         }
         .onChange(of: draft) { _, newValue in
             session.draftStore.save(newValue, for: contact.id)
@@ -127,7 +153,7 @@ struct ConversationView: View {
                         ContentUnavailableView(
                             starredOnly ? "No starred messages" : "No messages found",
                             systemImage: starredOnly ? "star" : "magnifyingglass",
-                            description: Text(starredOnly ? "Long-press a message to star it." : "Try another search.")
+                            description: Text(starredOnly ? "Use the actions button under a message to star it." : "Try another search.")
                         )
                         .padding(.top, 80)
                     }
@@ -142,17 +168,21 @@ struct ConversationView: View {
                             isStarred: session.preferences.isStarred(messageID: message.id, contactID: contact.id),
                             isBusy: session.activeMessageActionIDs.contains(message.id),
                             image: session.messageImages[message.id],
-                            linkPreview: message.extractedURLs.first.flatMap { session.linkPreviews[$0] },
+                            mediaURL: session.messageMediaURLs[message.id],
+                            mediaIsLoading: session.mediaLoadingIDs.contains(message.id),
+                            mediaFailed: session.mediaErrorIDs.contains(message.id),
+                            linkPreviews: message.extractedURLs.compactMap { session.linkPreviews[$0] },
                             reply: { replyTarget = session.replyTarget(for: message) },
                             translate: { Task { await session.translate(message) } },
                             aiReply: { generateAIReply(to: message) },
                             toggleStar: { session.preferences.toggleStar(messageID: message.id, contactID: contact.id) },
-                            react: { emoji in Task { await session.react(to: message, emoji: emoji) } }
+                            react: { emoji in Task { await session.react(to: message, emoji: emoji) } },
+                            retryMedia: { Task { await session.retryMedia(for: message) } }
                         )
                         .id(message.id)
                         .task {
                             await session.loadMedia(for: message)
-                            if let url = message.extractedURLs.first { await session.loadLinkPreview(for: url) }
+                            for url in message.extractedURLs { await session.loadLinkPreview(for: url) }
                         }
                     }
                 }
@@ -184,13 +214,13 @@ struct ConversationView: View {
         }
     }
 
-    private func sendImage(_ data: Data, _ mimeType: String) {
+    private func sendImage(_ data: Data, _ mimeType: String, _ caption: String?) async -> Bool {
         let reply = replyTarget
-        Task {
-            if await session.sendImage(data: data, mimeType: mimeType, to: contact.id, reply: reply) {
-                replyTarget = nil
-            }
+        if await session.sendImage(data: data, mimeType: mimeType, caption: caption, to: contact.id, reply: reply) {
+            replyTarget = nil
+            return true
         }
+        return false
     }
 
     private func generateAIReply(to message: ChatMessage) {
@@ -199,6 +229,20 @@ struct ConversationView: View {
             replyTarget = session.replyTarget(for: message)
             draft = suggestion
         }
+    }
+
+    private func activateSearch() async {
+        await session.loadAllMessages(for: contact.id)
+        showSearch = true
+    }
+
+    private func toggleStarredFilter() async {
+        if starredOnly {
+            starredOnly = false
+            return
+        }
+        await session.loadAllMessages(for: contact.id)
+        starredOnly = true
     }
 }
 
@@ -265,7 +309,13 @@ private struct ConversationCostView: View {
                         LabeledContent("Output tokens", value: usage.outputTokens.formatted())
                     }
                 } else if let error {
-                    ContentUnavailableView("Couldn’t load cost", systemImage: "exclamationmark.triangle", description: Text(error))
+                    VStack(spacing: 14) {
+                        ContentUnavailableView("Couldn’t load cost", systemImage: "exclamationmark.triangle", description: Text(error))
+                        Button("Try again", systemImage: "arrow.clockwise") {
+                            Task { await load() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 } else {
                     HStack { Spacer(); ProgressView(); Spacer() }
                 }
@@ -273,10 +323,13 @@ private struct ConversationCostView: View {
             .navigationTitle(session.displayName(for: contact))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .task {
-                do { usage = try await session.conversationUsage(for: contact.id) }
-                catch { self.error = error.localizedDescription }
-            }
+            .task { await load() }
         }
+    }
+
+    private func load() async {
+        error = nil
+        do { usage = try await session.conversationUsage(for: contact.id) }
+        catch { self.error = error.localizedDescription }
     }
 }

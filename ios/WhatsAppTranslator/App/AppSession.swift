@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 import UIKit
 
 @MainActor
@@ -21,11 +22,16 @@ final class AppSession {
     var messageHistoryHasMore: [String: Bool] = [:]
     var selectedContactID: String?
     var searchText = ""
+    var errorTitle = "Something went wrong"
     var errorMessage: String?
     var isRefreshing = false
     var sendingContactIDs: Set<String> = []
     var activeMessageActionIDs: Set<String> = []
     var messageImages: [String: UIImage] = [:]
+    var messageMediaURLs: [String: URL] = [:]
+    var mediaLoadingIDs: Set<String> = []
+    var mediaErrorIDs: Set<String> = []
+    var loadingCompleteHistoryContactIDs: Set<String> = []
     var linkPreviews: [URL: LinkPreview] = [:]
 
     let draftStore: DraftStore
@@ -107,7 +113,7 @@ final class AppSession {
             let configuration = try ServerConfiguration.make(address: address, password: password)
             await connect(configuration: configuration, remember: true)
         } catch {
-            errorMessage = error.localizedDescription
+            presentError("Couldn’t connect", error)
             phase = .needsConfiguration
         }
     }
@@ -123,7 +129,7 @@ final class AppSession {
             self.contacts = try await contacts
             await persistCache()
         } catch {
-            errorMessage = error.localizedDescription
+            presentError("Couldn’t refresh chats", error)
         }
     }
 
@@ -145,7 +151,21 @@ final class AppSession {
             try? await api.markRead(contactID: contactID)
             await persistCache()
         } catch {
-            errorMessage = error.localizedDescription
+            presentError("Couldn’t load messages", error)
+        }
+    }
+
+    func loadAllMessages(for contactID: String) async {
+        guard !demoMode, !loadingCompleteHistoryContactIDs.contains(contactID) else { return }
+        loadingCompleteHistoryContactIDs.insert(contactID)
+        defer { loadingCompleteHistoryContactIDs.remove(contactID) }
+        do {
+            let response = try await api.messages(contactID: contactID, limit: 0)
+            messages[contactID] = normalizeMessages(response.messages + (messages[contactID] ?? []))
+            messageHistoryHasMore[contactID] = false
+            await persistCache()
+        } catch {
+            presentError("Couldn’t load the full conversation", error)
         }
     }
 
@@ -179,14 +199,20 @@ final class AppSession {
             await refresh()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            presentError("Couldn’t send message", error)
             return false
         }
     }
 
-    func sendImage(data: Data, mimeType: String, to contactID: String, reply: MessageReplyTarget? = nil) async -> Bool {
+    func sendImage(
+        data: Data,
+        mimeType: String,
+        caption: String? = nil,
+        to contactID: String,
+        reply: MessageReplyTarget? = nil
+    ) async -> Bool {
         guard !data.isEmpty, data.count <= 16 * 1_024 * 1_024 else {
-            errorMessage = "Images must be smaller than 16 MB."
+            presentError("Couldn’t send image", "Images must be smaller than 16 MB.")
             return false
         }
         sendingContactIDs.insert(contactID)
@@ -200,12 +226,12 @@ final class AppSession {
         }
 
         do {
-            _ = try await api.sendImage(contactID: contactID, data: data, mimeType: mimeType, reply: reply)
+            _ = try await api.sendImage(contactID: contactID, data: data, mimeType: mimeType, caption: caption, reply: reply)
             await loadMessages(for: contactID)
             await refresh()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            presentError("Couldn’t send image", error)
             return false
         }
     }
@@ -225,7 +251,7 @@ final class AppSession {
             guard result.success else { throw APIError.server(result.error ?? "Translation failed.") }
             await loadMessages(for: message.contactId)
         } catch {
-            errorMessage = error.localizedDescription
+            presentError("Couldn’t translate message", error)
         }
     }
 
@@ -241,7 +267,7 @@ final class AppSession {
             }
             return reply
         } catch {
-            errorMessage = error.localizedDescription
+            presentError("Couldn’t generate an AI reply", error)
             return nil
         }
     }
@@ -261,23 +287,43 @@ final class AppSession {
             try await api.react(to: message, emoji: emoji, senderJID: message.isFromMe ? ownSenderJID : message.senderJID)
             await loadMessages(for: message.contactId)
         } catch {
-            errorMessage = error.localizedDescription
+            presentError("Couldn’t react to message", error)
         }
     }
 
     func loadMedia(for message: ChatMessage) async {
-        guard message.isImage, messageImages[message.id] == nil, !mediaRequests.contains(message.id) else { return }
+        guard message.mediaKind != nil,
+              messageImages[message.id] == nil,
+              messageMediaURLs[message.id] == nil,
+              !mediaRequests.contains(message.id) else { return }
+        mediaErrorIDs.remove(message.id)
         if let base64 = message.content?.mediaData, let data = Data(base64Encoded: base64) {
-            messageImages[message.id] = UIImage(data: data)
+            storeMedia(data, mimeType: message.content?.mimeType, for: message)
             return
         }
         guard message.content?.hasMedia == true, !demoMode else { return }
         mediaRequests.insert(message.id)
-        defer { mediaRequests.remove(message.id) }
-        if let response = try? await api.media(messageID: message.id),
-           let data = Data(base64Encoded: response.mediaData) {
-            messageImages[message.id] = UIImage(data: data)
+        mediaLoadingIDs.insert(message.id)
+        defer {
+            mediaRequests.remove(message.id)
+            mediaLoadingIDs.remove(message.id)
         }
+        do {
+            let response = try await api.media(messageID: message.id)
+            guard let data = Data(base64Encoded: response.mediaData) else {
+                throw APIError.decoding("The media payload was invalid.")
+            }
+            storeMedia(data, mimeType: response.mimeType, for: message)
+        } catch {
+            mediaErrorIDs.insert(message.id)
+        }
+    }
+
+    func retryMedia(for message: ChatMessage) async {
+        messageImages.removeValue(forKey: message.id)
+        messageMediaURLs.removeValue(forKey: message.id)
+        mediaErrorIDs.remove(message.id)
+        await loadMedia(for: message)
     }
 
     func loadLinkPreview(for url: URL) async {
@@ -338,6 +384,9 @@ final class AppSession {
         avatarURLs = [:]
         avatarRequests = []
         messageImages = [:]
+        messageMediaURLs = [:]
+        mediaLoadingIDs = []
+        mediaErrorIDs = []
         linkPreviews = [:]
         messages = [:]
         selectedContactID = nil
@@ -370,7 +419,7 @@ final class AppSession {
                 self?.handle(event)
             }
         } catch {
-            errorMessage = error.localizedDescription
+            presentError("Couldn’t connect", error)
             phase = restoredCache ? .ready : .needsConfiguration
         }
     }
@@ -441,6 +490,44 @@ final class AppSession {
         default:
             break
         }
+    }
+
+    private func storeMedia(_ data: Data, mimeType: String?, for message: ChatMessage) {
+        switch message.mediaKind {
+        case .image, .sticker:
+            guard let image = UIImage(data: data) else {
+                mediaErrorIDs.insert(message.id)
+                return
+            }
+            messageImages[message.id] = image
+        case .video, .audio, .document:
+            let fileManager = FileManager.default
+            let directory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appending(path: "MessageMedia", directoryHint: .isDirectory)
+            do {
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+                let preferredExtension = message.content?.fileName
+                    .flatMap { URL(fileURLWithPath: $0).pathExtension.nilIfBlank }
+                    ?? mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
+                    ?? "bin"
+                let url = directory.appending(path: "\(message.id.filenameSafe).\(preferredExtension.filenameSafe)")
+                try data.write(to: url, options: .atomic)
+                messageMediaURLs[message.id] = url
+            } catch {
+                mediaErrorIDs.insert(message.id)
+            }
+        case nil:
+            break
+        }
+    }
+
+    private func presentError(_ title: String, _ error: Error) {
+        presentError(title, error.localizedDescription)
+    }
+
+    private func presentError(_ title: String, _ message: String) {
+        errorTitle = title
+        errorMessage = message
     }
 
     func normalizeMessages(_ values: [ChatMessage]) -> [ChatMessage] {
@@ -581,6 +668,7 @@ private extension ChatMessage {
             demo(id: "link", contactID: "virag@s.whatsapp.net", timestamp: 1_783_939_900_000, fromMe: false, body: "This looks lovely: https://example.com/weekend", translated: nil, sender: "Virág"),
             demoImage(contactID: "virag@s.whatsapp.net", id: "image", timestamp: 1_783_940_100_000),
             demo(id: "3", contactID: "virag@s.whatsapp.net", timestamp: 1_783_940_400_000, fromMe: false, body: "Tökéletes, akkor hat után várlak.", translated: "Perfect, I’ll be there just after six.", sender: "Virág"),
+            demo(id: "4", contactID: "virag@s.whatsapp.net", timestamp: 1_783_940_520_000, fromMe: false, body: "Még tíz perc, és indulok.", translated: nil, sender: "Virág"),
         ]
     ]
 
@@ -662,5 +750,17 @@ private extension ChatMessage {
             sourceLanguage: translated == nil ? nil : "Hungarian",
             isTranslated: translated != nil
         )
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self
+    }
+
+    var filenameSafe: String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let value = unicodeScalars.map { allowed.contains($0) ? Character(String($0)) : "_" }
+        return String(value)
     }
 }
