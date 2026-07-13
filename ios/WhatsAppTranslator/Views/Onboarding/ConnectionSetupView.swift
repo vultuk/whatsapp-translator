@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConnectionSetupView: View {
     @Environment(AppSession.self) private var session
+    @Environment(\.translatorPalette) private var palette
     @State private var address = ""
     @State private var password = ""
     @FocusState private var focusedField: Field?
@@ -97,7 +98,7 @@ struct ConnectionSetupView: View {
             Text("Your server address and password are kept in the iOS Keychain. Messages stay on your translator backend.")
         } icon: {
             Image(systemName: "checkmark.shield.fill")
-                .foregroundStyle(TranslatorTheme.green)
+                .foregroundStyle(palette.accent)
         }
         .font(.footnote)
         .foregroundStyle(.secondary)

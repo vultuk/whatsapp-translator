@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 @MainActor
 @Observable
@@ -23,14 +24,20 @@ final class AppSession {
     var errorMessage: String?
     var isRefreshing = false
     var sendingContactIDs: Set<String> = []
+    var activeMessageActionIDs: Set<String> = []
+    var messageImages: [String: UIImage] = [:]
+    var linkPreviews: [URL: LinkPreview] = [:]
 
     let draftStore: DraftStore
+    let preferences: AppPreferencesStore
     private let api: APIClient
     private let credentials: CredentialStore
     private let cache: ChatCacheStore
     private let demoMode: Bool
     private let demoConversationMode: Bool
     private var avatarRequests: Set<String> = []
+    private var mediaRequests: Set<String> = []
+    private var linkPreviewRequests: Set<URL> = []
     private var isConnecting = false
 
     init(
@@ -38,12 +45,14 @@ final class AppSession {
         credentials: CredentialStore = CredentialStore(),
         cache: ChatCacheStore = .shared,
         draftStore: DraftStore = DraftStore(),
+        preferences: AppPreferencesStore = AppPreferencesStore(),
         demoMode: Bool = ProcessInfo.processInfo.arguments.contains("-demo")
     ) {
         self.api = api
         self.credentials = credentials
         self.cache = cache
         self.draftStore = draftStore
+        self.preferences = preferences
         self.demoMode = demoMode
         self.demoConversationMode = ProcessInfo.processInfo.arguments.contains("-demoConversation")
     }
@@ -52,9 +61,33 @@ final class AppSession {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return contacts }
         return contacts.filter {
-            $0.displayName.localizedCaseInsensitiveContains(query)
+            displayName(for: $0).localizedCaseInsensitiveContains(query)
                 || ($0.lastMessagePreview?.localizedCaseInsensitiveContains(query) ?? false)
         }
+    }
+
+    func displayName(for contact: Contact) -> String {
+        preferences.nickname(for: contact.id) ?? contact.displayName
+    }
+
+    func localTimeDescription(for contactID: String) -> String? {
+        guard let identifier = preferences.conversationPreferences(for: contactID).timezoneIdentifier,
+              let timezone = TimeZone(identifier: identifier) else { return nil }
+        var format = Date.FormatStyle(date: .omitted, time: .shortened)
+        format.timeZone = timezone
+        let city = identifier.split(separator: "/").last?.replacingOccurrences(of: "_", with: " ") ?? identifier
+        return "\(Date().formatted(format)) in \(city)"
+    }
+
+    func replyTarget(for message: ChatMessage) -> MessageReplyTarget {
+        let target = message.replyTarget
+        guard message.isFromMe, let senderJID = ownSenderJID else { return target }
+        return MessageReplyTarget(
+            messageID: target.messageID,
+            senderJID: senderJID,
+            senderName: target.senderName,
+            text: target.text
+        )
     }
 
     func start() async {
@@ -104,7 +137,7 @@ final class AppSession {
                 before: oldest?.timestamp,
                 beforeID: oldest?.id
             )
-            messages[contactID] = older ? merge(response.messages + current) : response.messages
+            messages[contactID] = older ? normalizeMessages(response.messages + current) : normalizeMessages(response.messages)
             messageHistoryHasMore[contactID] = response.hasMore
             if let index = contacts.firstIndex(where: { $0.id == contactID }) {
                 contacts[index].unreadCount = 0
@@ -127,7 +160,7 @@ final class AppSession {
         }
     }
 
-    func send(text: String, to contactID: String) async -> Bool {
+    func send(text: String, to contactID: String, reply: MessageReplyTarget? = nil) async -> Bool {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return false }
         sendingContactIDs.insert(contactID)
@@ -141,7 +174,7 @@ final class AppSession {
         }
 
         do {
-            _ = try await api.send(contactID: contactID, text: clean)
+            _ = try await api.send(contactID: contactID, text: clean, reply: reply)
             await loadMessages(for: contactID)
             await refresh()
             return true
@@ -149,6 +182,127 @@ final class AppSession {
             errorMessage = error.localizedDescription
             return false
         }
+    }
+
+    func sendImage(data: Data, mimeType: String, to contactID: String, reply: MessageReplyTarget? = nil) async -> Bool {
+        guard !data.isEmpty, data.count <= 16 * 1_024 * 1_024 else {
+            errorMessage = "Images must be smaller than 16 MB."
+            return false
+        }
+        sendingContactIDs.insert(contactID)
+        defer { sendingContactIDs.remove(contactID) }
+
+        if demoMode {
+            let message = ChatMessage.demoImage(contactID: contactID)
+            messages[contactID, default: []].append(message)
+            messageImages[message.id] = UIImage(data: data)
+            return true
+        }
+
+        do {
+            _ = try await api.sendImage(contactID: contactID, data: data, mimeType: mimeType, reply: reply)
+            await loadMessages(for: contactID)
+            await refresh()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func translate(_ message: ChatMessage) async {
+        guard message.canTranslate else { return }
+        activeMessageActionIDs.insert(message.id)
+        defer { activeMessageActionIDs.remove(message.id) }
+        if demoMode {
+            replaceMessage(message.id, in: message.contactId) { current in
+                ChatMessage.demoTranslated(from: current)
+            }
+            return
+        }
+        do {
+            let result = try await api.translate(message)
+            guard result.success else { throw APIError.server(result.error ?? "Translation failed.") }
+            await loadMessages(for: message.contactId)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func generateAIReply(to message: ChatMessage) async -> String? {
+        guard message.canGenerateAIReply else { return nil }
+        activeMessageActionIDs.insert(message.id)
+        defer { activeMessageActionIDs.remove(message.id) }
+        if demoMode { return "Sounds good — I’ll let you know when I’m leaving." }
+        do {
+            let result = try await api.generateAIReply(to: message)
+            guard result.success, let reply = result.replyText?.trimmingCharacters(in: .whitespacesAndNewlines), !reply.isEmpty else {
+                throw APIError.server(result.error ?? "AI reply was empty.")
+            }
+            return reply
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func react(to message: ChatMessage, emoji: String) async {
+        activeMessageActionIDs.insert(message.id)
+        defer { activeMessageActionIDs.remove(message.id) }
+        if demoMode {
+            replaceMessage(message.id, in: message.contactId) { current in
+                var updated = current
+                updated.reactions = [emoji: ["me"]]
+                return updated
+            }
+            return
+        }
+        do {
+            try await api.react(to: message, emoji: emoji, senderJID: message.isFromMe ? ownSenderJID : message.senderJID)
+            await loadMessages(for: message.contactId)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func loadMedia(for message: ChatMessage) async {
+        guard message.isImage, messageImages[message.id] == nil, !mediaRequests.contains(message.id) else { return }
+        if let base64 = message.content?.mediaData, let data = Data(base64Encoded: base64) {
+            messageImages[message.id] = UIImage(data: data)
+            return
+        }
+        guard message.content?.hasMedia == true, !demoMode else { return }
+        mediaRequests.insert(message.id)
+        defer { mediaRequests.remove(message.id) }
+        if let response = try? await api.media(messageID: message.id),
+           let data = Data(base64Encoded: response.mediaData) {
+            messageImages[message.id] = UIImage(data: data)
+        }
+    }
+
+    func loadLinkPreview(for url: URL) async {
+        guard linkPreviews[url] == nil, !linkPreviewRequests.contains(url) else { return }
+        linkPreviewRequests.insert(url)
+        defer { linkPreviewRequests.remove(url) }
+        if demoMode {
+            linkPreviews[url] = LinkPreview(
+                url: url,
+                title: "A place worth visiting this weekend",
+                description: "A quick guide with opening times, directions, and the best things to see.",
+                imageURL: nil,
+                siteName: url.host(),
+                error: nil
+            )
+            return
+        }
+        if let preview = try? await api.linkPreview(for: url), preview.error == nil {
+            linkPreviews[url] = preview
+        }
+    }
+
+    func conversationUsage(for contactID: String) async throws -> UsageSummary {
+        if demoMode { return UsageSummary(inputTokens: 12_840, cachedInputTokens: 8_120, outputTokens: 2_430, costUsd: 0.0842) }
+        return try await api.conversationUsage(contactID: contactID)
     }
 
     func conversationSettings(for contactID: String) async throws -> ConversationSettings {
@@ -183,6 +337,8 @@ final class AppSession {
         contacts = []
         avatarURLs = [:]
         avatarRequests = []
+        messageImages = [:]
+        linkPreviews = [:]
         messages = [:]
         selectedContactID = nil
         phase = .needsConfiguration
@@ -266,7 +422,7 @@ final class AppSession {
         switch event.type {
         case "message":
             guard let message = event.message else { return }
-            messages[message.contactId] = merge((messages[message.contactId] ?? []) + [message])
+            messages[message.contactId] = normalizeMessages((messages[message.contactId] ?? []) + [message])
             updateContactPreview(
                 contactID: message.contactId,
                 preview: message.displayText,
@@ -287,9 +443,43 @@ final class AppSession {
         }
     }
 
-    private func merge(_ values: [ChatMessage]) -> [ChatMessage] {
-        Array(Dictionary(grouping: values, by: \ChatMessage.id).compactMap { $0.value.last })
+    func normalizeMessages(_ values: [ChatMessage]) -> [ChatMessage] {
+        let sorted = Array(Dictionary(grouping: values, by: \ChatMessage.id).compactMap { $0.value.last })
             .sorted { ($0.timestamp, $0.id) < ($1.timestamp, $1.id) }
+        let reactionMessages = sorted.filter(\.isReaction)
+        var displayMessages = sorted.filter { !$0.isReaction }
+
+        for reaction in reactionMessages {
+            guard let targetID = reaction.content?.targetMessageId,
+                  let index = displayMessages.firstIndex(where: { $0.id == targetID }) else { continue }
+            let actor = reaction.isFromMe ? "me" : (reaction.senderPhone ?? reaction.senderName ?? "unknown")
+            var values = displayMessages[index].reactions ?? [:]
+            for emoji in values.keys {
+                values[emoji]?.removeAll { $0 == actor }
+                if values[emoji]?.isEmpty == true { values.removeValue(forKey: emoji) }
+            }
+            if let emoji = reaction.content?.emoji, !emoji.isEmpty {
+                values[emoji, default: []].append(actor)
+            }
+            displayMessages[index].reactions = values
+        }
+        return displayMessages
+    }
+
+    private func replaceMessage(
+        _ messageID: String,
+        in contactID: String,
+        transform: (ChatMessage) -> ChatMessage
+    ) {
+        guard let index = messages[contactID]?.firstIndex(where: { $0.id == messageID }),
+              let current = messages[contactID]?[index] else { return }
+        messages[contactID]?[index] = transform(current)
+        persistCacheSoon()
+    }
+
+    private var ownSenderJID: String? {
+        guard let phone = backendStatus.phone?.filter(\.isNumber), !phone.isEmpty else { return nil }
+        return "\(phone)@s.whatsapp.net"
     }
 
     private func updateContactPreview(contactID: String, preview: String, timestamp: Int64) {
@@ -341,6 +531,9 @@ final class AppSession {
         backendStatus = BackendStatus(connected: true, phone: "447853803055", name: "Simon Skinner")
         contacts = Contact.demoContacts
         messages = ChatMessage.demoMessages
+        if let imageMessage = messages["virag@s.whatsapp.net"]?.first(where: \.isImage) {
+            messageImages[imageMessage.id] = demoPhoto()
+        }
         if demoConversationMode {
             selectedContactID = contacts.first?.id
             if ProcessInfo.processInfo.arguments.contains("-demoSending"),
@@ -349,6 +542,25 @@ final class AppSession {
             }
         }
         phase = .ready
+    }
+
+    private func demoPhoto() -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 640, height: 420))
+        return renderer.image { context in
+            UIColor(red: 0.57, green: 0.83, blue: 0.93, alpha: 1).setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 640, height: 420))
+            UIColor(red: 1, green: 0.84, blue: 0.38, alpha: 1).setFill()
+            context.cgContext.fillEllipse(in: CGRect(x: 480, y: 52, width: 86, height: 86))
+            UIColor(red: 0.24, green: 0.57, blue: 0.36, alpha: 1).setFill()
+            context.cgContext.move(to: CGPoint(x: 0, y: 330))
+            context.cgContext.addCurve(to: CGPoint(x: 640, y: 275), control1: CGPoint(x: 150, y: 220), control2: CGPoint(x: 420, y: 390))
+            context.cgContext.addLine(to: CGPoint(x: 640, y: 420))
+            context.cgContext.addLine(to: CGPoint(x: 0, y: 420))
+            context.cgContext.closePath()
+            context.cgContext.fillPath()
+            UIColor(red: 0.13, green: 0.42, blue: 0.28, alpha: 1).setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 350, width: 640, height: 70))
+        }
     }
 }
 
@@ -366,12 +578,69 @@ private extension ChatMessage {
         "virag@s.whatsapp.net": [
             demo(id: "1", contactID: "virag@s.whatsapp.net", timestamp: 1_783_939_620_000, fromMe: false, body: "Mikor érkezel?", translated: "What time will you arrive?", sender: "Virág"),
             demo(id: "2", contactID: "virag@s.whatsapp.net", timestamp: 1_783_939_740_000, fromMe: true, body: "Probably just after six — I’ll message when I leave.", translated: "Valószínűleg nem sokkal hat után — írok, amikor elindulok.", sender: nil),
+            demo(id: "link", contactID: "virag@s.whatsapp.net", timestamp: 1_783_939_900_000, fromMe: false, body: "This looks lovely: https://example.com/weekend", translated: nil, sender: "Virág"),
+            demoImage(contactID: "virag@s.whatsapp.net", id: "image", timestamp: 1_783_940_100_000),
             demo(id: "3", contactID: "virag@s.whatsapp.net", timestamp: 1_783_940_400_000, fromMe: false, body: "Tökéletes, akkor hat után várlak.", translated: "Perfect, I’ll be there just after six.", sender: "Virág"),
         ]
     ]
 
     static func demoOutgoing(contactID: String, text: String) -> ChatMessage {
         demo(id: UUID().uuidString, contactID: contactID, timestamp: Int64(Date().timeIntervalSince1970 * 1_000), fromMe: true, body: text, translated: nil, sender: nil)
+    }
+
+    static func demoImage(
+        contactID: String,
+        id: String = UUID().uuidString,
+        timestamp: Int64 = Int64(Date().timeIntervalSince1970 * 1_000)
+    ) -> ChatMessage {
+        ChatMessage(
+            id: id,
+            contactId: contactID,
+            timestamp: timestamp,
+            isFromMe: false,
+            isForwarded: false,
+            senderName: "Virág",
+            senderPhone: "36305550142",
+            contactName: "Virág Skinner",
+            contactPhone: "+36 30 555 0142",
+            chatType: "private",
+            contentType: "Image",
+            content: MessageContent(
+                type: "image",
+                body: nil,
+                caption: "The light is gorgeous here today.",
+                mimeType: "image/jpeg",
+                hasMedia: true,
+                showTranslatedPrimary: nil,
+                replyContext: nil
+            ),
+            originalText: nil,
+            translatedText: nil,
+            sourceLanguage: nil,
+            isTranslated: false
+        )
+    }
+
+    static func demoTranslated(from message: ChatMessage) -> ChatMessage {
+        ChatMessage(
+            id: message.id,
+            contactId: message.contactId,
+            timestamp: message.timestamp,
+            isFromMe: message.isFromMe,
+            isForwarded: message.isForwarded,
+            senderName: message.senderName,
+            senderPhone: message.senderPhone,
+            contactName: message.contactName,
+            contactPhone: message.contactPhone,
+            chatType: message.chatType,
+            contentType: message.contentType,
+            content: message.content,
+            originalText: message.contentText,
+            translatedText: "Translated: \(message.contentText ?? message.displayText)",
+            sourceLanguage: "Hungarian",
+            isTranslated: true,
+            reactions: message.reactions
+        )
     }
 
     static func demo(id: String, contactID: String, timestamp: Int64, fromMe: Bool, body: String, translated: String?, sender: String?) -> ChatMessage {

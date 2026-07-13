@@ -1,7 +1,9 @@
 import SwiftUI
 
 struct ChatRow: View {
+    @Environment(\.translatorPalette) private var palette
     let contact: Contact
+    let displayName: String
     let draft: String
     let avatarURL: URL?
 
@@ -10,13 +12,13 @@ struct ChatRow: View {
             ContactAvatar(contact: contact, url: avatarURL)
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text(contact.displayName)
+                    Text(displayName)
                         .font(.headline)
                         .lineLimit(1)
                     Spacer(minLength: 8)
                     Text(contact.lastMessageTime.chatListDate)
                         .font(.caption)
-                        .foregroundStyle(contact.unreadCount > 0 ? TranslatorTheme.green : .secondary)
+                        .foregroundStyle(contact.unreadCount > 0 ? palette.accent : .secondary)
                 }
                 HStack(spacing: 8) {
                     if !draft.isEmpty {
@@ -34,7 +36,7 @@ struct ChatRow: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 4)
-                            .background(TranslatorTheme.green, in: Capsule())
+                            .background(palette.accent, in: Capsule())
                     }
                 }
                 .font(.subheadline)

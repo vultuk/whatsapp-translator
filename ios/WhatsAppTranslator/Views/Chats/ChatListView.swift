@@ -2,7 +2,8 @@ import SwiftUI
 
 struct ChatListView: View {
     @Environment(AppSession.self) private var session
-    @State private var showSettings = false
+    @Environment(\.translatorPalette) private var palette
+    @State private var showSettings = ProcessInfo.processInfo.arguments.contains("-demoSettings")
 
     var body: some View {
         @Bindable var session = session
@@ -13,6 +14,7 @@ struct ChatListView: View {
                     NavigationLink(value: contact.id) {
                         ChatRow(
                             contact: contact,
+                            displayName: session.displayName(for: contact),
                             draft: session.draftStore.text(for: contact.id),
                             avatarURL: session.avatarURLs[contact.id]
                         )
@@ -57,9 +59,11 @@ struct ChatListView: View {
 }
 
 private struct EmptyConversationView: View {
+    @Environment(\.translatorPalette) private var palette
+
     var body: some View {
         ZStack {
-            TranslatorTheme.chatBackground.ignoresSafeArea()
+            palette.chatBackground.ignoresSafeArea()
             VStack(spacing: 18) {
                 TranslatorMark(size: 78)
                 Text("Choose a chat")

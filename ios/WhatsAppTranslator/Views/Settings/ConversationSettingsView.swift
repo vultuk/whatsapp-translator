@@ -5,6 +5,7 @@ struct ConversationSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     let contact: Contact
     @State private var settings = ConversationSettings(languageOverride: nil, translationStyle: nil, sendOriginalFollowUp: false)
+    @State private var presentation = ConversationPresentationPreferences.empty
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var error: String?
@@ -12,6 +13,17 @@ struct ConversationSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    TextField("Nickname", text: presentationBinding(\.nickname))
+                    TextField("Contact timezone", text: presentationBinding(\.timezoneIdentifier))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Contact")
+                } footer: {
+                    Text("Use an IANA timezone such as Europe/Budapest. Nickname and timezone stay on this iPhone.")
+                }
+
                 Section {
                     TextField("Conversation language", text: optionalBinding(\.languageOverride))
                         .textInputAutocapitalization(.words)
@@ -23,7 +35,7 @@ struct ConversationSettingsView: View {
                     Text("When enabled, the translated message sends first, followed immediately by what you originally typed.")
                 }
             }
-            .navigationTitle(contact.displayName)
+            .navigationTitle(session.displayName(for: contact))
             .navigationBarTitleDisplayMode(.inline)
             .disabled(isLoading || isSaving)
             .overlay { if isLoading { ProgressView() } }
@@ -50,19 +62,32 @@ struct ConversationSettingsView: View {
         )
     }
 
+    private func presentationBinding(_ keyPath: WritableKeyPath<ConversationPresentationPreferences, String?>) -> Binding<String> {
+        Binding(
+            get: { presentation[keyPath: keyPath] ?? "" },
+            set: { presentation[keyPath: keyPath] = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        )
+    }
+
     private var errorPresented: Binding<Bool> {
         Binding(get: { error != nil }, set: { if !$0 { error = nil } })
     }
 
     private func load() async {
+        presentation = session.preferences.conversationPreferences(for: contact.id)
         do { settings = try await session.conversationSettings(for: contact.id) }
         catch { self.error = error.localizedDescription }
         isLoading = false
     }
 
     private func save() {
+        if let identifier = presentation.timezoneIdentifier, TimeZone(identifier: identifier) == nil {
+            error = "Enter a timezone such as Europe/London or Europe/Budapest."
+            return
+        }
         isSaving = true
         Task {
+            session.preferences.setConversationPreferences(presentation, for: contact.id)
             do {
                 try await session.saveConversationSettings(settings, for: contact.id)
                 dismiss()

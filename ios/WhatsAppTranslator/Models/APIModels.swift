@@ -56,12 +56,13 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     let translatedText: String?
     let sourceLanguage: String?
     let isTranslated: Bool
+    var reactions: [String: [String]]? = nil
 
     var displayText: String {
         if isFromMe {
-            return content?.body?.nilIfBlank ?? originalText?.nilIfBlank ?? translatedText?.nilIfBlank ?? contentType
+            return content?.body?.nilIfBlank ?? content?.caption?.nilIfBlank ?? originalText?.nilIfBlank ?? translatedText?.nilIfBlank ?? contentType
         }
-        return translatedText?.nilIfBlank ?? content?.body?.nilIfBlank ?? originalText?.nilIfBlank ?? contentType
+        return translatedText?.nilIfBlank ?? content?.body?.nilIfBlank ?? content?.caption?.nilIfBlank ?? originalText?.nilIfBlank ?? contentType
     }
 
     var alternateText: String? {
@@ -71,17 +72,80 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     }
 
     var date: Date { Date(timeIntervalSince1970: TimeInterval(timestamp) / 1_000) }
+    var isReaction: Bool { content?.type?.lowercased() == "reaction" }
+    var isImage: Bool { content?.type?.lowercased() == "image" }
+    var canTranslate: Bool { !isFromMe && !isTranslated && contentText != nil }
+    var canGenerateAIReply: Bool { !isFromMe && contentText != nil }
+    var contentText: String? { content?.body?.nilIfBlank ?? content?.caption?.nilIfBlank }
+    var senderJID: String? {
+        guard let senderPhone = senderPhone?.nilIfBlank else { return nil }
+        return senderPhone.contains("@") ? senderPhone : "\(senderPhone)@s.whatsapp.net"
+    }
+    var replyTarget: MessageReplyTarget {
+        MessageReplyTarget(
+            messageID: id,
+            senderJID: senderJID,
+            senderName: isFromMe ? "You" : (senderName?.nilIfBlank ?? contactName?.nilIfBlank ?? senderPhone?.nilIfBlank ?? "Contact"),
+            text: contentText ?? displayText
+        )
+    }
+    var extractedURLs: [URL] {
+        let candidates = displayText.split(whereSeparator: { $0.isWhitespace })
+        return candidates.compactMap { value in
+            let cleaned = value.trimmingCharacters(in: CharacterSet(charactersIn: "()[]{}<>,.!?;:\"'"))
+            guard cleaned.hasPrefix("https://") || cleaned.hasPrefix("http://") else { return nil }
+            return URL(string: cleaned)
+        }
+    }
 }
 
 struct MessageContent: Codable, Hashable, Sendable {
     let type: String?
     let body: String?
+    let caption: String?
+    let mimeType: String?
+    let mediaData: String?
+    let hasMedia: Bool?
+    let fileSize: Int?
+    let emoji: String?
+    let targetMessageId: String?
     let showTranslatedPrimary: Bool?
     let replyContext: ReplyContext?
 
     enum CodingKeys: String, CodingKey {
-        case type, body, showTranslatedPrimary
+        case type, body, caption, emoji, showTranslatedPrimary
+        case mimeType = "mime_type"
+        case mediaData = "media_data"
+        case hasMedia = "has_media"
+        case fileSize = "file_size"
+        case targetMessageId = "target_message_id"
         case replyContext = "reply_context"
+    }
+
+    init(
+        type: String?,
+        body: String?,
+        caption: String? = nil,
+        mimeType: String? = nil,
+        mediaData: String? = nil,
+        hasMedia: Bool? = nil,
+        fileSize: Int? = nil,
+        emoji: String? = nil,
+        targetMessageId: String? = nil,
+        showTranslatedPrimary: Bool?,
+        replyContext: ReplyContext?
+    ) {
+        self.type = type
+        self.body = body
+        self.caption = caption
+        self.mimeType = mimeType
+        self.mediaData = mediaData
+        self.hasMedia = hasMedia
+        self.fileSize = fileSize
+        self.emoji = emoji
+        self.targetMessageId = targetMessageId
+        self.showTranslatedPrimary = showTranslatedPrimary
+        self.replyContext = replyContext
     }
 }
 
@@ -89,6 +153,13 @@ struct ReplyContext: Codable, Hashable, Sendable {
     let messageId: String?
     let senderName: String?
     let text: String?
+}
+
+struct MessageReplyTarget: Equatable, Sendable {
+    let messageID: String
+    let senderJID: String?
+    let senderName: String
+    let text: String
 }
 
 struct SendMessageRequest: Encodable, Sendable {
@@ -110,6 +181,85 @@ struct SendMessageResponse: Decodable, Sendable {
     let originalMessageId: String?
     let originalTimestamp: Int64?
     let originalFollowUpError: String?
+}
+
+struct SendImageRequest: Encodable, Sendable {
+    let contactId: String
+    let mediaData: String
+    let mimeType: String
+    let caption: String?
+    let replyTo: String?
+    let replyToSender: String?
+    let replyToText: String?
+    let replyToSenderName: String?
+}
+
+struct SendImageResponse: Decodable, Sendable {
+    let messageId: String
+    let timestamp: Int64
+}
+
+struct SendReactionRequest: Encodable, Sendable {
+    let contactId: String
+    let messageId: String
+    let senderJid: String?
+    let emoji: String
+}
+
+struct TranslateMessageRequest: Encodable, Sendable {
+    let text: String
+    let messageId: String
+    let contactId: String
+}
+
+struct TranslateMessageResponse: Decodable, Sendable {
+    let success: Bool
+    let translatedText: String?
+    let sourceLanguage: String?
+    let error: String?
+}
+
+struct AIReplyRequest: Encodable, Sendable {
+    let contactId: String
+    let messageId: String
+}
+
+struct AIReplyResponse: Decodable, Sendable {
+    let success: Bool
+    let replyText: String?
+    let error: String?
+    let costUsd: Double?
+}
+
+struct UsageSummary: Decodable, Equatable, Sendable {
+    let inputTokens: Int
+    let cachedInputTokens: Int
+    let outputTokens: Int
+    let costUsd: Double
+}
+
+struct MediaResponse: Decodable, Sendable {
+    let mediaData: String
+    let mimeType: String
+
+    enum CodingKeys: String, CodingKey {
+        case mediaData = "media_data"
+        case mimeType = "mime_type"
+    }
+}
+
+struct LinkPreview: Decodable, Equatable, Sendable {
+    let url: URL
+    let title: String?
+    let description: String?
+    let imageURL: URL?
+    let siteName: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case url, title, description, siteName, error
+        case imageURL = "imageUrl"
+    }
 }
 
 struct ConversationSettings: Codable, Equatable, Sendable {

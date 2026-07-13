@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ContactAvatar: View {
+    @Environment(\.translatorPalette) private var palette
     let contact: Contact
     let url: URL?
     var size: CGFloat = 52
@@ -15,11 +16,11 @@ struct ContactAvatar: View {
                         .scaledToFill()
                 default:
                     Circle()
-                        .fill(contact.isGroup ? Color.indigo.opacity(0.16) : TranslatorTheme.green.opacity(0.14))
+                        .fill(contact.isGroup ? Color.indigo.opacity(0.16) : palette.accent.opacity(0.14))
                         .overlay {
                             Text(contact.initials)
                                 .font(.system(size: size * 0.34, weight: .semibold))
-                                .foregroundStyle(contact.isGroup ? .indigo : TranslatorTheme.deepGreen)
+                                .foregroundStyle(contact.isGroup ? .indigo : palette.deepAccent)
                         }
                 }
             }
@@ -31,7 +32,7 @@ struct ContactAvatar: View {
                     .font(.system(size: max(7, size * 0.15), weight: .bold))
                     .foregroundStyle(.white)
                     .padding(max(4, size * 0.09))
-                    .background(TranslatorTheme.green, in: Circle())
+                    .background(palette.accent, in: Circle())
             }
         }
         .frame(width: size, height: size)

@@ -67,20 +67,92 @@ actor APIClient {
         return try await authorizedRequest("/api/messages/\(contactID.urlPathEncoded)\(query)")
     }
 
-    func send(contactID: String, text: String) async throws -> SendMessageResponse {
+    func send(contactID: String, text: String, reply: MessageReplyTarget? = nil) async throws -> SendMessageResponse {
         let payload = SendMessageRequest(
             contactId: contactID,
             text: text,
-            replyTo: nil,
-            replyToSender: nil,
-            replyToText: nil,
-            replyToSenderName: nil
+            replyTo: reply?.messageID,
+            replyToSender: reply?.senderJID,
+            replyToText: reply?.text,
+            replyToSenderName: reply?.senderName
         )
         return try await authorizedRequest(
             "/api/send",
             method: "POST",
             body: JSONEncoder.backend.encode(payload)
         )
+    }
+
+    func sendImage(
+        contactID: String,
+        data: Data,
+        mimeType: String,
+        caption: String? = nil,
+        reply: MessageReplyTarget? = nil
+    ) async throws -> SendImageResponse {
+        let payload = SendImageRequest(
+            contactId: contactID,
+            mediaData: data.base64EncodedString(),
+            mimeType: mimeType,
+            caption: caption,
+            replyTo: reply?.messageID,
+            replyToSender: reply?.senderJID,
+            replyToText: reply?.text,
+            replyToSenderName: reply?.senderName
+        )
+        return try await authorizedRequest(
+            "/api/send-image",
+            method: "POST",
+            body: JSONEncoder.backend.encode(payload)
+        )
+    }
+
+    func react(to message: ChatMessage, emoji: String, senderJID: String?) async throws {
+        let payload = SendReactionRequest(
+            contactId: message.contactId,
+            messageId: message.id,
+            senderJid: senderJID,
+            emoji: emoji
+        )
+        let _: SuccessResponse = try await authorizedRequest(
+            "/api/react",
+            method: "POST",
+            body: JSONEncoder.backend.encode(payload)
+        )
+    }
+
+    func translate(_ message: ChatMessage) async throws -> TranslateMessageResponse {
+        guard let text = message.contentText else { throw APIError.server("No text to translate.") }
+        let payload = TranslateMessageRequest(text: text, messageId: message.id, contactId: message.contactId)
+        return try await authorizedRequest(
+            "/api/translate",
+            method: "POST",
+            body: JSONEncoder.backend.encode(payload)
+        )
+    }
+
+    func generateAIReply(to message: ChatMessage) async throws -> AIReplyResponse {
+        let payload = AIReplyRequest(contactId: message.contactId, messageId: message.id)
+        return try await authorizedRequest(
+            "/api/ai-reply",
+            method: "POST",
+            body: JSONEncoder.backend.encode(payload)
+        )
+    }
+
+    func conversationUsage(contactID: String) async throws -> UsageSummary {
+        try await authorizedRequest("/api/usage/\(contactID.urlPathEncoded)")
+    }
+
+    func media(messageID: String) async throws -> MediaResponse {
+        try await authorizedRequest("/api/media/\(messageID.urlPathEncoded)")
+    }
+
+    func linkPreview(for url: URL) async throws -> LinkPreview {
+        var components = URLComponents()
+        components.queryItems = [URLQueryItem(name: "url", value: url.absoluteString)]
+        let query = components.percentEncodedQuery.map { "?\($0)" } ?? ""
+        return try await authorizedRequest("/api/link-preview\(query)")
     }
 
     func markRead(contactID: String) async throws {

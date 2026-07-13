@@ -7,6 +7,8 @@ struct AppSettingsView: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var error: String?
+    @State private var selectedTheme: AppTheme = .whatsapp
+    @State private var selectedColorMode: AppColorMode = .system
 
     private let models = [
         ("", "App defaults"),
@@ -38,6 +40,20 @@ struct AppSettingsView: View {
                     Text("OpenAI")
                 } footer: {
                     Text("App defaults preserve the backend’s task-specific model and reasoning choices.")
+                }
+
+                Section {
+                    Picker("Theme", selection: $selectedTheme) {
+                        ForEach(AppTheme.allCases) { theme in Text(theme.title).tag(theme) }
+                    }
+                    Picker("Appearance", selection: $selectedColorMode) {
+                        ForEach(AppColorMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                    ThemePreview(theme: selectedTheme)
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("Themes change the native chat palette. Appearance can follow the iPhone or stay light or dark.")
                 }
 
                 Section {
@@ -79,6 +95,8 @@ struct AppSettingsView: View {
     }
 
     private func load() async {
+        selectedTheme = session.preferences.theme
+        selectedColorMode = session.preferences.colorMode
         do { settings = try await session.openAISettings() }
         catch { self.error = error.localizedDescription }
         isLoading = false
@@ -87,6 +105,8 @@ struct AppSettingsView: View {
     private func save() {
         isSaving = true
         Task {
+            session.preferences.theme = selectedTheme
+            session.preferences.colorMode = selectedColorMode
             do {
                 try await session.saveOpenAISettings(settings)
                 dismiss()
@@ -95,5 +115,31 @@ struct AppSettingsView: View {
                 isSaving = false
             }
         }
+    }
+}
+
+private struct ThemePreview: View {
+    let theme: AppTheme
+
+    var body: some View {
+        let palette = TranslatorPalette.make(theme)
+        VStack(spacing: 8) {
+            HStack {
+                Text("Incoming message")
+                    .padding(9)
+                    .background(palette.incomingBubble, in: RoundedRectangle(cornerRadius: 12))
+                Spacer()
+            }
+            HStack {
+                Spacer()
+                Text("Translated reply")
+                    .padding(9)
+                    .background(palette.outgoingBubble, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .font(.caption)
+        .padding(12)
+        .background(palette.chatBackground, in: RoundedRectangle(cornerRadius: 14))
+        .animation(.snappy, value: theme)
     }
 }

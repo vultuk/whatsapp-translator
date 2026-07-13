@@ -10,7 +10,9 @@ struct WhatsAppTranslatorApp: App {
         WindowGroup {
             RootView()
                 .environment(session)
-                .tint(TranslatorTheme.green)
+                .environment(\.translatorPalette, TranslatorPalette.make(session.preferences.theme))
+                .tint(TranslatorPalette.make(session.preferences.theme).accent)
+                .preferredColorScheme(session.preferences.colorMode.colorScheme)
                 .task { await session.start() }
                 .onChange(of: scenePhase) { _, phase in
                     guard phase == .active else { return }
