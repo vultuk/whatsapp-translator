@@ -62,6 +62,7 @@ impl ApnsClient {
 
         Ok(Some(Self {
             client: reqwest::Client::builder()
+                .http2_prior_knowledge()
                 .http2_adaptive_window(true)
                 .build()
                 .context("Failed to create APNs HTTP client")?,
@@ -106,7 +107,15 @@ impl ApnsClient {
             .json(&notification.payload)
             .send()
             .await
-            .context("APNs request failed")?;
+            .map_err(|error| {
+                let is_connect = error.is_connect();
+                let is_timeout = error.is_timeout();
+                let is_request = error.is_request();
+                anyhow!(
+                    "APNs request failed (connect={is_connect}, timeout={is_timeout}, request={is_request}): {}",
+                    error.without_url()
+                )
+            })?;
 
         if response.status().is_success() {
             return Ok(ApnsSendOutcome::Delivered);
