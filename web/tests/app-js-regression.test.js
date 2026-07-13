@@ -96,6 +96,13 @@ test('drafts persist silently without a composer banner', () => {
   assert.doesNotMatch(appJs, /updateDraftBanner|draft-clear-button/);
 });
 
+test('sidebar identity header omits profile avatar and connection status', () => {
+  assert.doesNotMatch(indexHtml, /id="user-initial"/);
+  assert.doesNotMatch(indexHtml, /id="status-indicator"/);
+  assert.doesNotMatch(appJs, /getElementById\('user-initial'\)/);
+  assert.doesNotMatch(appJs, /updateConnectionIndicator/);
+});
+
 test('disconnected bridge shows cached contacts instead of permanent connecting state', () => {
   const disconnectedBody = extractMethodBody(appJs, 'handleDisconnected');
   const cachedWorkspaceBody = extractMethodBody(appJs, 'showCachedWorkspaceDisconnected');
@@ -106,7 +113,6 @@ test('disconnected bridge shows cached contacts instead of permanent connecting 
   assert.match(disconnectedBody, /this\.showCachedWorkspaceDisconnected\(\)/);
   assert.match(disconnectedBody, /this\.showConnecting\(\)/);
   assert.match(cachedWorkspaceBody, /main-container'\)\?\.classList\.remove\('hidden'\)/);
-  assert.match(cachedWorkspaceBody, /this\.updateConnectionIndicator\(false, 'Disconnected'\)/);
   assert.match(cachedWorkspaceBody, /WhatsApp disconnected/);
   assert.match(cachedWorkspaceBody, /Cached inbox available/);
 });
@@ -122,7 +128,6 @@ test('qr pairing view is not hidden by disconnected status races', () => {
   assert.match(showConnectingBody, /if \(this\.qrData\)/);
   assert.match(showConnectingBody, /this\.showQRCode\(this\.qrData\)/);
   assert.match(showQrBody, /this\.qrData = qrData/);
-  assert.match(showQrBody, /this\.updateConnectionIndicator\(false, 'QR ready'\)/);
   assert.match(connectedBody, /this\.qrData = null/);
   assert.match(logoutBody, /this\.qrData = null/);
 });

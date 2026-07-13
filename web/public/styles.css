@@ -646,26 +646,7 @@ select {
   margin-top: 2px;
 }
 
-.status-indicator {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #f44336;
-}
-
-.status-dot.connected {
-  background: var(--accent-color);
-}
-
-/* Header actions (status + logout) */
+/* Header actions */
 .header-actions {
   display: flex;
   align-items: center;
@@ -673,8 +654,7 @@ select {
 }
 
 .user-info,
-.user-details,
-.status-indicator {
+.user-details {
   min-width: 0;
 }
 
@@ -686,25 +666,22 @@ select {
 
 @media (max-width: 1200px) {
   .panel-header {
-    align-items: flex-start;
-    flex-wrap: wrap;
+    align-items: center;
+    flex-wrap: nowrap;
     gap: 10px 12px;
   }
 
   .user-info {
-    flex: 1 1 220px;
+    flex: 1 1 auto;
   }
 
   .header-actions {
-    flex: 1 1 100%;
+    flex: 0 0 auto;
     justify-content: flex-end;
-    padding-left: 54px;
+    padding-left: 0;
     gap: 6px;
   }
 
-  .status-indicator {
-    margin-right: auto;
-  }
 }
 
 .header-icon-button,
@@ -2532,9 +2509,6 @@ select {
     height: 44px;
   }
   
-  .status-indicator span:last-child {
-    display: none; /* Hide "Connected" text, show only dot */
-  }
 }
 
 /* iOS safe areas */

@@ -1036,16 +1036,9 @@ class WhatsAppClient {
     document.getElementById('main-container')?.classList.remove('chat-open');
 
     const userName = document.getElementById('user-name');
-    const userInitial = document.getElementById('user-initial');
     const userPhone = document.getElementById('user-phone');
     if (userName) userName.textContent = 'Demo Visitor';
-    if (userInitial) userInitial.textContent = 'D';
     if (userPhone) userPhone.textContent = 'Sample inbox';
-
-    const statusIndicator = document.getElementById('status-indicator');
-    const statusText = statusIndicator?.querySelector('span:last-child');
-    statusIndicator?.querySelector('.status-dot')?.classList.add('connected');
-    if (statusText) statusText.textContent = 'Demo mode';
 
     this.persistDrafts();
     this.saveStoredArray(this.quickRepliesStorageKey, this.quickReplies);
@@ -1858,15 +1851,6 @@ class WhatsAppClient {
     }
   }
 
-  updateConnectionIndicator(connected, label) {
-    const statusDot = document.querySelector('.status-dot');
-    const statusText = document.querySelector('#status-indicator span:last-child');
-    statusDot?.classList.toggle('connected', connected);
-    if (statusText && label) {
-      statusText.textContent = label;
-    }
-  }
-
   // Show connecting overlay
   showConnecting() {
     if (this.demoMode) return;
@@ -1875,7 +1859,6 @@ class WhatsAppClient {
       return;
     }
 
-    this.updateConnectionIndicator(false, 'Connecting');
     document.getElementById('qr-overlay').classList.add('hidden');
     document.getElementById('connecting-overlay').classList.remove('hidden');
     document.getElementById('main-container').classList.add('hidden');
@@ -1885,16 +1868,10 @@ class WhatsAppClient {
     document.getElementById('qr-overlay')?.classList.add('hidden');
     document.getElementById('connecting-overlay')?.classList.add('hidden');
     document.getElementById('main-container')?.classList.remove('hidden');
-    this.updateConnectionIndicator(false, 'Disconnected');
-
     const userName = document.getElementById('user-name');
-    const userInitial = document.getElementById('user-initial');
     const userPhone = document.getElementById('user-phone');
     if (userName && userName.textContent === 'Loading...') {
       userName.textContent = 'WhatsApp disconnected';
-    }
-    if (userInitial && userInitial.textContent === '?') {
-      userInitial.textContent = '!';
     }
     if (userPhone && !userPhone.textContent) {
       userPhone.textContent = 'Cached inbox available';
@@ -1913,7 +1890,6 @@ class WhatsAppClient {
   // Show QR code
   showQRCode(qrData) {
     this.qrData = qrData;
-    this.updateConnectionIndicator(false, 'QR ready');
     document.getElementById('connecting-overlay').classList.add('hidden');
     document.getElementById('qr-overlay').classList.remove('hidden');
     document.getElementById('main-container').classList.add('hidden');
@@ -1970,14 +1946,11 @@ class WhatsAppClient {
     // Update user info
     if (data.name) {
       document.getElementById('user-name').textContent = data.name;
-      document.getElementById('user-initial').textContent = data.name.charAt(0).toUpperCase();
     }
     if (data.phone) {
       document.getElementById('user-phone').textContent = '+' + data.phone;
     }
     
-    // Update status indicator
-    this.updateConnectionIndicator(true, 'Connected');
     
     // Load contacts
     this.loadContacts();

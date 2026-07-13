@@ -52,7 +52,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="styles.css?v=20260713-silent-drafts">
+  <link rel="stylesheet" href="styles.css?v=20260713-compact-sidebar-header">
   <!-- QR Code library -->
   <script src="https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"></script>
   <!-- Prevent phone number detection on iOS -->
@@ -108,19 +108,12 @@
       <aside id="contacts-panel">
         <header class="panel-header">
           <div class="user-info">
-            <div class="avatar">
-              <span id="user-initial">?</span>
-            </div>
             <div class="user-details">
               <span id="user-name">Loading...</span>
               <span id="user-phone" class="phone"></span>
             </div>
           </div>
           <div class="header-actions">
-            <div class="status-indicator" id="status-indicator">
-              <span class="status-dot connected"></span>
-              <span>Connected</span>
-            </div>
             <button id="command-palette-button" class="header-icon-button" title="Open command palette">
               <svg viewBox="0 0 24 24" width="20" height="20">
                 <path fill="currentColor" d="M10 18a8 8 0 1 1 5.292-14.002A8 8 0 0 1 10 18zm0-2a6 6 0 1 0 0-12 6 6 0 0 0 0 12zm8.707 4.293-4.141-4.141 1.414-1.414 4.141 4.141-1.414 1.414z"/>
@@ -589,6 +582,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=20260713-silent-drafts"></script>
+  <script type="module" src="app.js?v=20260713-compact-sidebar-header"></script>
 </body>
 </html>
