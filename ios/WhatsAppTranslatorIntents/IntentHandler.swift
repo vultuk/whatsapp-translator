@@ -72,7 +72,7 @@ final class IntentHandler: INExtension, INSendMessageIntentHandling, INSearchFor
                         recipients: [contact.intentPerson],
                         groupName: contact.isGroup ? INSpeakableString(spokenPhrase: contact.displayName) : nil,
                         messageType: .text,
-                        serviceName: "WhatsApp Translator"
+                        serviceName: "Babel Bridge"
                     ),
                 ]
                 completion.call(response)
@@ -331,7 +331,7 @@ private struct IntentMessageResult: Sendable {
             recipients: message.isFromMe ? [contact.intentPerson] : [.currentUser],
             groupName: contact.isGroup ? INSpeakableString(spokenPhrase: contact.displayName) : nil,
             messageType: message.intentMessageType,
-            serviceName: "WhatsApp Translator"
+            serviceName: "Babel Bridge"
         )
     }
 }

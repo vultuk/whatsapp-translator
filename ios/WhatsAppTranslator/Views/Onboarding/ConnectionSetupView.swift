@@ -39,7 +39,7 @@ struct ConnectionSetupView: View {
                 Text("Your translator,\nnative on iPhone.")
                     .font(.system(size: 38, weight: .bold, design: .rounded))
                     .tracking(-1.1)
-                Text("Connect to your existing WhatsApp Translator and keep every conversation in its language.")
+                Text("Connect to your existing Babel Bridge server and keep every conversation in its language.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -75,7 +75,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             content: body,
             speakableGroupName: speakableGroupName,
             conversationIdentifier: contactID,
-            serviceName: "WhatsApp Translator",
+            serviceName: "Babel Bridge",
             sender: sender,
             attachments: nil
         )

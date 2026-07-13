@@ -25,7 +25,7 @@ enum MessagingIntentDonor {
                 ? INSpeakableString(spokenPhrase: displayName)
                 : nil,
             conversationIdentifier: contact.id,
-            serviceName: "WhatsApp Translator",
+            serviceName: "Babel Bridge",
             sender: nil,
             attachments: nil
         )

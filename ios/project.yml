@@ -9,7 +9,7 @@ settings:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: SUR6QUSSV6
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 6
+    CURRENT_PROJECT_VERSION: 7
     MARKETING_VERSION: 1.0.0
 targets:
   WhatsAppTranslator:
@@ -47,12 +47,12 @@ targets:
     info:
       path: WhatsAppTranslator/Info.plist
       properties:
-        CFBundleDisplayName: WhatsApp Translator
+        CFBundleDisplayName: Babel Bridge
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
-        NSLocalNetworkUsageDescription: Connect to your self-hosted WhatsApp Translator backend.
+        NSLocalNetworkUsageDescription: Connect to your self-hosted Babel Bridge backend.
         NSSiriUsageDescription: Send and read translated messages with Siri, Apple Watch, and CarPlay.
         KeychainAccessGroup: $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
         NSUserActivityTypes:
@@ -81,7 +81,7 @@ targets:
     info:
       path: WhatsAppTranslatorNotificationService/Info.plist
       properties:
-        CFBundleDisplayName: WhatsApp Translator Notifications
+        CFBundleDisplayName: Babel Bridge Notifications
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
@@ -109,7 +109,7 @@ targets:
     info:
       path: WhatsAppTranslatorIntents/Info.plist
       properties:
-        CFBundleDisplayName: WhatsApp Translator Messaging
+        CFBundleDisplayName: Babel Bridge Messaging
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         KeychainAccessGroup: $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared

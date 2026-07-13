@@ -1,6 +1,6 @@
-# WhatsApp Translator for iOS
+# Babel Bridge for iOS
 
-Native SwiftUI companion for the WhatsApp Translator backend.
+Native SwiftUI companion for the Babel Bridge translation backend.
 
 ## Generate and open
 

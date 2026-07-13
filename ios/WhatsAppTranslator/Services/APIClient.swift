@@ -330,7 +330,7 @@ enum APIError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .notConfigured: "Set up your translator server first."
-        case .invalidServer: "That address is not a WhatsApp Translator server."
+        case .invalidServer: "That address is not a Babel Bridge server."
         case .unauthorized: "The password is no longer valid."
         case .server(let message), .decoding(let message): message
         }
