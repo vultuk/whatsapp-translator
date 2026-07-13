@@ -16,6 +16,7 @@ import {
   getContactDisplayName,
   getContactLabels,
   getMessageSnippet,
+  normalizeInboxFilters,
   getUntranslatedIncomingMessages,
   getDraftPreview,
   getDraftText,
@@ -34,7 +35,7 @@ import {
   toggleStarredMessage,
   upsertDraft,
   upsertQuickReply,
-} from './app-state.js?v=20260713-original-follow-up';
+} from './app-state.js?v=20260713-all-chats';
 import { calculateViewportLayout } from './viewport.js?v=20260616-reactions-ui';
 
 class WhatsAppClient {
@@ -807,6 +808,15 @@ class WhatsAppClient {
   }
 
   syncInboxControls() {
+    const controlsAvailable = this.inboxFilterControlsAvailable();
+    const normalizedFilters = normalizeInboxFilters(this.contactFilters, { controlsAvailable });
+    const filtersChanged = Object.keys(this.contactFilters)
+      .some(key => this.contactFilters[key] !== normalizedFilters[key]);
+    if (filtersChanged) {
+      this.contactFilters = normalizedFilters;
+      this.persistInboxPreferences();
+    }
+
     const searchInput = document.getElementById('inbox-search-input');
     if (searchInput && searchInput.value !== this.sidebarSearchQuery) {
       searchInput.value = this.sidebarSearchQuery;
@@ -816,6 +826,11 @@ class WhatsAppClient {
       const key = button.dataset.inboxFilter;
       button.classList.toggle('active', Boolean(this.contactFilters[key]));
     });
+  }
+
+  inboxFilterControlsAvailable() {
+    const filterRow = document.querySelector('.inbox-filter-row');
+    return Boolean(filterRow && window.getComputedStyle(filterRow).display !== 'none');
   }
 
   setInboxSearchQuery(value) {
@@ -859,11 +874,14 @@ class WhatsAppClient {
   getFilteredContacts() {
     const now = Date.now();
     const messagesByContact = Object.fromEntries(this.messages.entries());
+    const effectiveFilters = normalizeInboxFilters(this.contactFilters, {
+      controlsAvailable: this.inboxFilterControlsAvailable(),
+    });
     return getVisibleContacts({
       contacts: this.contacts,
       drafts: this.drafts,
       searchQuery: this.sidebarSearchQuery,
-      filters: this.contactFilters,
+      filters: effectiveFilters,
       messagePreviewByContact: this.buildMessagePreviewLookup(),
       metadataByContact: this.contactMetadata,
       messagesByContact,

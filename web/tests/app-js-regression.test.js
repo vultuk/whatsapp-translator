@@ -146,6 +146,17 @@ test('contact previews prefer translated message text when available', () => {
   );
 });
 
+test('hidden inbox filters are cleared and cannot constrain the contact list', () => {
+  const syncInboxControlsBody = extractMethodBody(appJs, 'syncInboxControls');
+  const getFilteredContactsBody = extractMethodBody(appJs, 'getFilteredContacts');
+
+  assert.match(syncInboxControlsBody, /inboxFilterControlsAvailable/);
+  assert.match(syncInboxControlsBody, /normalizeInboxFilters/);
+  assert.match(syncInboxControlsBody, /this\.persistInboxPreferences\(\)/);
+  assert.match(getFilteredContactsBody, /effectiveFilters/);
+  assert.match(getFilteredContactsBody, /controlsAvailable:\s*this\.inboxFilterControlsAvailable\(\)/);
+});
+
 test('conversation settings modal only exposes translator-facing fields', () => {
   assert.match(indexHtml, /id="contact-alias"/);
   assert.match(indexHtml, /id="conversation-timezone"/);

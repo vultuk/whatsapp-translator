@@ -7,6 +7,7 @@ import {
   isMessageStarred,
   filterMessagesByQuery,
   getVisibleContacts,
+  normalizeInboxFilters,
   getReminderStatus,
   getReplyState,
   getContactDisplayName,
@@ -139,6 +140,32 @@ test('getVisibleContacts prioritizes drafts, unread filter, and search matching'
   }).map(contact => contact.id);
 
   assert.deepEqual(draftsOnly, ['alice']);
+});
+
+test('sidebar search ignores active inbox filters and snoozing', () => {
+  const contacts = [
+    { id: 'alice', name: 'Alice', type: 'private', unreadCount: 0, lastMessageTime: 10 },
+  ];
+
+  const visible = getVisibleContacts({
+    contacts,
+    searchQuery: 'alice',
+    filters: { unreadOnly: true },
+    metadataByContact: { alice: { snoozedUntil: 2_000 } },
+    now: 1_000,
+  }).map(contact => contact.id);
+
+  assert.deepEqual(visible, ['alice']);
+});
+
+test('hidden inbox controls cannot leave an unread-only filter active', () => {
+  const normalized = normalizeInboxFilters(
+    { unreadOnly: true, groupsOnly: true },
+    { controlsAvailable: false },
+  );
+
+  assert.equal(normalized.unreadOnly, false);
+  assert.equal(normalized.groupsOnly, false);
 });
 
 test('getVisibleContacts supports pinned and notes-only inbox filters', () => {

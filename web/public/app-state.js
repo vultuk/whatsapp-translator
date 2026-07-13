@@ -12,6 +12,16 @@ const DEFAULT_FILTERS = {
   tasksOnly: false,
 };
 
+export function normalizeInboxFilters(filters = {}, { controlsAvailable = true } = {}) {
+  if (!controlsAvailable) {
+    return { ...DEFAULT_FILTERS };
+  }
+
+  return Object.fromEntries(
+    Object.keys(DEFAULT_FILTERS).map(key => [key, Boolean(filters?.[key])]),
+  );
+}
+
 const PRIORITY_CONFIG = {
   urgent: { value: 'urgent', label: 'Urgent', rank: 0, isImportant: true },
   high: { value: 'high', label: 'High', rank: 1, isImportant: true },
@@ -703,6 +713,17 @@ export function getVisibleContacts({
       contactId: contact.id,
       now,
     });
+
+    // A typed search is global: inbox filters and snoozing must not hide a matching chat.
+    if (normalizedQuery) {
+      return contactMatchesSearch(
+        contact,
+        draftPreview,
+        messagePreviewByContact?.[contact.id] || '',
+        metadata,
+        normalizedQuery,
+      );
+    }
 
     if (isSnoozed && !mergedFilters.snoozedOnly) {
       return false;
