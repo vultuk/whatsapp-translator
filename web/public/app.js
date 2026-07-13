@@ -275,23 +275,44 @@ class WhatsAppClient {
     this.syncAppearanceControls();
   }
 
-  openAppearanceModal() {
+  async openAppearanceModal() {
     const modal = document.getElementById('appearance-modal');
     if (!modal) return;
     this.syncAppearanceControls();
     modal.classList.remove('hidden');
+    try {
+      const response = await this.apiFetch('/api/settings/openai');
+      if (!response.ok) throw new Error(`Settings request failed (${response.status})`);
+      const settings = await response.json();
+      document.getElementById('openai-model-select').value = settings.model || '';
+      document.getElementById('openai-reasoning-select').value = settings.reasoningEffort || '';
+    } catch (error) {
+      console.error('Failed to load OpenAI settings:', error);
+    }
   }
 
   closeAppearanceModal() {
     document.getElementById('appearance-modal')?.classList.add('hidden');
   }
 
-  saveAppearanceSettings() {
+  async saveAppearanceSettings() {
     const theme = document.getElementById('appearance-theme-select')?.value || 'whatsapp';
     const mode = document.getElementById('appearance-mode-select')?.value || 'system';
     this.appearancePreferences = { theme, mode };
     this.persistAppearancePreferences();
     this.applyAppearanceTheme();
+    const response = await this.apiFetch('/api/settings/openai', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: document.getElementById('openai-model-select')?.value || null,
+        reasoningEffort: document.getElementById('openai-reasoning-select')?.value || null,
+      }),
+    });
+    if (!response.ok) {
+      console.error('Failed to save OpenAI settings:', await response.text());
+      return;
+    }
     this.closeAppearanceModal();
   }
 

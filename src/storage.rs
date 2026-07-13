@@ -91,6 +91,13 @@ pub struct ConversationSettings {
     pub send_original_follow_up: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAiSettings {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+}
+
 /// Style profile for AI reply generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -213,6 +220,11 @@ impl MessageStore {
                 output_tokens INTEGER NOT NULL,
                 cost_usd REAL NOT NULL,
                 operation TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_usage_contact_id ON translation_usage(contact_id);
@@ -1046,6 +1058,30 @@ impl MessageStore {
             settings.send_original_follow_up
         );
 
+        Ok(())
+    }
+
+    pub fn get_openai_settings(&self) -> Result<OpenAiSettings> {
+        let conn = self.conn.lock().unwrap();
+        let value: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'openai'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        value
+            .map(|json| serde_json::from_str(&json).context("Invalid stored OpenAI settings"))
+            .unwrap_or_else(|| Ok(OpenAiSettings::default()))
+    }
+
+    pub fn update_openai_settings(&self, settings: &OpenAiSettings) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let value = serde_json::to_string(settings)?;
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('openai', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![value],
+        )?;
         Ok(())
     }
 
@@ -2351,6 +2387,26 @@ mod tests {
             .get_conversation_settings("chat@example.test")
             .expect("load settings");
         assert!(loaded.send_original_follow_up);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn openai_settings_round_trip_globally() {
+        let (store, data_dir) = test_store();
+        let settings = OpenAiSettings {
+            model: Some("gpt-5.6-terra".to_string()),
+            reasoning_effort: Some("high".to_string()),
+        };
+
+        store
+            .update_openai_settings(&settings)
+            .expect("save OpenAI settings");
+
+        assert_eq!(
+            store.get_openai_settings().expect("load OpenAI settings"),
+            settings
+        );
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

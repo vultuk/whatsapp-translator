@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::RwLock;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
@@ -23,6 +24,22 @@ const GPT_5_4_MINI_OUTPUT_COST_PER_M: f64 = 4.50;
 const GPT_5_4_NANO_INPUT_COST_PER_M: f64 = 0.10;
 const GPT_5_4_NANO_CACHED_INPUT_COST_PER_M: f64 = 0.01;
 const GPT_5_4_NANO_OUTPUT_COST_PER_M: f64 = 0.625;
+
+const GPT_5_6_SOL_PRICING: PricingTier = PricingTier {
+    input_cost_per_m: 5.0,
+    cached_input_cost_per_m: 0.5,
+    output_cost_per_m: 30.0,
+};
+const GPT_5_6_TERRA_PRICING: PricingTier = PricingTier {
+    input_cost_per_m: 2.5,
+    cached_input_cost_per_m: 0.25,
+    output_cost_per_m: 15.0,
+};
+const GPT_5_6_LUNA_PRICING: PricingTier = PricingTier {
+    input_cost_per_m: 1.0,
+    cached_input_cost_per_m: 0.1,
+    output_cost_per_m: 6.0,
+};
 
 #[derive(Clone, Copy)]
 struct PricingTier {
@@ -58,6 +75,7 @@ pub struct TranslationService {
     translation_model: String,
     high_end_model: String,
     default_language: String,
+    runtime_settings: RwLock<crate::storage::OpenAiSettings>,
 }
 
 /// Result of processing a message for translation.
@@ -156,6 +174,7 @@ impl TranslationService {
             translation_model,
             high_end_model,
             default_language,
+            runtime_settings: RwLock::new(Default::default()),
         }
     }
 
@@ -169,6 +188,7 @@ impl TranslationService {
             translation_model: "test-translate".to_string(),
             high_end_model: "test-high-end".to_string(),
             default_language: "English".to_string(),
+            runtime_settings: RwLock::new(Default::default()),
         }
     }
 
@@ -184,7 +204,33 @@ impl TranslationService {
     }
 
     pub fn get_detection_model(&self) -> String {
-        self.detection_model.clone()
+        self.runtime_settings
+            .read()
+            .unwrap()
+            .model
+            .clone()
+            .unwrap_or_else(|| self.detection_model.clone())
+    }
+
+    pub fn get_reasoning_effort(&self) -> Option<String> {
+        self.runtime_settings
+            .read()
+            .unwrap()
+            .reasoning_effort
+            .clone()
+    }
+
+    pub fn set_runtime_settings(&self, settings: crate::storage::OpenAiSettings) {
+        *self.runtime_settings.write().unwrap() = settings;
+    }
+
+    fn pricing_for_model(model: &str, fallback: PricingTier) -> PricingTier {
+        match model {
+            "gpt-5.6-sol" => GPT_5_6_SOL_PRICING,
+            "gpt-5.6-terra" => GPT_5_6_TERRA_PRICING,
+            "gpt-5.6-luna" => GPT_5_6_LUNA_PRICING,
+            _ => fallback,
+        }
     }
 
     fn usage_from_api(usage: Option<ApiUsage>, pricing: PricingTier) -> UsageInfo {
@@ -318,6 +364,10 @@ impl TranslationService {
         verbosity: Option<&str>,
         json_mode: bool,
     ) -> Result<(String, UsageInfo)> {
+        let overrides = self.runtime_settings.read().unwrap().clone();
+        let model = overrides.model.as_deref().unwrap_or(model);
+        let reasoning_effort = overrides.reasoning_effort.as_deref().or(reasoning_effort);
+        let pricing = Self::pricing_for_model(model, pricing);
         let mut body = json!({
             "model": model,
             "instructions": instructions,
@@ -879,6 +929,7 @@ Write my reply (keep it short and casual like my examples):"#,
 #[cfg(test)]
 mod tests {
     use super::{TranslationService, UsageInfo, CHEAP_PRICING};
+    use crate::storage::OpenAiSettings;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::thread;
@@ -887,6 +938,18 @@ mod tests {
     struct MockResponse {
         status: &'static str,
         body: String,
+    }
+
+    #[test]
+    fn runtime_settings_override_model_and_reasoning() {
+        let service = TranslationService::new_with_api_url("http://example.test".to_string());
+        service.set_runtime_settings(OpenAiSettings {
+            model: Some("gpt-5.6-sol".to_string()),
+            reasoning_effort: Some("xhigh".to_string()),
+        });
+
+        assert_eq!(service.get_detection_model(), "gpt-5.6-sol");
+        assert_eq!(service.get_reasoning_effort().as_deref(), Some("xhigh"));
     }
 
     fn spawn_openai_mock(responses: Vec<MockResponse>) -> (String, thread::JoinHandle<()>) {

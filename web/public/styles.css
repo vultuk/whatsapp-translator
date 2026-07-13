@@ -4771,6 +4771,9 @@ select {
   display: none !important;
 }
 
+/* Global settings remains available in simplified mode. */
+#app-appearance-button { display: inline-flex !important; }
+
 .empty-chat {
   align-items: center;
   justify-content: center;

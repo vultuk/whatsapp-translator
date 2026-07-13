@@ -34,7 +34,7 @@ use crate::oauth::{
     OAuthError, OAuthErrorResponse, PendingAuthorization, RefreshToken, RevokeRequest,
     TokenRequest, TokenResponse,
 };
-use crate::storage::{MessageStore, StoredMessage};
+use crate::storage::{MessageStore, OpenAiSettings, StoredMessage};
 use crate::translation::TranslationService;
 use tokio::sync::mpsc;
 
@@ -419,6 +419,16 @@ pub struct ConversationSettingsResponse {
     pub send_original_follow_up: bool,
 }
 
+const SUPPORTED_OPENAI_MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+const SUPPORTED_REASONING_EFFORTS: &[&str] = &["none", "low", "medium", "high", "xhigh", "max"];
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateOpenAiSettingsRequest {
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+}
+
 impl AppState {
     pub fn new(
         store: MessageStore,
@@ -771,6 +781,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let protected_api = Router::new()
         .route("/api/logout", post(logout))
         .route("/api/status", get(get_status))
+        .route(
+            "/api/settings/openai",
+            get(get_openai_settings).put(update_openai_settings),
+        )
         .route("/api/contacts", get(get_contacts))
         .route("/api/contacts/:contact_id/read", post(mark_contact_as_read))
         .route("/api/contacts/:contact_id/pin", post(toggle_pin))
@@ -1236,6 +1250,50 @@ async fn update_conversation_settings(
                 .into_response()
         }
     }
+}
+
+async fn get_openai_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.store.get_openai_settings() {
+        Ok(settings) => Json(serde_json::json!({
+            "model": settings.model,
+            "reasoningEffort": settings.reasoning_effort,
+            "available": state.translator.is_some()
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn update_openai_settings(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UpdateOpenAiSettingsRequest>,
+) -> impl IntoResponse {
+    let model = req.model.filter(|value| !value.is_empty());
+    let reasoning_effort = req.reasoning_effort.filter(|value| !value.is_empty());
+    if model
+        .as_deref()
+        .is_some_and(|value| !SUPPORTED_OPENAI_MODELS.contains(&value))
+        || reasoning_effort
+            .as_deref()
+            .is_some_and(|value| !SUPPORTED_REASONING_EFFORTS.contains(&value))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Unsupported model or reasoning level",
+        )
+            .into_response();
+    }
+    let settings = OpenAiSettings {
+        model,
+        reasoning_effort,
+    };
+    if let Err(error) = state.store.update_openai_settings(&settings) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    if let Some(translator) = &state.translator {
+        translator.set_runtime_settings(settings.clone());
+    }
+    Json(serde_json::json!({ "success": true, "model": settings.model, "reasoningEffort": settings.reasoning_effort })).into_response()
 }
 
 /// Query parameters for messages pagination
@@ -2289,7 +2347,11 @@ async fn ai_reply(
     // Create style analyzer
     let api_key = translator.get_api_key();
     let detection_model = translator.get_detection_model();
-    let style_analyzer = crate::style_analyzer::StyleAnalyzer::new(api_key, detection_model);
+    let style_analyzer = crate::style_analyzer::StyleAnalyzer::new(
+        api_key,
+        detection_model,
+        translator.get_reasoning_effort(),
+    );
 
     // Get or create global style profile
     let (global_style, global_usage) = match style_analyzer
@@ -3561,6 +3623,32 @@ mod tests {
             .uri(uri)
             .body(Body::empty())
             .expect("request")
+    }
+
+    #[tokio::test]
+    async fn global_openai_settings_are_validated_and_persisted() {
+        let (state, data_dir) = test_state(None);
+        let app = create_router(state.clone());
+        let request = HttpRequest::builder()
+            .method("PUT")
+            .uri("/api/settings/openai")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"model":"gpt-5.6-luna","reasoningEffort":"medium"}"#,
+            ))
+            .expect("request");
+        assert_eq!(
+            app.oneshot(request).await.expect("response").status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            state.store.get_openai_settings().expect("settings"),
+            OpenAiSettings {
+                model: Some("gpt-5.6-luna".to_string()),
+                reasoning_effort: Some("medium".to_string()),
+            }
+        );
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 
     fn test_outgoing_message(id: &str, timestamp: i64) -> StoredMessage {

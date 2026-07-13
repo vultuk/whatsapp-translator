@@ -27,6 +27,7 @@ pub struct StyleAnalyzer {
     client: Client,
     api_key: String,
     model: String,
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,7 +89,7 @@ fn openai_retry_delay(attempt: usize) -> Duration {
 }
 
 impl StyleAnalyzer {
-    pub fn new(api_key: String, model: String) -> Self {
+    pub fn new(api_key: String, model: String, reasoning_effort: Option<String>) -> Self {
         Self {
             client: Client::builder()
                 .timeout(OPENAI_REQUEST_TIMEOUT)
@@ -96,6 +97,7 @@ impl StyleAnalyzer {
                 .expect("OpenAI HTTP client should build"),
             api_key,
             model,
+            reasoning_effort,
         }
     }
 
@@ -216,14 +218,14 @@ Be specific with examples from the messages. This description will help an AI wr
             formatted_messages
         );
 
-        let body = json!({
+        let mut body = json!({
             "model": self.model,
             "instructions": "Analyze the user's writing style for future AI-assisted WhatsApp replies. Output only the style profile text.",
             "input": prompt,
             "max_output_tokens": 500,
-            "reasoning": { "effort": "none" },
             "text": { "verbosity": "low" },
         });
+        body["reasoning"] = json!({ "effort": self.reasoning_effort.as_deref().unwrap_or("none") });
 
         let openai_response = self.send_style_analysis_request(&body).await?;
 
@@ -240,7 +242,7 @@ Be specific with examples from the messages. This description will help an AI wr
             .trim()
             .to_string();
 
-        let usage = Self::calculate_usage(openai_response.usage);
+        let usage = self.calculate_usage(openai_response.usage);
 
         info!(
             "Style analysis complete: {} in ({} cached), {} out, ${:.6}",
@@ -315,7 +317,7 @@ Be specific with examples from the messages. This description will help an AI wr
         unreachable!("OpenAI retry loop should return or error");
     }
 
-    fn calculate_usage(usage: Option<ApiUsage>) -> StyleAnalysisUsage {
+    fn calculate_usage(&self, usage: Option<ApiUsage>) -> StyleAnalysisUsage {
         let usage = usage.unwrap_or_default();
         let cached_input_tokens = usage
             .input_tokens_details
@@ -324,12 +326,19 @@ Be specific with examples from the messages. This description will help an AI wr
             .min(usage.input_tokens);
         let uncached_input_tokens = usage.input_tokens.saturating_sub(cached_input_tokens);
 
-        let input_cost =
-            (uncached_input_tokens as f64 / 1_000_000.0) * GPT_5_4_NANO_INPUT_COST_PER_M;
-        let cached_input_cost =
-            (cached_input_tokens as f64 / 1_000_000.0) * GPT_5_4_NANO_CACHED_INPUT_COST_PER_M;
-        let output_cost =
-            (usage.output_tokens as f64 / 1_000_000.0) * GPT_5_4_NANO_OUTPUT_COST_PER_M;
+        let (input_rate, cached_rate, output_rate) = match self.model.as_str() {
+            "gpt-5.6-sol" => (5.0, 0.5, 30.0),
+            "gpt-5.6-terra" => (2.5, 0.25, 15.0),
+            "gpt-5.6-luna" => (1.0, 0.1, 6.0),
+            _ => (
+                GPT_5_4_NANO_INPUT_COST_PER_M,
+                GPT_5_4_NANO_CACHED_INPUT_COST_PER_M,
+                GPT_5_4_NANO_OUTPUT_COST_PER_M,
+            ),
+        };
+        let input_cost = (uncached_input_tokens as f64 / 1_000_000.0) * input_rate;
+        let cached_input_cost = (cached_input_tokens as f64 / 1_000_000.0) * cached_rate;
+        let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * output_rate;
 
         StyleAnalysisUsage {
             input_tokens: usage.input_tokens,

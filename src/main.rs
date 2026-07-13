@@ -139,6 +139,9 @@ async fn run_web_mode(
 ) -> Result<()> {
     // Initialize message store
     let store = MessageStore::new(&data_dir)?;
+    if let Some(service) = &translator {
+        service.set_runtime_settings(store.get_openai_settings()?);
+    }
 
     // Find web directory (relative to executable or in project)
     let web_dir = find_web_dir()?;

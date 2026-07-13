@@ -52,7 +52,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="styles.css?v=20260713-original-follow-up">
+  <link rel="stylesheet" href="styles.css?v=20260713-global-openai-settings">
   <!-- QR Code library -->
   <script src="https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"></script>
   <!-- Prevent phone number detection on iOS -->
@@ -126,9 +126,9 @@
                 <path fill="currentColor" d="M10 18a8 8 0 1 1 5.292-14.002A8 8 0 0 1 10 18zm0-2a6 6 0 1 0 0-12 6 6 0 0 0 0 12zm8.707 4.293-4.141-4.141 1.414-1.414 4.141 4.141-1.414 1.414z"/>
               </svg>
             </button>
-            <button id="app-appearance-button" class="header-icon-button" title="Appearance and themes">
+            <button id="app-appearance-button" class="header-icon-button" title="Global settings" aria-label="Global settings">
               <svg viewBox="0 0 24 24" width="20" height="20">
-                <path fill="currentColor" d="M12 3a9 9 0 1 0 9 9c0-.34-.02-.68-.06-1.01a1 1 0 0 0-1.34-.8A6.5 6.5 0 1 1 13.81 4.4 1 1 0 0 0 13 3.06 9.26 9.26 0 0 0 12 3z"/>
+                <path fill="currentColor" d="M19.43 12.98c.04-.32.07-.65.07-.98s-.03-.66-.08-.98l2.11-1.65-2-3.46-2.49 1a7.1 7.1 0 0 0-1.69-.98L15 3.27h-4l-.4 2.65c-.61.25-1.18.59-1.69.98l-2.49-1-2 3.46 2.11 1.65c-.05.33-.09.66-.09.99s.03.66.08.98l-2.11 1.65 2 3.46 2.49-1c.52.4 1.08.73 1.69.98l.4 2.65h4l.4-2.65c.61-.25 1.18-.58 1.69-.98l2.49 1 2-3.46-2.14-1.65zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/>
               </svg>
             </button>
             <button id="logout-button" class="logout-button" title="Logout and clear all data">
@@ -499,14 +499,36 @@
       <div class="modal-backdrop"></div>
       <div class="modal-content appearance-modal-content">
         <div class="modal-header">
-          <h3>Appearance</h3>
-          <button class="modal-close" aria-label="Close appearance settings">
+          <h3>Global settings</h3>
+          <button class="modal-close" aria-label="Close global settings">
             <svg viewBox="0 0 24 24" width="20" height="20">
               <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
             </svg>
           </button>
         </div>
         <div class="modal-body">
+          <div class="settings-section">
+            <span class="settings-section-label">OpenAI</span>
+            <div class="form-group">
+              <label for="openai-model-select">GPT model</label>
+              <select id="openai-model-select">
+                <option value="">App defaults</option>
+                <option value="gpt-5.6-sol">GPT-5.6 Sol · most capable</option>
+                <option value="gpt-5.6-terra">GPT-5.6 Terra · balanced</option>
+                <option value="gpt-5.6-luna">GPT-5.6 Luna · fastest value</option>
+              </select>
+              <p class="form-hint">Overrides the model for translation, detection, compose, and AI replies.</p>
+            </div>
+            <div class="form-group">
+              <label for="openai-reasoning-select">Reasoning level</label>
+              <select id="openai-reasoning-select">
+                <option value="">Task default</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option>
+              </select>
+              <p class="form-hint">Higher levels can improve difficult replies but take longer and use more output tokens.</p>
+            </div>
+          </div>
+          <div class="settings-section">
+            <span class="settings-section-label">Appearance</span>
           <div class="form-group">
             <label for="appearance-theme-select">Theme</label>
             <select id="appearance-theme-select">
@@ -533,6 +555,7 @@
           <div class="appearance-preview-card">
             <span class="appearance-preview-label">Preview</span>
             <strong id="appearance-preview-text">WhatsApp · Dark variant (following system)</strong>
+          </div>
           </div>
           <div class="workspace-data-section">
             <span class="workspace-data-label">Workspace data</span>
@@ -570,6 +593,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=20260713-all-chats"></script>
+  <script type="module" src="app.js?v=20260713-global-openai-settings"></script>
 </body>
 </html>
