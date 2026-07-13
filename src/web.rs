@@ -574,7 +574,43 @@ impl AppState {
         }
 
         let badge = self.store.total_unread_count().unwrap_or_default().max(0);
-        let notification = PushNotification::from_message(message, badge);
+        let avatar_jid = if message.chat_type == "group" {
+            message.sender_phone.as_deref().map(|value| {
+                if value.contains('@') {
+                    value.to_string()
+                } else {
+                    format!("{value}@s.whatsapp.net")
+                }
+            })
+        } else {
+            Some(message.contact_id.clone())
+        };
+        let avatar_url = match avatar_jid {
+            Some(jid) => tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                self.get_profile_picture(&jid),
+            )
+            .await
+            .ok()
+            .flatten(),
+            None => None,
+        };
+        let reaction_target = if message.content_type.eq_ignore_ascii_case("reaction") {
+            message
+                .content
+                .as_ref()
+                .and_then(|content| content.get("target_message_id"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(|message_id| self.store.get_message_by_id(message_id).ok().flatten())
+        } else {
+            None
+        };
+        let notification = PushNotification::from_message_with_context(
+            message,
+            badge,
+            avatar_url.as_deref(),
+            reaction_target.as_ref(),
+        );
         for device in devices {
             match client.send(&device, &notification).await {
                 Ok(ApnsSendOutcome::Delivered) => {}

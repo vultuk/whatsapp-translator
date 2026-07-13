@@ -1,4 +1,6 @@
 import XCTest
+import Intents
+import UserNotifications
 @testable import WhatsAppTranslator
 
 final class WhatsAppTranslatorTests: XCTestCase {
@@ -48,6 +50,36 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(payload["installationId"], "installation-1")
         XCTAssertEqual(payload["token"], "0123456789abcdef")
         XCTAssertEqual(payload["environment"], "sandbox")
+    }
+
+    func testMessagingNotificationCategorySupportsInlineReplyWatchAndCarPlay() throws {
+        let category = MessagingNotificationContract.category
+
+        XCTAssertEqual(category.identifier, MessagingNotificationContract.categoryIdentifier)
+        XCTAssertTrue(category.options.contains(.allowInCarPlay))
+        XCTAssertTrue(category.options.contains(.allowAnnouncement))
+        XCTAssertTrue(category.options.contains(.hiddenPreviewsShowTitle))
+        XCTAssertTrue(category.intentIdentifiers.contains(INSendMessageIntentIdentifier))
+        XCTAssertTrue(category.intentIdentifiers.contains(INSearchForMessagesIntentIdentifier))
+        let reply = try XCTUnwrap(category.actions.first as? UNTextInputNotificationAction)
+        XCTAssertEqual(reply.identifier, MessagingNotificationContract.replyActionIdentifier)
+        XCTAssertEqual(reply.textInputButtonTitle, "Send")
+    }
+
+    func testMessagingNotificationRoutingReadsBackendMetadata() {
+        let routing = MessagingNotificationRouting(userInfo: [
+            "contactId": "family@g.us",
+            "messageId": "message-1",
+            "senderName": "Virág",
+            "conversationName": "The Skinners",
+            "chatType": "group",
+        ])
+
+        XCTAssertEqual(routing?.contactID, "family@g.us")
+        XCTAssertEqual(routing?.messageID, "message-1")
+        XCTAssertEqual(routing?.senderName, "Virág")
+        XCTAssertEqual(routing?.conversationName, "The Skinners")
+        XCTAssertTrue(routing?.isGroup == true)
     }
 
     func testChatCachePersistsMessagesForTheConfiguredServer() async throws {

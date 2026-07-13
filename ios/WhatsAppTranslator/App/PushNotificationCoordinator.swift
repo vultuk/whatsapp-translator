@@ -1,5 +1,62 @@
+import Intents
 import SwiftUI
 import UserNotifications
+
+enum MessagingNotificationContract {
+    static let categoryIdentifier = "MESSAGE_CATEGORY"
+    static let replyActionIdentifier = "REPLY_ACTION"
+
+    static var category: UNNotificationCategory {
+        let reply = UNTextInputNotificationAction(
+            identifier: replyActionIdentifier,
+            title: "Reply",
+            options: [],
+            textInputButtonTitle: "Send",
+            textInputPlaceholder: "Reply…"
+        )
+        return UNNotificationCategory(
+            identifier: categoryIdentifier,
+            actions: [reply],
+            intentIdentifiers: [INSendMessageIntentIdentifier, INSearchForMessagesIntentIdentifier],
+            options: [
+                .allowInCarPlay,
+                .allowAnnouncement,
+                .hiddenPreviewsShowTitle,
+                .hiddenPreviewsShowSubtitle,
+            ]
+        )
+    }
+}
+
+struct MessagingNotificationRouting: Sendable {
+    let contactID: String
+    let messageID: String?
+    let senderName: String?
+    let conversationName: String?
+    let isGroup: Bool
+
+    init?(userInfo: [AnyHashable: Any]) {
+        guard let contactID = userInfo["contactId"] as? String,
+              !contactID.isEmpty else { return nil }
+        self.contactID = contactID
+        messageID = userInfo["messageId"] as? String
+        senderName = userInfo["senderName"] as? String
+        conversationName = userInfo["conversationName"] as? String
+        isGroup = (userInfo["chatType"] as? String) == "group" || contactID.contains("@g.us")
+    }
+}
+
+private final class NotificationCompletion: @unchecked Sendable {
+    private let handler: () -> Void
+
+    init(_ handler: @escaping () -> Void) {
+        self.handler = handler
+    }
+
+    func finish() {
+        handler()
+    }
+}
 
 @MainActor
 final class PushNotificationCoordinator {
@@ -14,6 +71,8 @@ final class PushNotificationCoordinator {
 
     func activate(for session: AppSession) async {
         self.session = session
+        registerMessagingCategory()
+        requestSiriAuthorizationIfNeeded()
 
         if let pendingContactID {
             self.pendingContactID = nil
@@ -25,7 +84,9 @@ final class PushNotificationCoordinator {
         let authorized: Bool
         switch settings.authorizationStatus {
         case .notDetermined:
-            authorized = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) == true
+            authorized = (try? await center.requestAuthorization(
+                options: [.alert, .sound, .badge, .announcement]
+            )) == true
         case .authorized, .provisional, .ephemeral:
             authorized = true
         case .denied:
@@ -37,6 +98,17 @@ final class PushNotificationCoordinator {
         guard authorized else { return }
         UIApplication.shared.registerForRemoteNotifications()
         await registerCurrentTokenIfPossible()
+    }
+
+    func registerMessagingCategory() {
+        UNUserNotificationCenter.current().setNotificationCategories([
+            MessagingNotificationContract.category,
+        ])
+    }
+
+    private func requestSiriAuthorizationIfNeeded() {
+        guard INPreferences.siriAuthorizationStatus() == .notDetermined else { return }
+        INPreferences.requestSiriAuthorization { _ in }
     }
 
     func received(deviceToken data: Data) {
@@ -60,6 +132,33 @@ final class PushNotificationCoordinator {
 
     func backgroundCacheDidRefresh() async {
         _ = await session?.restoreCachedState()
+    }
+
+    func reply(text: String, to contactID: String) async -> Bool {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return false }
+
+        if let session {
+            return await session.send(text: clean, to: contactID)
+        }
+
+        guard let configuration = CredentialStore().load() else { return false }
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.timeoutIntervalForRequest = 15
+        sessionConfiguration.timeoutIntervalForResource = 30
+        let api = APIClient(session: URLSession(configuration: sessionConfiguration))
+        await api.configure(configuration)
+        do {
+            try await api.prepareAuthenticatedRequests()
+            _ = try await api.send(contactID: contactID, text: clean)
+            _ = await BackgroundMessageSynchronizer.shared.sync(contactID: contactID)
+            return true
+        } catch {
+            #if DEBUG
+            print("Notification reply failed: \(error.localizedDescription)")
+            #endif
+            return false
+        }
     }
 
     private func registerCurrentTokenIfPossible() async {
@@ -97,6 +196,7 @@ final class NotificationAppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        PushNotificationCoordinator.shared.registerMessagingCategory()
         return true
     }
 
@@ -155,11 +255,29 @@ final class NotificationAppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let contactID = response.notification.request.content.userInfo["contactId"] as? String
-        if let contactID {
+        guard let routing = MessagingNotificationRouting(
+            userInfo: response.notification.request.content.userInfo
+        ) else {
+            completionHandler()
+            return
+        }
+
+        if response.actionIdentifier == MessagingNotificationContract.replyActionIdentifier,
+           let reply = response as? UNTextInputNotificationResponse {
+            let replyText = reply.userText
+            let completion = NotificationCompletion(completionHandler)
             Task { @MainActor in
-                PushNotificationCoordinator.shared.openNotification(contactID: contactID)
+                _ = await PushNotificationCoordinator.shared.reply(
+                    text: replyText,
+                    to: routing.contactID
+                )
+                completion.finish()
             }
+            return
+        }
+
+        Task { @MainActor in
+            PushNotificationCoordinator.shared.openNotification(contactID: routing.contactID)
         }
         completionHandler()
     }

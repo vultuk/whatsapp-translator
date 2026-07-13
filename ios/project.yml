@@ -9,7 +9,7 @@ settings:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: SUR6QUSSV6
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 4
+    CURRENT_PROJECT_VERSION: 5
     MARKETING_VERSION: 1.0.0
 targets:
   WhatsAppTranslator:
@@ -17,10 +17,20 @@ targets:
     platform: iOS
     sources:
       - path: WhatsAppTranslator
+    dependencies:
+      - target: WhatsAppTranslatorNotificationService
+        embed: true
+      - target: WhatsAppTranslatorIntents
+        embed: true
     entitlements:
       path: WhatsAppTranslator/WhatsAppTranslator.entitlements
       properties:
         aps-environment: $(APS_ENVIRONMENT)
+        com.apple.developer.siri: true
+        com.apple.developer.usernotifications.communication: true
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)
+          - $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator
@@ -43,6 +53,12 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: Connect to your self-hosted WhatsApp Translator backend.
+        NSSiriUsageDescription: Send and read translated messages with Siri, Apple Watch, and CarPlay.
+        KeychainAccessGroup: $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
+        NSUserActivityTypes:
+          - INSendMessageIntent
+          - INSearchForMessagesIntent
+          - INSetMessageAttributeIntent
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UIBackgroundModes:
@@ -52,6 +68,59 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+  WhatsAppTranslatorNotificationService:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: WhatsAppTranslatorNotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.notification-service
+        PRODUCT_NAME: NotificationService
+        SKIP_INSTALL: true
+    info:
+      path: WhatsAppTranslatorNotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: WhatsApp Translator Notifications
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+  WhatsAppTranslatorIntents:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: WhatsAppTranslatorIntents
+      - path: WhatsAppTranslator/Models/APIModels.swift
+      - path: WhatsAppTranslator/Models/ServerConfiguration.swift
+      - path: WhatsAppTranslator/Services/APIClient.swift
+      - path: WhatsAppTranslator/Services/CredentialStore.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.intents
+        PRODUCT_NAME: WhatsAppTranslatorIntents
+        SKIP_INSTALL: true
+    entitlements:
+      path: WhatsAppTranslatorIntents/WhatsAppTranslatorIntents.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
+    info:
+      path: WhatsAppTranslatorIntents/Info.plist
+      properties:
+        CFBundleDisplayName: WhatsApp Translator Messaging
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        KeychainAccessGroup: $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.intents-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).IntentHandler
+          NSExtensionAttributes:
+            IntentsSupported:
+              - INSendMessageIntent
+              - INSearchForMessagesIntent
+              - INSetMessageAttributeIntent
   WhatsAppTranslatorTests:
     type: bundle.unit-test
     platform: iOS

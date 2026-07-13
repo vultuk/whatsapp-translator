@@ -8,6 +8,7 @@ use crate::storage::{PushDevice, StoredMessage};
 
 const SANDBOX_APNS_HOST: &str = "https://api.sandbox.push.apple.com";
 const PRODUCTION_APNS_HOST: &str = "https://api.push.apple.com";
+const MESSAGE_CATEGORY: &str = "MESSAGE_CATEGORY";
 
 pub struct ApnsClient {
     client: reqwest::Client,
@@ -161,50 +162,86 @@ impl PushNotification {
     }
 
     pub fn from_message(message: &StoredMessage, badge: i32) -> Self {
+        Self::from_message_with_avatar(message, badge, None)
+    }
+
+    pub fn from_message_with_avatar(
+        message: &StoredMessage,
+        badge: i32,
+        avatar_url: Option<&str>,
+    ) -> Self {
+        Self::from_message_with_context(message, badge, avatar_url, None)
+    }
+
+    pub fn from_message_with_context(
+        message: &StoredMessage,
+        badge: i32,
+        avatar_url: Option<&str>,
+        reaction_target: Option<&StoredMessage>,
+    ) -> Self {
+        let is_group = message.chat_type == "group";
+        let conversation_name = message
+            .contact_name
+            .as_deref()
+            .or(message.contact_phone.as_deref())
+            .unwrap_or("WhatsApp chat");
+        let sender_name = message
+            .sender_name
+            .as_deref()
+            .or(message.sender_phone.as_deref())
+            .or(message.contact_name.as_deref())
+            .or(message.contact_phone.as_deref())
+            .unwrap_or("New WhatsApp message");
         let title = truncate(
-            message
-                .contact_name
-                .as_deref()
-                .or(message.sender_name.as_deref())
-                .or(message.contact_phone.as_deref())
-                .unwrap_or("New WhatsApp message"),
+            if is_group {
+                sender_name
+            } else {
+                conversation_name
+            },
             100,
         );
-        let subtitle = if message.chat_type == "group" {
-            message
-                .sender_name
-                .as_deref()
-                .map(|value| truncate(value, 100))
+        let subtitle = if is_group {
+            Some(truncate(conversation_name, 100))
         } else {
             None
         };
-        let body = truncate(&notification_body(message), 500);
+        let body = truncate(&notification_body(message, reaction_target), 500);
 
         let mut alert = json!({
             "title": title,
-            "body": body,
+            "body": body.clone(),
         });
         if let Some(subtitle) = subtitle {
             alert["subtitle"] = Value::String(subtitle);
         }
 
-        Self {
-            payload: json!({
-                "aps": {
-                    "alert": alert,
-                    "sound": "default",
-                    "badge": badge,
-                    "thread-id": message.contact_id,
-                    "content-available": 1,
-                },
-                "contactId": message.contact_id,
-                "messageId": message.id,
-            }),
+        let mut payload = json!({
+            "aps": {
+                "alert": alert,
+                "sound": "default",
+                "badge": badge,
+                "thread-id": message.contact_id,
+                "content-available": 1,
+                "mutable-content": 1,
+                "category": MESSAGE_CATEGORY,
+                "summary-arg": conversation_name,
+            },
+            "contactId": message.contact_id,
+            "messageId": message.id,
+            "senderId": message.sender_phone,
+            "senderName": sender_name,
+            "conversationName": conversation_name,
+            "chatType": message.chat_type,
+            "messageBody": body,
+        });
+        if let Some(avatar_url) = avatar_url.filter(|value| !value.trim().is_empty()) {
+            payload["avatarUrl"] = Value::String(avatar_url.to_string());
         }
+        Self { payload }
     }
 }
 
-fn notification_body(message: &StoredMessage) -> String {
+fn notification_body(message: &StoredMessage, reaction_target: Option<&StoredMessage>) -> String {
     if let Some(text) = message
         .translated_text
         .as_deref()
@@ -236,6 +273,24 @@ fn notification_body(message: &StoredMessage) -> String {
     }
 
     match message.content_type.to_ascii_lowercase().as_str() {
+        "reaction" => {
+            let emoji = content
+                .as_ref()
+                .and_then(|content| content.get("emoji"))
+                .and_then(Value::as_str)
+                .filter(|emoji| !emoji.trim().is_empty());
+            let target = reaction_target
+                .map(|target| truncate(&notification_body(target, None), 100))
+                .filter(|text| text != "New message");
+            match (emoji, target) {
+                (Some(emoji), Some(target)) => {
+                    format!("Reacted {emoji} to \u{201c}{target}\u{201d}")
+                }
+                (None, Some(target)) => format!("Reacted to \u{201c}{target}\u{201d}"),
+                (Some(emoji), None) => format!("Reacted {emoji} to a message"),
+                (None, None) => "Reacted to a message".to_string(),
+            }
+        }
         "image" => "Photo".to_string(),
         "video" => "Video".to_string(),
         "audio" | "voice note" => "Voice message".to_string(),
@@ -243,6 +298,8 @@ fn notification_body(message: &StoredMessage) -> String {
         "sticker" => "Sticker".to_string(),
         "location" => "Location".to_string(),
         "contact" => "Contact".to_string(),
+        "poll" => "Poll".to_string(),
+        "revoked" => "This message was deleted".to_string(),
         _ => "New message".to_string(),
     }
 }
@@ -284,18 +341,77 @@ mod tests {
             is_translated: true,
         };
 
-        let notification = PushNotification::from_message(&message, 7);
+        let notification = PushNotification::from_message_with_avatar(
+            &message,
+            7,
+            Some("https://cdn.example.com/avatar.jpg"),
+        );
 
+        assert_eq!(notification.payload["aps"]["alert"]["title"], "Virág");
         assert_eq!(
-            notification.payload["aps"]["alert"]["title"],
+            notification.payload["aps"]["alert"]["subtitle"],
             "The Skinners"
         );
-        assert_eq!(notification.payload["aps"]["alert"]["subtitle"], "Virág");
         assert_eq!(notification.payload["aps"]["alert"]["body"], "Hello");
         assert_eq!(notification.payload["aps"]["badge"], 7);
         assert_eq!(notification.payload["aps"]["content-available"], 1);
+        assert_eq!(notification.payload["aps"]["mutable-content"], 1);
+        assert_eq!(notification.payload["aps"]["category"], "MESSAGE_CATEGORY");
+        assert_eq!(notification.payload["aps"]["thread-id"], "family@g.us");
         assert_eq!(notification.payload["contactId"], "family@g.us");
         assert_eq!(notification.payload["messageId"], "message-1");
+        assert_eq!(notification.payload["senderName"], "Virág");
+        assert_eq!(notification.payload["conversationName"], "The Skinners");
+        assert_eq!(notification.payload["chatType"], "group");
+        assert_eq!(notification.payload["messageBody"], "Hello");
+        assert_eq!(
+            notification.payload["avatarUrl"],
+            "https://cdn.example.com/avatar.jpg"
+        );
+    }
+
+    #[test]
+    fn reaction_payload_describes_the_reaction() {
+        let content = json!({
+            "type": "reaction",
+            "emoji": "😂",
+            "target_message_id": "message-1"
+        });
+        let message = StoredMessage {
+            id: "reaction-1".to_string(),
+            contact_id: "family@g.us".to_string(),
+            timestamp: 1_700_000_000_000,
+            is_from_me: false,
+            is_forwarded: false,
+            sender_name: Some("Eileen".to_string()),
+            sender_phone: Some("447700900123".to_string()),
+            contact_name: Some("The Skinners".to_string()),
+            contact_phone: None,
+            chat_type: "group".to_string(),
+            content_type: "Reaction".to_string(),
+            content_json: content.to_string(),
+            content: Some(content),
+            original_text: None,
+            translated_text: None,
+            source_language: None,
+            is_translated: false,
+        };
+
+        let target_content = json!({"type": "text", "body": "Mother... slow down!"});
+        let target = StoredMessage {
+            id: "message-1".to_string(),
+            content_type: "Text".to_string(),
+            content_json: target_content.to_string(),
+            content: Some(target_content),
+            ..message.clone()
+        };
+        let notification =
+            PushNotification::from_message_with_context(&message, 1, None, Some(&target));
+
+        assert_eq!(
+            notification.payload["aps"]["alert"]["body"],
+            "Reacted 😂 to “Mother... slow down!”"
+        );
     }
 
     #[test]

@@ -99,6 +99,7 @@ final class AppSession {
     func start() async {
         if demoMode {
             loadDemoData()
+            await PushNotificationCoordinator.shared.activate(for: self)
             return
         }
         guard let stored = credentials.load() else {
@@ -194,7 +195,15 @@ final class AppSession {
         }
 
         do {
-            _ = try await api.send(contactID: contactID, text: clean, reply: reply)
+            let response = try await api.send(contactID: contactID, text: clean, reply: reply)
+            if let contact = contacts.first(where: { $0.id == contactID }) {
+                MessagingIntentDonor.donateOutgoing(
+                    originalText: clean,
+                    response: response,
+                    contact: contact,
+                    displayName: displayName(for: contact)
+                )
+            }
             await loadMessages(for: contactID)
             await refresh()
             return true

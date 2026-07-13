@@ -3,13 +3,28 @@ import Security
 
 struct CredentialStore: Sendable {
     private let service = "com.vultuk.whatsapptranslator.backend"
+    private var sharedAccessGroup: String? {
+        guard let rawValue = Bundle.main.object(forInfoDictionaryKey: "KeychainAccessGroup") as? String else {
+            return nil
+        }
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
 
     func load() -> ServerConfiguration? {
-        guard let address = read(account: "server"),
-              let password = read(account: "password") else { return nil }
-        makeAvailableAfterFirstUnlock(account: "server")
-        makeAvailableAfterFirstUnlock(account: "password")
-        return try? ServerConfiguration.make(address: address, password: password)
+        if let address = read(account: "server", accessGroup: sharedAccessGroup),
+           let password = read(account: "password", accessGroup: sharedAccessGroup) {
+            makeAvailableAfterFirstUnlock(account: "server", accessGroup: sharedAccessGroup)
+            makeAvailableAfterFirstUnlock(account: "password", accessGroup: sharedAccessGroup)
+            return try? ServerConfiguration.make(address: address, password: password)
+        }
+
+        guard let address = read(account: "server", accessGroup: nil),
+              let password = read(account: "password", accessGroup: nil),
+              let configuration = try? ServerConfiguration.make(address: address, password: password)
+        else { return nil }
+        try? save(configuration)
+        return configuration
     }
 
     func save(_ configuration: ServerConfiguration) throws {
@@ -18,8 +33,10 @@ struct CredentialStore: Sendable {
     }
 
     func clear() {
-        delete(account: "server")
-        delete(account: "password")
+        delete(account: "server", accessGroup: sharedAccessGroup)
+        delete(account: "password", accessGroup: sharedAccessGroup)
+        delete(account: "server", accessGroup: nil)
+        delete(account: "password", accessGroup: nil)
     }
 
     private func write(_ value: String, account: String) throws {
@@ -28,7 +45,7 @@ struct CredentialStore: Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-        ]
+        ].adding(accessGroup: sharedAccessGroup)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
@@ -45,35 +62,35 @@ struct CredentialStore: Sendable {
         }
     }
 
-    private func read(account: String) -> String? {
+    private func read(account: String, accessGroup: String?) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
+        ].adding(accessGroup: accessGroup)
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    private func delete(account: String) {
+    private func delete(account: String, accessGroup: String?) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-        ]
+        ].adding(accessGroup: accessGroup)
         SecItemDelete(query as CFDictionary)
     }
 
-    private func makeAvailableAfterFirstUnlock(account: String) {
+    private func makeAvailableAfterFirstUnlock(account: String, accessGroup: String?) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-        ]
+        ].adding(accessGroup: accessGroup)
         let attributes: [String: Any] = [
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
@@ -81,4 +98,13 @@ struct CredentialStore: Sendable {
     }
 
     enum KeychainError: Error { case status(OSStatus) }
+}
+
+private extension Dictionary where Key == String, Value == Any {
+    func adding(accessGroup: String?) -> Self {
+        guard let accessGroup else { return self }
+        var copy = self
+        copy[kSecAttrAccessGroup as String] = accessGroup
+        return copy
+    }
 }
