@@ -34,7 +34,7 @@ import {
   toggleStarredMessage,
   upsertDraft,
   upsertQuickReply,
-} from './app-state.js?v=20260616-reactions-ui';
+} from './app-state.js?v=20260713-original-follow-up';
 import { calculateViewportLayout } from './viewport.js?v=20260616-reactions-ui';
 
 class WhatsAppClient {
@@ -3338,13 +3338,20 @@ class WhatsAppClient {
     let translationIndicator = '';
     if (isTranslated) {
       const sourceLanguage = message.sourceLanguage || message.source_language || 'Unknown';
+      const showTranslatedPrimary = Boolean(
+        message.content?.showTranslatedPrimary || message.content?.show_translated_primary
+      );
       
       // Tooltip shows the "other" version:
       // - Outgoing: show translated_text (what was sent to them in foreign language)
       // - Incoming: show original_text (what they sent in foreign language)
       let tooltipText, tooltipHeader, languageLabel;
       
-      if (isOutgoing) {
+      if (isOutgoing && showTranslatedPrimary) {
+        tooltipText = message.originalText || message.original_text || '';
+        tooltipHeader = 'Original draft';
+        languageLabel = 'your text';
+      } else if (isOutgoing) {
         // Outgoing: show what was sent (translated foreign text)
         tooltipText = message.translatedText || message.translated_text || '';
         tooltipHeader = 'Sent as';
@@ -3486,6 +3493,9 @@ class WhatsAppClient {
     const content = message.content;
     const isTranslated = message.is_translated || message.isTranslated;
     const isFromMe = message.isFromMe || message.is_from_me;
+    const showTranslatedPrimary = Boolean(
+      content?.showTranslatedPrimary || content?.show_translated_primary
+    );
     
     // Display logic - always show MY language (English) in the bubble:
     // - Outgoing translated: show original_text (English - what I typed)
@@ -3495,7 +3505,10 @@ class WhatsAppClient {
     let displayText;
     let displayCaption;
     
-    if (isTranslated && isFromMe) {
+    if (isTranslated && isFromMe && showTranslatedPrimary) {
+      displayText = message.translated_text || message.translatedText || content.body || content.text || '';
+      displayCaption = content.caption ? (message.translated_text || message.translatedText || content.caption) : null;
+    } else if (isTranslated && isFromMe) {
       // Outgoing translated: show original_text (English - what I typed)
       displayText = message.original_text || message.originalText || content.body || content.text || '';
       displayCaption = content.caption ? (message.original_text || message.originalText || content.caption) : null;
@@ -4108,6 +4121,7 @@ class WhatsAppClient {
       const metadata = this.getContactMetadata(this.currentContactId);
       const targetLanguage = metadata.targetLanguage || 'Spanish';
       const translatedText = simulateTranslation(text, targetLanguage);
+      const sendOriginalFollowUp = Boolean(metadata.sendOriginalFollowUp && translatedText);
       const localMessage = {
         id: `demo-out-${Date.now()}`,
         timestamp: Date.now(),
@@ -4115,7 +4129,7 @@ class WhatsAppClient {
         isFromMe: true,
         isForwarded: false,
         senderJid: this.getMessageSenderJid({ isFromMe: true }),
-        content: { type: 'text', body: text },
+        content: { type: 'text', body: text, showTranslatedPrimary: sendOriginalFollowUp },
         isTranslated: Boolean(translatedText),
         originalText: text,
         translatedText,
@@ -4136,6 +4150,18 @@ class WhatsAppClient {
         this.messages.set(this.currentContactId, []);
       }
       this.messages.get(this.currentContactId).push(localMessage);
+      if (sendOriginalFollowUp) {
+        this.messages.get(this.currentContactId).push({
+          id: `demo-original-${Date.now()}`,
+          timestamp: Date.now() + 1,
+          contactId: this.currentContactId,
+          isFromMe: true,
+          isForwarded: false,
+          senderJid: this.getMessageSenderJid({ isFromMe: true }),
+          content: { type: 'text', body: text },
+          isTranslated: false,
+        });
+      }
       this.refreshCurrentConversationView();
       this.scrollToBottom();
       this.updateContactInList(localMessage);
@@ -4197,7 +4223,11 @@ class WhatsAppClient {
         isFromMe: true,
         isForwarded: false,
         senderJid: this.getMessageSenderJid({ isFromMe: true }),
-        content: { type: 'text', body: text },
+        content: {
+          type: 'text',
+          body: text,
+          showTranslatedPrimary: result.originalFollowUpSent || Boolean(result.originalFollowUpError),
+        },
         // Include translation info if the message was translated
         isTranslated: result.isTranslated || false,
         originalText: result.isTranslated ? text : null,  // What user typed (English)
@@ -4215,6 +4245,18 @@ class WhatsAppClient {
       const messages = this.messages.get(this.currentContactId);
       if (!messages.some(m => m.id === localMessage.id)) {
         messages.push(localMessage);
+        if (result.originalFollowUpSent && result.originalMessageId) {
+          messages.push({
+            id: result.originalMessageId,
+            timestamp: result.originalTimestamp || Date.now(),
+            contactId: this.currentContactId,
+            isFromMe: true,
+            isForwarded: false,
+            senderJid: this.getMessageSenderJid({ isFromMe: true }),
+            content: { type: 'text', body: text },
+            isTranslated: false,
+          });
+        }
         this.refreshCurrentConversationView();
         this.scrollToBottom();
         this.updateChatHeaderNote();
@@ -4228,6 +4270,10 @@ class WhatsAppClient {
       if (result.isTranslated) {
         this.fetchGlobalUsage();
         this.fetchConversationUsage(this.currentContactId);
+      }
+
+      if (result.originalFollowUpError) {
+        alert(`The translation was sent, but the original follow-up failed: ${result.originalFollowUpError}`);
       }
       
     } catch (err) {
@@ -6251,6 +6297,10 @@ class WhatsAppClient {
     setFieldValue('conversation-timezone', mergedSettings.timezone);
     setFieldValue('language-override', mergedSettings.languageOverride);
     setFieldValue('translation-style', mergedSettings.translationStyle);
+    const sendOriginalFollowUp = document.getElementById('send-original-follow-up');
+    if (sendOriginalFollowUp) {
+      sendOriginalFollowUp.checked = Boolean(mergedSettings.sendOriginalFollowUp);
+    }
 
     modal.classList.remove('hidden');
   }
@@ -6284,6 +6334,7 @@ class WhatsAppClient {
 
     const languageOverride = document.getElementById('language-override')?.value?.trim() || null;
     const translationStyle = document.getElementById('translation-style')?.value?.trim() || null;
+    const sendOriginalFollowUp = Boolean(document.getElementById('send-original-follow-up')?.checked);
     const alias = document.getElementById('contact-alias')?.value?.trim() || null;
     const timezone = document.getElementById('conversation-timezone')?.value?.trim() || null;
 
@@ -6292,6 +6343,7 @@ class WhatsAppClient {
       languageOverride,
       targetLanguage: languageOverride,
       translationStyle,
+      sendOriginalFollowUp,
       timezone,
     });
 
@@ -6301,6 +6353,7 @@ class WhatsAppClient {
       contact.languageOverride = languageOverride;
       contact.targetLanguage = languageOverride;
       contact.translationStyle = translationStyle;
+      contact.sendOriginalFollowUp = sendOriginalFollowUp;
       contact.timezone = timezone;
     }
 
@@ -6313,7 +6366,8 @@ class WhatsAppClient {
         },
         body: JSON.stringify({
           languageOverride: languageOverride || null,
-          translationStyle: translationStyle || null
+          translationStyle: translationStyle || null,
+          sendOriginalFollowUp
         })
       });
 
@@ -6324,6 +6378,7 @@ class WhatsAppClient {
       if (contact) {
         contact.languageOverride = languageOverride;
         contact.translationStyle = translationStyle;
+        contact.sendOriginalFollowUp = sendOriginalFollowUp;
       }
     } catch (err) {
       console.error('Failed to save conversation settings:', err);

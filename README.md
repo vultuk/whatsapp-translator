@@ -15,7 +15,7 @@ Railway is the easiest hosted option for this app because it supports long-runni
 - Send text, images, replies, and reactions
 - Translate incoming and outgoing messages with OpenAI
 - Generate AI-composed messages and AI replies in your writing style
-- Per-chat translation settings
+- Per-chat translation settings, including an option to send the translation followed by the original text
 - Local SQLite storage for messages, usage, and session data
 - MCP endpoint with OAuth support
 

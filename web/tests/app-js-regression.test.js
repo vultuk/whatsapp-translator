@@ -151,6 +151,7 @@ test('conversation settings modal only exposes translator-facing fields', () => 
   assert.match(indexHtml, /id="conversation-timezone"/);
   assert.match(indexHtml, /id="language-override"/);
   assert.match(indexHtml, /id="translation-style"/);
+  assert.match(indexHtml, /id="send-original-follow-up"/);
 
   for (const removedField of [
     'conversation-priority',
@@ -167,9 +168,19 @@ test('conversation settings modal only exposes translator-facing fields', () => 
 
   const saveSettingsBody = extractMethodBody(appJs, 'saveConversationSettings');
   assert.match(saveSettingsBody, /conversation-timezone/);
+  assert.match(saveSettingsBody, /send-original-follow-up/);
+  assert.match(saveSettingsBody, /sendOriginalFollowUp/);
   assert.doesNotMatch(saveSettingsBody, /conversation-priority/);
   assert.doesNotMatch(saveSettingsBody, /conversation-checklist/);
   assert.doesNotMatch(saveSettingsBody, /conversation-reminder/);
+});
+
+test('send response adds the confirmed original follow-up to the local conversation', () => {
+  const sendMessageBody = extractMethodBody(appJs, 'sendMessage');
+
+  assert.match(sendMessageBody, /result\.originalFollowUpSent/);
+  assert.match(sendMessageBody, /result\.originalMessageId/);
+  assert.match(sendMessageBody, /result\.originalTimestamp/);
 });
 
 test('loaded reaction records are merged instead of rendered as standalone messages', () => {

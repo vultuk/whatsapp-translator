@@ -52,7 +52,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="styles.css?v=20260616-reactions-ui">
+  <link rel="stylesheet" href="styles.css?v=20260713-original-follow-up">
   <!-- QR Code library -->
   <script src="https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"></script>
   <!-- Prevent phone number detection on iOS -->
@@ -479,6 +479,13 @@
               <input type="text" id="translation-style" placeholder="e.g., informal, formal, family">
               <p class="form-hint">Optional tone instruction for translations.</p>
             </div>
+            <div class="form-group">
+              <label class="checkbox-row" for="send-original-follow-up">
+                <input type="checkbox" id="send-original-follow-up">
+                <span>Send my original message too</span>
+              </label>
+              <p class="form-hint">Sends the translation first, then your original text as a separate follow-up.</p>
+            </div>
           </section>
         </div>
         <div class="modal-footer">
@@ -563,6 +570,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=20260616-reactions-ui"></script>
+  <script type="module" src="app.js?v=20260713-original-follow-up"></script>
 </body>
 </html>

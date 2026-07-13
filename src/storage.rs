@@ -87,6 +87,8 @@ pub struct ConversationSettings {
     /// Style instruction for translations in this conversation
     /// e.g., "formal", "informal", "family", "robotic", "geek"
     pub translation_style: Option<String>,
+    /// Send the untranslated draft as a second WhatsApp message after a translated send.
+    pub send_original_follow_up: bool,
 }
 
 /// Style profile for AI reply generation
@@ -307,7 +309,7 @@ impl MessageStore {
         // Add style_profiles table for AI reply generation
         self.migrate_add_style_profiles_table(&conn)?;
 
-        // Add conversation settings columns (language_override, translation_style)
+        // Add conversation settings columns.
         self.migrate_add_conversation_settings_columns(&conn)?;
 
         Ok(())
@@ -383,7 +385,37 @@ impl MessageStore {
         if !has_language_override {
             info!("Migrating database: adding conversation settings columns...");
             conn.execute("ALTER TABLE contacts ADD COLUMN language_override TEXT", [])?;
+        }
+
+        let has_translation_style: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('contacts') WHERE name = 'translation_style'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+            > 0;
+        if !has_translation_style {
             conn.execute("ALTER TABLE contacts ADD COLUMN translation_style TEXT", [])?;
+        }
+
+        let has_send_original_follow_up: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('contacts') WHERE name = 'send_original_follow_up'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+            > 0;
+        if !has_send_original_follow_up {
+            info!("Migrating database: adding original follow-up setting...");
+            conn.execute(
+                "ALTER TABLE contacts ADD COLUMN send_original_follow_up INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+
+        if !has_language_override || !has_translation_style || !has_send_original_follow_up {
             info!("Database migration complete: added conversation settings columns");
         }
 
@@ -970,12 +1002,13 @@ impl MessageStore {
         let conn = self.conn.lock().unwrap();
 
         let result = conn.query_row(
-            "SELECT language_override, translation_style FROM contacts WHERE id = ?",
+            "SELECT language_override, translation_style, send_original_follow_up FROM contacts WHERE id = ?",
             params![contact_id],
             |row| {
                 Ok(ConversationSettings {
                     language_override: row.get(0)?,
                     translation_style: row.get(1)?,
+                    send_original_follow_up: row.get(2)?,
                 })
             },
         );
@@ -996,17 +1029,21 @@ impl MessageStore {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
-            "UPDATE contacts SET language_override = ?, translation_style = ? WHERE id = ?",
+            "UPDATE contacts SET language_override = ?, translation_style = ?, send_original_follow_up = ? WHERE id = ?",
             params![
                 settings.language_override,
                 settings.translation_style,
+                settings.send_original_follow_up,
                 contact_id
             ],
         )?;
 
         info!(
-            "Updated conversation settings for {}: language={:?}, style={:?}",
-            contact_id, settings.language_override, settings.translation_style
+            "Updated conversation settings for {}: language={:?}, style={:?}, original_follow_up={}",
+            contact_id,
+            settings.language_override,
+            settings.translation_style,
+            settings.send_original_follow_up
         );
 
         Ok(())
@@ -2294,6 +2331,28 @@ mod tests {
                 1_700_000_000,
             )
             .expect("insert contact");
+    }
+
+    #[test]
+    fn conversation_settings_persist_original_follow_up_preference() {
+        let (store, data_dir) = test_store();
+        insert_test_contact(&store);
+
+        let settings = ConversationSettings {
+            language_override: Some("Spanish".to_string()),
+            translation_style: Some("friendly".to_string()),
+            send_original_follow_up: true,
+        };
+        store
+            .update_conversation_settings("chat@example.test", &settings)
+            .expect("save settings");
+
+        let loaded = store
+            .get_conversation_settings("chat@example.test")
+            .expect("load settings");
+        assert!(loaded.send_original_follow_up);
+
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 
     #[test]

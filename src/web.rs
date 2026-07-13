@@ -196,6 +196,11 @@ pub struct SendMessageResponse {
     pub translated_text: Option<String>,
     /// The target language (if translated)
     pub source_language: Option<String>,
+    /// Whether the original draft was confirmed as a second WhatsApp message.
+    pub original_follow_up_sent: bool,
+    pub original_message_id: Option<String>,
+    pub original_timestamp: Option<i64>,
+    pub original_follow_up_error: Option<String>,
 }
 
 /// Send image request
@@ -401,6 +406,8 @@ pub struct UpdateConversationSettingsRequest {
     pub language_override: Option<String>,
     /// Style instruction for translations (plain text, e.g., "formal", "casual")
     pub translation_style: Option<String>,
+    #[serde(default)]
+    pub send_original_follow_up: bool,
 }
 
 /// Conversation settings response
@@ -409,6 +416,7 @@ pub struct UpdateConversationSettingsRequest {
 pub struct ConversationSettingsResponse {
     pub language_override: Option<String>,
     pub translation_style: Option<String>,
+    pub send_original_follow_up: bool,
 }
 
 impl AppState {
@@ -739,6 +747,19 @@ fn normalize_bridge_timestamp_millis(timestamp: Option<i64>) -> Option<i64> {
             value
         }
     })
+}
+
+fn build_outgoing_send_plan(
+    translated_or_original: String,
+    original_text: &str,
+    was_translated: bool,
+    send_original_follow_up: bool,
+) -> Vec<String> {
+    let mut messages = vec![translated_or_original];
+    if was_translated && send_original_follow_up {
+        messages.push(original_text.to_string());
+    }
+    messages
 }
 
 /// Create the web server router
@@ -1161,6 +1182,7 @@ async fn get_conversation_settings(
         Ok(settings) => Json(ConversationSettingsResponse {
             language_override: settings.language_override,
             translation_style: settings.translation_style,
+            send_original_follow_up: settings.send_original_follow_up,
         })
         .into_response(),
         Err(e) => {
@@ -1188,6 +1210,7 @@ async fn update_conversation_settings(
     let settings = crate::storage::ConversationSettings {
         language_override: req.language_override.filter(|s| !s.trim().is_empty()),
         translation_style: req.translation_style.filter(|s| !s.trim().is_empty()),
+        send_original_follow_up: req.send_original_follow_up,
     };
 
     match state
@@ -1197,7 +1220,8 @@ async fn update_conversation_settings(
         Ok(()) => Json(serde_json::json!({
             "success": true,
             "languageOverride": settings.language_override,
-            "translationStyle": settings.translation_style
+            "translationStyle": settings.translation_style,
+            "sendOriginalFollowUp": settings.send_original_follow_up
         }))
         .into_response(),
         Err(e) => {
@@ -1354,15 +1378,14 @@ async fn send_message(
             .into_response();
     }
 
+    let settings = state
+        .store
+        .get_conversation_settings(&req.contact_id)
+        .unwrap_or_default();
+
     // Determine the text to send - translate if needed based on conversation settings or language
     let (text_to_send, _original_text, was_translated, target_language) =
         if let Some(translator) = &state.translator {
-            // First check for language override in conversation settings
-            let settings = state
-                .store
-                .get_conversation_settings(&req.contact_id)
-                .unwrap_or_default();
-
             // Determine target language: settings override > auto-detected > none
             let target_lang = if let Some(ref lang_override) = settings.language_override {
                 // User explicitly set a language override - ALWAYS use it
@@ -1428,6 +1451,14 @@ async fn send_message(
             (req.text.clone(), None, false, None)
         };
 
+    let send_plan = build_outgoing_send_plan(
+        text_to_send,
+        &req.text,
+        was_translated,
+        settings.send_original_follow_up,
+    );
+    let text_to_send = send_plan[0].clone();
+
     let request_id = state.next_request_id();
     let timestamp = chrono::Utc::now().timestamp_millis();
     let temp_message_id = format!("pending_{}_{}", request_id, timestamp);
@@ -1463,6 +1494,7 @@ async fn send_message(
         content_json: serde_json::json!({
             "type": "text",
             "body": req.text.clone(),
+            "showTranslatedPrimary": was_translated && settings.send_original_follow_up,
             "reply_context": req.reply_to.as_ref().map(|reply_to| serde_json::json!({
                 "messageId": reply_to,
                 "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
@@ -1475,6 +1507,7 @@ async fn send_message(
         content: Some(serde_json::json!({
             "type": "text",
             "body": req.text.clone(),
+            "showTranslatedPrimary": was_translated && settings.send_original_follow_up,
             "reply_context": req.reply_to.as_ref().map(|reply_to| serde_json::json!({
                 "messageId": reply_to,
                 "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
@@ -1588,6 +1621,26 @@ async fn send_message(
     let confirmed_message_id = send_result.message_id.unwrap_or(temp_message_id);
     let confirmed_timestamp = send_result.timestamp.unwrap_or(timestamp);
 
+    let (
+        original_follow_up_sent,
+        original_message_id,
+        original_timestamp,
+        original_follow_up_error,
+    ) = if let Some(original_text) = send_plan.get(1) {
+        match send_original_follow_up(&state, &req, &stored_msg, original_text).await {
+            Ok((message_id, timestamp)) => (true, Some(message_id), Some(timestamp), None),
+            Err(error) => {
+                warn!(
+                    "Translated message sent to {}, but original follow-up failed: {}",
+                    req.contact_id, error
+                );
+                (false, None, None, Some(error))
+            }
+        }
+    } else {
+        (false, None, None, None)
+    };
+
     Json(SendMessageResponse {
         message_id: confirmed_message_id,
         timestamp: confirmed_timestamp,
@@ -1598,8 +1651,108 @@ async fn send_message(
             None
         },
         source_language: target_language,
+        original_follow_up_sent,
+        original_message_id,
+        original_timestamp,
+        original_follow_up_error,
     })
     .into_response()
+}
+
+async fn send_original_follow_up(
+    state: &Arc<AppState>,
+    req: &SendMessageRequest,
+    primary_message: &StoredMessage,
+    original_text: &str,
+) -> Result<(String, i64), String> {
+    let request_id = state.next_request_id();
+    let timestamp = chrono::Utc::now()
+        .timestamp_millis()
+        .max(primary_message.timestamp.saturating_add(1));
+    let temp_message_id = format!("pending_original_{}_{}", request_id, timestamp);
+    let content = serde_json::json!({
+        "type": "text",
+        "body": original_text,
+    });
+    let stored_msg = StoredMessage {
+        id: temp_message_id.clone(),
+        contact_id: req.contact_id.clone(),
+        timestamp,
+        is_from_me: true,
+        is_forwarded: false,
+        sender_name: primary_message.sender_name.clone(),
+        sender_phone: primary_message.sender_phone.clone(),
+        contact_name: primary_message.contact_name.clone(),
+        contact_phone: primary_message.contact_phone.clone(),
+        chat_type: primary_message.chat_type.clone(),
+        content_type: "Text".to_string(),
+        content_json: content.to_string(),
+        content: Some(content),
+        original_text: None,
+        translated_text: None,
+        source_language: None,
+        is_translated: false,
+    };
+
+    state
+        .store
+        .add_message(&stored_msg)
+        .map_err(|error| format!("Failed to store original follow-up: {}", error))?;
+
+    if let Err(error) = state.store.upsert_contact(
+        &stored_msg.contact_id,
+        stored_msg.contact_name.as_deref(),
+        stored_msg.contact_phone.as_deref(),
+        Some(&stored_msg.chat_type),
+        stored_msg.timestamp,
+    ) {
+        let _ = state.store.delete_message(&temp_message_id);
+        return Err(format!(
+            "Failed to update contact for original follow-up: {}",
+            error
+        ));
+    }
+
+    let rx = state
+        .register_pending_send(request_id, Some(temp_message_id.clone()))
+        .await;
+    let command = BridgeCommand::Send {
+        request_id: Some(request_id),
+        to: req.contact_id.clone(),
+        text: original_text.to_string(),
+        reply_to: None,
+        reply_to_sender: None,
+        reply_to_text: None,
+    };
+
+    if let Err(error) = state.send_bridge_command(command).await {
+        state.cancel_pending_send(request_id).await;
+        return Err(format!("Failed to send original follow-up: {}", error));
+    }
+
+    let send_result =
+        state
+            .wait_for_send_result(request_id, rx)
+            .await
+            .map_err(|error| match error {
+                SendConfirmationError::Timeout => {
+                    "Timed out waiting for original follow-up confirmation".to_string()
+                }
+                SendConfirmationError::ChannelClosed => {
+                    "Original follow-up confirmation channel closed".to_string()
+                }
+            })?;
+
+    if !send_result.success {
+        return Err(send_result
+            .error
+            .unwrap_or_else(|| "WhatsApp rejected the original follow-up".to_string()));
+    }
+
+    Ok((
+        send_result.message_id.unwrap_or(temp_message_id),
+        send_result.timestamp.unwrap_or(timestamp),
+    ))
 }
 
 async fn send_image(
@@ -3435,6 +3588,18 @@ mod tests {
             source_language: None,
             is_translated: false,
         }
+    }
+
+    #[test]
+    fn outgoing_send_plan_puts_translation_before_original_follow_up() {
+        assert_eq!(
+            build_outgoing_send_plan("Hola a todos".to_string(), "Hello everyone", true, true,),
+            vec!["Hola a todos", "Hello everyone"]
+        );
+        assert_eq!(
+            build_outgoing_send_plan("Hello everyone".to_string(), "Hello everyone", false, true,),
+            vec!["Hello everyone"]
+        );
     }
 
     #[test]
