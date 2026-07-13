@@ -9,6 +9,7 @@ use crate::storage::{PushDevice, StoredMessage};
 const SANDBOX_APNS_HOST: &str = "https://api.sandbox.push.apple.com";
 const PRODUCTION_APNS_HOST: &str = "https://api.push.apple.com";
 const MESSAGE_CATEGORY: &str = "MESSAGE_CATEGORY";
+const PROVIDER_TOKEN_REFRESH_SECONDS: i64 = 50 * 60;
 
 pub struct ApnsClient {
     client: reqwest::Client,
@@ -16,12 +17,39 @@ pub struct ApnsClient {
     team_id: String,
     bundle_id: String,
     encoding_key: EncodingKey,
+    provider_tokens: ProviderTokenCache,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApnsSendOutcome {
     Delivered,
     RemoveDevice,
+}
+
+#[derive(Debug)]
+enum ApnsRequestOutcome {
+    Delivered,
+    RemoveDevice,
+    RefreshProviderToken {
+        status: reqwest::StatusCode,
+        reason: String,
+    },
+    Rejected {
+        status: reqwest::StatusCode,
+        reason: String,
+    },
+}
+
+impl ApnsRequestOutcome {
+    fn into_send_result(self) -> Result<ApnsSendOutcome> {
+        match self {
+            Self::Delivered => Ok(ApnsSendOutcome::Delivered),
+            Self::RemoveDevice => Ok(ApnsSendOutcome::RemoveDevice),
+            Self::RefreshProviderToken { status, reason } | Self::Rejected { status, reason } => {
+                bail!("APNs returned {status}: {reason}")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +61,45 @@ pub struct PushNotification {
 struct ProviderTokenClaims<'a> {
     iss: &'a str,
     iat: i64,
+}
+
+#[derive(Debug, Clone)]
+struct CachedProviderToken {
+    value: String,
+    issued_at: i64,
+}
+
+#[derive(Debug, Default)]
+struct ProviderTokenCache {
+    cached: tokio::sync::Mutex<Option<CachedProviderToken>>,
+}
+
+impl ProviderTokenCache {
+    async fn get_or_create<F>(&self, now: i64, sign: F) -> Result<String>
+    where
+        F: FnOnce(i64) -> Result<String>,
+    {
+        let mut cached = self.cached.lock().await;
+        if let Some(token) = cached.as_ref() {
+            if now.saturating_sub(token.issued_at) < PROVIDER_TOKEN_REFRESH_SECONDS {
+                return Ok(token.value.clone());
+            }
+        }
+
+        let value = sign(now)?;
+        *cached = Some(CachedProviderToken {
+            value: value.clone(),
+            issued_at: now,
+        });
+        Ok(value)
+    }
+
+    async fn invalidate_if_matches(&self, value: &str) {
+        let mut cached = self.cached.lock().await;
+        if cached.as_ref().is_some_and(|token| token.value == value) {
+            *cached = None;
+        }
+    }
 }
 
 impl ApnsClient {
@@ -71,7 +138,30 @@ impl ApnsClient {
             team_id,
             bundle_id,
             encoding_key,
+            provider_tokens: ProviderTokenCache::default(),
         }))
+    }
+
+    fn sign_provider_token(&self, issued_at: i64) -> Result<String> {
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some(self.key_id.clone());
+        encode(
+            &header,
+            &ProviderTokenClaims {
+                iss: &self.team_id,
+                iat: issued_at,
+            },
+            &self.encoding_key,
+        )
+        .context("Failed to sign APNs provider token")
+    }
+
+    async fn provider_token(&self) -> Result<String> {
+        self.provider_tokens
+            .get_or_create(chrono::Utc::now().timestamp(), |issued_at| {
+                self.sign_provider_token(issued_at)
+            })
+            .await
     }
 
     pub async fn send(
@@ -84,18 +174,32 @@ impl ApnsClient {
             "production" => PRODUCTION_APNS_HOST,
             other => bail!("Unsupported APNs environment: {other}"),
         };
-        let mut header = Header::new(Algorithm::ES256);
-        header.kid = Some(self.key_id.clone());
-        let provider_token = encode(
-            &header,
-            &ProviderTokenClaims {
-                iss: &self.team_id,
-                iat: chrono::Utc::now().timestamp(),
-            },
-            &self.encoding_key,
-        )
-        .context("Failed to sign APNs provider token")?;
+        let provider_token = self.provider_token().await?;
 
+        match self
+            .send_with_provider_token(host, device, notification, &provider_token)
+            .await?
+        {
+            ApnsRequestOutcome::RefreshProviderToken { .. } => {
+                self.provider_tokens
+                    .invalidate_if_matches(&provider_token)
+                    .await;
+                let refreshed_token = self.provider_token().await?;
+                self.send_with_provider_token(host, device, notification, &refreshed_token)
+                    .await?
+                    .into_send_result()
+            }
+            outcome => outcome.into_send_result(),
+        }
+    }
+
+    async fn send_with_provider_token(
+        &self,
+        host: &str,
+        device: &PushDevice,
+        notification: &PushNotification,
+        provider_token: &str,
+    ) -> Result<ApnsRequestOutcome> {
         let response = self
             .client
             .post(format!("{host}/3/device/{}", device.token))
@@ -119,7 +223,7 @@ impl ApnsClient {
             })?;
 
         if response.status().is_success() {
-            return Ok(ApnsSendOutcome::Delivered);
+            return Ok(ApnsRequestOutcome::Delivered);
         }
 
         let status = response.status();
@@ -138,10 +242,13 @@ impl ApnsClient {
             || reason == "DeviceTokenNotForTopic"
             || reason == "Unregistered"
         {
-            return Ok(ApnsSendOutcome::RemoveDevice);
+            return Ok(ApnsRequestOutcome::RemoveDevice);
+        }
+        if reason == "ExpiredProviderToken" || reason == "InvalidProviderToken" {
+            return Ok(ApnsRequestOutcome::RefreshProviderToken { status, reason });
         }
 
-        bail!("APNs returned {status}: {reason}")
+        Ok(ApnsRequestOutcome::Rejected { status, reason })
     }
 }
 
@@ -317,6 +424,110 @@ fn truncate(value: &str, maximum_characters: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    #[tokio::test]
+    async fn provider_token_cache_reuses_a_token_within_the_refresh_window() {
+        let cache = ProviderTokenCache::default();
+        let sign_count = Arc::new(AtomicUsize::new(0));
+
+        let first_count = Arc::clone(&sign_count);
+        let first = cache
+            .get_or_create(1_000, move |issued_at| {
+                first_count.fetch_add(1, Ordering::SeqCst);
+                Ok(format!("token-{issued_at}"))
+            })
+            .await
+            .expect("create provider token");
+        let second_count = Arc::clone(&sign_count);
+        let second = cache
+            .get_or_create(1_001, move |issued_at| {
+                second_count.fetch_add(1, Ordering::SeqCst);
+                Ok(format!("token-{issued_at}"))
+            })
+            .await
+            .expect("reuse provider token");
+
+        assert_eq!(first, second);
+        assert_eq!(sign_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn provider_token_cache_refreshes_after_fifty_minutes() {
+        let cache = ProviderTokenCache::default();
+        let sign_count = Arc::new(AtomicUsize::new(0));
+
+        let first_count = Arc::clone(&sign_count);
+        let first = cache
+            .get_or_create(1_000, move |issued_at| {
+                first_count.fetch_add(1, Ordering::SeqCst);
+                Ok(format!("token-{issued_at}"))
+            })
+            .await
+            .expect("create provider token");
+        let refreshed_count = Arc::clone(&sign_count);
+        let refreshed = cache
+            .get_or_create(1_000 + PROVIDER_TOKEN_REFRESH_SECONDS, move |issued_at| {
+                refreshed_count.fetch_add(1, Ordering::SeqCst);
+                Ok(format!("token-{issued_at}"))
+            })
+            .await
+            .expect("refresh provider token");
+
+        assert_ne!(first, refreshed);
+        assert_eq!(sign_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn concurrent_provider_token_requests_share_one_signed_token() {
+        let cache = Arc::new(ProviderTokenCache::default());
+        let sign_count = Arc::new(AtomicUsize::new(0));
+        let request_token = |cache: Arc<ProviderTokenCache>, sign_count: Arc<AtomicUsize>| async move {
+            cache
+                .get_or_create(1_000, move |issued_at| {
+                    sign_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(format!("token-{issued_at}"))
+                })
+                .await
+                .expect("get provider token")
+        };
+
+        let (first, second, third) = tokio::join!(
+            request_token(Arc::clone(&cache), Arc::clone(&sign_count)),
+            request_token(Arc::clone(&cache), Arc::clone(&sign_count)),
+            request_token(Arc::clone(&cache), Arc::clone(&sign_count)),
+        );
+
+        assert_eq!(first, second);
+        assert_eq!(second, third);
+        assert_eq!(sign_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn provider_token_cache_invalidates_only_the_rejected_token() {
+        let cache = ProviderTokenCache::default();
+        let first = cache
+            .get_or_create(1_000, |issued_at| Ok(format!("token-{issued_at}")))
+            .await
+            .expect("create provider token");
+
+        cache.invalidate_if_matches("a-different-token").await;
+        let retained = cache
+            .get_or_create(1_001, |issued_at| Ok(format!("token-{issued_at}")))
+            .await
+            .expect("retain provider token");
+        assert_eq!(retained, first);
+
+        cache.invalidate_if_matches(&first).await;
+        let replaced = cache
+            .get_or_create(1_002, |issued_at| Ok(format!("token-{issued_at}")))
+            .await
+            .expect("replace rejected provider token");
+        assert_ne!(replaced, first);
+    }
 
     #[test]
     fn translated_message_payload_contains_chat_navigation_and_badge() {
