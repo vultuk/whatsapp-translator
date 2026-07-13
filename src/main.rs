@@ -9,6 +9,7 @@ mod display;
 mod link_preview;
 mod mcp;
 mod oauth;
+mod push;
 mod storage;
 mod style_analyzer;
 mod translation;
@@ -27,6 +28,7 @@ use display::{
     clear_qr_display, print_connected, print_error, print_info, print_warning, render_qr_code,
     MessageDisplay,
 };
+use push::ApnsClient;
 use storage::{MessageStore, StoredMessage};
 use translation::TranslationService;
 use web::AppState;
@@ -143,6 +145,15 @@ async fn run_web_mode(
         service.set_runtime_settings(store.get_openai_settings()?);
     }
 
+    let push_notifications = ApnsClient::from_env()
+        .context("Invalid APNs configuration")?
+        .map(Arc::new);
+    if push_notifications.is_some() {
+        info!("APNs notifications enabled");
+    } else {
+        info!("APNs notifications disabled (credentials not configured)");
+    }
+
     // Find web directory (relative to executable or in project)
     let web_dir = find_web_dir()?;
     info!("Serving web files from: {:?}", web_dir);
@@ -154,6 +165,7 @@ async fn run_web_mode(
         data_dir.clone(),
         translator.clone(),
         args.password.clone(),
+        push_notifications,
     );
 
     // Spawn the web server (once, outside the bridge loop)
@@ -314,6 +326,14 @@ async fn handle_web_event(
 
             // Store message
             store.add_message(&stored_msg)?;
+
+            if !stored_msg.is_from_me && !is_history {
+                let push_state = Arc::clone(state);
+                let push_message = stored_msg.clone();
+                tokio::spawn(async move {
+                    push_state.send_push_notification(&push_message).await;
+                });
+            }
 
             // Broadcast to WebSocket clients
             state.broadcast_message(stored_msg);

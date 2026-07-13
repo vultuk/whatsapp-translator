@@ -65,6 +65,7 @@ async-trait = "0.1"
 # OAuth 2.0 / PKCE support
 sha2 = "0.10"
 base64 = "0.22"
+jsonwebtoken = "9"
 
 [build-dependencies]
 # For compiling Go bridge at build time

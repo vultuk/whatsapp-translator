@@ -98,6 +98,13 @@ pub struct OpenAiSettings {
     pub reasoning_effort: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushDevice {
+    pub installation_id: String,
+    pub token: String,
+    pub environment: String,
+}
+
 /// Style profile for AI reply generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -225,6 +232,13 @@ impl MessageStore {
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS push_devices (
+                token TEXT PRIMARY KEY,
+                installation_id TEXT NOT NULL UNIQUE,
+                environment TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_usage_contact_id ON translation_usage(contact_id);
@@ -655,6 +669,74 @@ impl MessageStore {
             params![count as i32, contact_id],
         )?;
         Ok(())
+    }
+
+    pub fn total_unread_count(&self) -> Result<i32> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.query_row(
+            "SELECT COALESCE(SUM(unread_count), 0) FROM contacts",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    pub fn register_push_device(
+        &self,
+        installation_id: &str,
+        token: &str,
+        environment: &str,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM push_devices WHERE installation_id = ?1 OR token = ?2",
+            params![installation_id, token],
+        )?;
+        tx.execute(
+            r#"
+            INSERT INTO push_devices (token, installation_id, environment, updated_at)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![
+                token,
+                installation_id,
+                environment,
+                chrono::Utc::now().timestamp()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn list_push_devices(&self) -> Result<Vec<PushDevice>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT installation_id, token, environment FROM push_devices ORDER BY installation_id",
+        )?;
+        let devices = stmt
+            .query_map([], |row| {
+                Ok(PushDevice {
+                    installation_id: row.get(0)?,
+                    token: row.get(1)?,
+                    environment: row.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(devices)
+    }
+
+    pub fn delete_push_device(&self, token: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute("DELETE FROM push_devices WHERE token = ?", params![token])? > 0)
+    }
+
+    pub fn delete_push_installation(&self, installation_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute(
+            "DELETE FROM push_devices WHERE installation_id = ?",
+            params![installation_id],
+        )? > 0)
     }
 
     /// Add a message to the store
@@ -2407,6 +2489,26 @@ mod tests {
             store.get_openai_settings().expect("load OpenAI settings"),
             settings
         );
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn push_device_registration_replaces_the_token_for_an_installation() {
+        let (store, data_dir) = test_store();
+
+        store
+            .register_push_device("installation-1", "token-old", "sandbox")
+            .expect("register first token");
+        store
+            .register_push_device("installation-1", "token-new", "production")
+            .expect("replace token");
+
+        let devices = store.list_push_devices().expect("list push devices");
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].installation_id, "installation-1");
+        assert_eq!(devices[0].token, "token-new");
+        assert_eq!(devices[0].environment, "production");
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

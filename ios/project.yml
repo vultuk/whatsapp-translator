@@ -1,0 +1,72 @@
+name: WhatsAppTranslator
+options:
+  bundleIdPrefix: com.vultuk
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: SUR6QUSSV6
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 1.0.0
+targets:
+  WhatsAppTranslator:
+    type: application
+    platform: iOS
+    sources:
+      - path: WhatsAppTranslator
+    entitlements:
+      path: WhatsAppTranslator/WhatsAppTranslator.entitlements
+      properties:
+        aps-environment: $(APS_ENVIRONMENT)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator
+        PRODUCT_NAME: WhatsAppTranslator
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: false
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+        Release:
+          APS_ENVIRONMENT: production
+    info:
+      path: WhatsAppTranslator/Info.plist
+      properties:
+        CFBundleDisplayName: WhatsApp Translator
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        NSLocalNetworkUsageDescription: Connect to your self-hosted WhatsApp Translator backend.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UIBackgroundModes:
+          - remote-notification
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+  WhatsAppTranslatorTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: WhatsAppTranslatorTests
+    dependencies:
+      - target: WhatsAppTranslator
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.tests
+        GENERATE_INFOPLIST_FILE: true
+schemes:
+  WhatsAppTranslator:
+    build:
+      targets:
+        WhatsAppTranslator: all
+        WhatsAppTranslatorTests: [test]
+    test:
+      targets:
+        - WhatsAppTranslatorTests

@@ -11,7 +11,7 @@ use axum::{
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Json, Redirect, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Form, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -34,6 +34,7 @@ use crate::oauth::{
     OAuthError, OAuthErrorResponse, PendingAuthorization, RefreshToken, RevokeRequest,
     TokenRequest, TokenResponse,
 };
+use crate::push::{ApnsClient, ApnsSendOutcome, PushNotification};
 use crate::storage::{MessageStore, OpenAiSettings, StoredMessage};
 use crate::translation::TranslationService;
 use tokio::sync::mpsc;
@@ -83,6 +84,7 @@ pub struct AppState {
     pub auth_tokens: RwLock<HashMap<String, i64>>,
     /// Whether the bridge restart loop should clear WhatsApp session files before respawning.
     pub session_reset_requested: AtomicBool,
+    pub push_notifications: Option<Arc<ApnsClient>>,
 }
 
 /// Bridge send result normalized for Rust/web consumers.
@@ -160,6 +162,14 @@ struct StatusResponse {
 struct HealthResponse {
     ok: bool,
     service: &'static str,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterPushDeviceRequest {
+    installation_id: String,
+    token: String,
+    environment: String,
 }
 
 /// API QR response
@@ -436,6 +446,7 @@ impl AppState {
         data_dir: PathBuf,
         translator: Option<Arc<TranslationService>>,
         password: Option<String>,
+        push_notifications: Option<Arc<ApnsClient>>,
     ) -> Arc<Self> {
         let (broadcast_tx, _) = broadcast::channel(100);
 
@@ -457,6 +468,7 @@ impl AppState {
             password,
             auth_tokens: RwLock::new(HashMap::new()),
             session_reset_requested: AtomicBool::new(false),
+            push_notifications,
         })
     }
 
@@ -544,6 +556,39 @@ impl AppState {
     /// Broadcast a new message
     pub fn broadcast_message(&self, message: StoredMessage) {
         let _ = self.broadcast_tx.send(WebSocketEvent::Message { message });
+    }
+
+    pub async fn send_push_notification(&self, message: &StoredMessage) {
+        let Some(client) = &self.push_notifications else {
+            return;
+        };
+        let devices = match self.store.list_push_devices() {
+            Ok(devices) => devices,
+            Err(error) => {
+                error!("Failed to load APNs devices: {}", error);
+                return;
+            }
+        };
+        if devices.is_empty() {
+            return;
+        }
+
+        let badge = self.store.total_unread_count().unwrap_or_default().max(0);
+        let notification = PushNotification::from_message(message, badge);
+        for device in devices {
+            match client.send(&device, &notification).await {
+                Ok(ApnsSendOutcome::Delivered) => {}
+                Ok(ApnsSendOutcome::RemoveDevice) => {
+                    if let Err(error) = self.store.delete_push_device(&device.token) {
+                        warn!("Failed to remove stale APNs token: {}", error);
+                    }
+                }
+                Err(error) => warn!(
+                    "Failed to send APNs notification to installation {}: {}",
+                    device.installation_id, error
+                ),
+            }
+        }
     }
 
     /// Broadcast a typing indicator
@@ -786,6 +831,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(get_openai_settings).put(update_openai_settings),
         )
         .route("/api/contacts", get(get_contacts))
+        .route("/api/push/devices", put(register_push_device))
+        .route("/api/push/test", post(send_test_push_notification))
+        .route(
+            "/api/push/devices/:installation_id",
+            delete(unregister_push_device),
+        )
         .route("/api/contacts/:contact_id/read", post(mark_contact_as_read))
         .route("/api/contacts/:contact_id/pin", post(toggle_pin))
         .route(
@@ -928,6 +979,136 @@ async fn auth_login(
         })
         .into_response()
     }
+}
+
+async fn register_push_device(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterPushDeviceRequest>,
+) -> Response {
+    let installation_id = req.installation_id.trim();
+    let token = req.token.trim().to_ascii_lowercase();
+    let environment = req.environment.trim().to_ascii_lowercase();
+
+    if installation_id.is_empty() || installation_id.len() > 128 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid installation ID"})),
+        )
+            .into_response();
+    }
+    if token.len() < 32 || token.len() > 512 || !token.chars().all(|c| c.is_ascii_hexdigit()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid APNs device token"})),
+        )
+            .into_response();
+    }
+    if environment != "sandbox" && environment != "production" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid APNs environment"})),
+        )
+            .into_response();
+    }
+
+    match state
+        .store
+        .register_push_device(installation_id, &token, &environment)
+    {
+        Ok(()) => Json(serde_json::json!({"success": true})).into_response(),
+        Err(error) => {
+            error!("Failed to register APNs device: {}", error);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to register device"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn unregister_push_device(
+    State(state): State<Arc<AppState>>,
+    Path(installation_id): Path<String>,
+) -> Response {
+    match state.store.delete_push_installation(&installation_id) {
+        Ok(_) => Json(serde_json::json!({"success": true})).into_response(),
+        Err(error) => {
+            error!("Failed to unregister APNs device: {}", error);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to unregister device"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn send_test_push_notification(State(state): State<Arc<AppState>>) -> Response {
+    let Some(client) = &state.push_notifications else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Push notifications are not configured"})),
+        )
+            .into_response();
+    };
+    let devices = match state.store.list_push_devices() {
+        Ok(devices) => devices,
+        Err(error) => {
+            error!("Failed to load APNs devices: {}", error);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to load registered devices"})),
+            )
+                .into_response();
+        }
+    };
+    if devices.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "No iPhones are registered for notifications"})),
+        )
+            .into_response();
+    }
+
+    let notification = PushNotification::test();
+    let mut delivered = 0;
+    let mut removed = 0;
+    let mut failed = 0;
+    for device in devices {
+        match client.send(&device, &notification).await {
+            Ok(ApnsSendOutcome::Delivered) => delivered += 1,
+            Ok(ApnsSendOutcome::RemoveDevice) => {
+                removed += 1;
+                if let Err(error) = state.store.delete_push_device(&device.token) {
+                    warn!("Failed to remove stale APNs token: {}", error);
+                }
+            }
+            Err(error) => {
+                failed += 1;
+                warn!(
+                    "Failed to send APNs test notification to installation {}: {}",
+                    device.installation_id, error
+                );
+            }
+        }
+    }
+
+    let status = if delivered > 0 {
+        StatusCode::OK
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "success": delivered > 0,
+            "delivered": delivered,
+            "removed": removed,
+            "failed": failed
+        })),
+    )
+        .into_response()
 }
 
 async fn require_web_auth(state: Arc<AppState>, req: Request, next: Next) -> Response {
@@ -3614,6 +3795,7 @@ mod tests {
             data_dir.clone(),
             None,
             password.map(str::to_string),
+            None,
         );
         (state, data_dir)
     }
@@ -3789,6 +3971,32 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn authenticated_push_device_registration_is_persisted() {
+        let (state, data_dir) = test_state(None);
+        let request = HttpRequest::builder()
+            .method("PUT")
+            .uri("/api/push/devices")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"installationId":"installation-1","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","environment":"sandbox"}"#,
+            ))
+            .expect("request");
+
+        let response = create_router(state.clone())
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let devices = state.store.list_push_devices().expect("push devices");
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].installation_id, "installation-1");
+        assert_eq!(devices[0].environment, "sandbox");
+
         let _ = std::fs::remove_dir_all(data_dir);
     }
 

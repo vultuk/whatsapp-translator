@@ -43,6 +43,18 @@ Optional:
 - `WA_VERBOSE=true` enable verbose logs
 - `WA_LOGOUT=true` clear the WhatsApp session on startup
 
+Required for native iOS push notifications:
+
+- `APNS_KEY_ID` Apple push notification key ID
+- `APNS_TEAM_ID` Apple Developer team ID
+- `APNS_BUNDLE_ID` iOS app bundle identifier
+- `APNS_PRIVATE_KEY_BASE64` base64-encoded contents of the APNs `.p8` private key
+
+The APNs key is a production secret. Keep the downloaded `.p8` file outside the
+repository and provide it to the deployed service only through secret environment
+variables. The authenticated `POST /api/push/test` endpoint sends a test alert to
+all currently registered iPhones.
+
 Hosted deploy recommendation:
 
 - `WA_PASSWORD` is strongly recommended if the web UI is publicly reachable, and
