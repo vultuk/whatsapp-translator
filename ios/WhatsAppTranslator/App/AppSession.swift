@@ -1,7 +1,6 @@
 import Foundation
 import Observation
 import UniformTypeIdentifiers
-import UIKit
 
 @MainActor
 @Observable
@@ -27,7 +26,7 @@ final class AppSession {
     var isRefreshing = false
     var sendingContactIDs: Set<String> = []
     var activeMessageActionIDs: Set<String> = []
-    var messageImages: [String: UIImage] = [:]
+    var messageImages: [String: PlatformImage] = [:]
     var messageMediaURLs: [String: URL] = [:]
     var mediaLoadingIDs: Set<String> = []
     var mediaErrorIDs: Set<String> = []
@@ -280,7 +279,7 @@ final class AppSession {
         if demoMode {
             let message = ChatMessage.demoImage(contactID: contactID)
             messages[contactID, default: []].append(message)
-            messageImages[message.id] = UIImage(data: data)
+            messageImages[message.id] = PlatformImage(data: data)
             return true
         }
 
@@ -554,7 +553,7 @@ final class AppSession {
     private func storeMedia(_ data: Data, mimeType: String?, for message: ChatMessage) {
         switch message.mediaKind {
         case .image, .sticker:
-            guard let image = UIImage(data: data) else {
+            guard let image = PlatformImage(data: data) else {
                 mediaErrorIDs.insert(message.id)
                 return
             }
@@ -685,23 +684,8 @@ final class AppSession {
         phase = .ready
     }
 
-    private func demoPhoto() -> UIImage {
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 640, height: 420))
-        return renderer.image { context in
-            UIColor(red: 0.57, green: 0.83, blue: 0.93, alpha: 1).setFill()
-            context.fill(CGRect(x: 0, y: 0, width: 640, height: 420))
-            UIColor(red: 1, green: 0.84, blue: 0.38, alpha: 1).setFill()
-            context.cgContext.fillEllipse(in: CGRect(x: 480, y: 52, width: 86, height: 86))
-            UIColor(red: 0.24, green: 0.57, blue: 0.36, alpha: 1).setFill()
-            context.cgContext.move(to: CGPoint(x: 0, y: 330))
-            context.cgContext.addCurve(to: CGPoint(x: 640, y: 275), control1: CGPoint(x: 150, y: 220), control2: CGPoint(x: 420, y: 390))
-            context.cgContext.addLine(to: CGPoint(x: 640, y: 420))
-            context.cgContext.addLine(to: CGPoint(x: 0, y: 420))
-            context.cgContext.closePath()
-            context.cgContext.fillPath()
-            UIColor(red: 0.13, green: 0.42, blue: 0.28, alpha: 1).setFill()
-            context.cgContext.fill(CGRect(x: 0, y: 350, width: 640, height: 70))
-        }
+    private func demoPhoto() -> PlatformImage {
+        DemoImageFactory.landscape(size: CGSize(width: 640, height: 420))
     }
 }
 

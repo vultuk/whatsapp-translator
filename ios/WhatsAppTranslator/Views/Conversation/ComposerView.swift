@@ -1,7 +1,6 @@
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
-import UIKit
 
 struct ComposerView: View {
     @Environment(\.translatorPalette) private var palette
@@ -85,6 +84,9 @@ struct ComposerView: View {
                 .accessibilityLabel(isSending ? "Sending message" : "Send message")
                 .accessibilityValue(isSending ? "In progress" : "")
                 .animation(.snappy, value: isSending)
+                #if os(macOS)
+                .keyboardShortcut(.return, modifiers: .command)
+                #endif
             }
             .padding(.horizontal, 12)
             .padding(.top, reply == nil ? 8 : 2)
@@ -104,12 +106,13 @@ struct ComposerView: View {
                     .first(where: { type in type.preferredMIMEType.map(allowed.contains) ?? false })?
                     .preferredMIMEType
                 if let selectedMimeType {
-                    guard let image = UIImage(data: data) else {
+                    guard let image = PlatformImage(data: data) else {
                         pickerError = "The selected file isn’t a supported image."
                         return
                     }
                     pendingPhoto = PendingPhoto(data: data, mimeType: selectedMimeType, image: image)
-                } else if let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.9) {
+                } else if let image = PlatformImage(data: data),
+                          let jpeg = image.platformJPEGData(compressionQuality: 0.9) {
                     pendingPhoto = PendingPhoto(data: jpeg, mimeType: "image/jpeg", image: image)
                 } else {
                     pickerError = "The selected file isn’t a supported image."
@@ -126,16 +129,8 @@ struct ComposerView: View {
         }
         .task {
             guard ProcessInfo.processInfo.arguments.contains("-demoImageComposer"), pendingPhoto == nil else { return }
-            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 600))
-            let image = renderer.image { context in
-                UIColor.systemTeal.setFill()
-                context.fill(CGRect(x: 0, y: 0, width: 800, height: 600))
-                UIColor.systemYellow.setFill()
-                context.cgContext.fillEllipse(in: CGRect(x: 570, y: 80, width: 120, height: 120))
-                UIColor.systemGreen.setFill()
-                context.cgContext.fill(CGRect(x: 0, y: 390, width: 800, height: 210))
-            }
-            if let data = image.jpegData(compressionQuality: 0.9) {
+            let image = DemoImageFactory.landscape(size: CGSize(width: 800, height: 600))
+            if let data = image.platformJPEGData(compressionQuality: 0.9) {
                 pendingPhoto = PendingPhoto(data: data, mimeType: "image/jpeg", image: image)
             }
         }
@@ -150,7 +145,7 @@ private struct PendingPhoto: Identifiable {
     let id = UUID()
     let data: Data
     let mimeType: String
-    let image: UIImage
+    let image: PlatformImage
 }
 
 private struct ImageComposerSheet: View {
@@ -164,7 +159,7 @@ private struct ImageComposerSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                Image(uiImage: photo.image)
+                Image(platformImage: photo.image)
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: 440)
@@ -188,8 +183,8 @@ private struct ImageComposerSheet: View {
             }
             .padding(.top)
             .navigationTitle("Send image")
-            .navigationBarTitleDisplayMode(.inline)
-            .interactiveDismissDisabled(isSending)
+            .platformInlineNavigationTitle()
+            .platformInteractiveDismissDisabled(isSending)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

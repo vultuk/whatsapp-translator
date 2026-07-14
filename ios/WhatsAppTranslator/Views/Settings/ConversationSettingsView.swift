@@ -35,12 +35,12 @@ struct ConversationSettingsView: View {
                 } header: {
                     Text("Contact")
                 } footer: {
-                    Text("Nickname and timezone stay on this iPhone. The timezone shows the contact’s current local time in the chat header.")
+                    Text("Nickname and timezone stay on this device. The timezone shows the contact’s current local time in the chat header.")
                 }
 
                 Section {
                     TextField("Conversation language", text: optionalBinding(\.languageOverride))
-                        .textInputAutocapitalization(.words)
+                        .platformWordsInput()
                     TextField("Style, e.g. friendly or formal", text: optionalBinding(\.translationStyle))
                     Toggle("Send original after translation", isOn: $settings.sendOriginalFollowUp)
                 } header: {
@@ -50,7 +50,7 @@ struct ConversationSettingsView: View {
                 }
             }
             .navigationTitle(session.displayName(for: contact))
-            .navigationBarTitleDisplayMode(.inline)
+            .platformInlineNavigationTitle()
             .disabled(isLoading || isSaving)
             .overlay { if isLoading { ProgressView() } }
             .toolbar {

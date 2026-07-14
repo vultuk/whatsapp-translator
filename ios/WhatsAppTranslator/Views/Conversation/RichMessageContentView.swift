@@ -4,7 +4,7 @@ import SwiftUI
 struct RichMessageContentView: View {
     let message: ChatMessage
     let displayText: String
-    let image: UIImage?
+    let image: PlatformImage?
     let mediaURL: URL?
     let isLoading: Bool
     let failed: Bool
@@ -54,7 +54,7 @@ struct RichMessageContentView: View {
     @ViewBuilder
     private func imageContent(maxWidth: CGFloat, maxHeight: CGFloat) -> some View {
         if let image {
-            Image(uiImage: image)
+            Image(platformImage: image)
                 .resizable()
                 .scaledToFit()
                 .frame(maxWidth: maxWidth, maxHeight: maxHeight)

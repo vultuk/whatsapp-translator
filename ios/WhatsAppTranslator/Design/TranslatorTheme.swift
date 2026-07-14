@@ -1,5 +1,11 @@
 import SwiftUI
 
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
+
 struct TranslatorPalette: Equatable {
     let accent: Color
     let deepAccent: Color
@@ -47,7 +53,7 @@ struct TranslatorBackdrop: View {
 
     var body: some View {
         ZStack {
-            Color(uiColor: .systemBackground)
+            platformSystemBackground
             Circle()
                 .fill(palette.accent.opacity(0.20))
                 .frame(width: 420, height: 420)
@@ -60,6 +66,14 @@ struct TranslatorBackdrop: View {
                 .offset(x: 190, y: 330)
         }
         .ignoresSafeArea()
+    }
+
+    private var platformSystemBackground: Color {
+        #if canImport(UIKit)
+        Color(uiColor: .systemBackground)
+        #elseif canImport(AppKit)
+        Color(nsColor: .windowBackgroundColor)
+        #endif
     }
 }
 
@@ -83,12 +97,21 @@ struct TranslatorMark: View {
 extension View {
     @ViewBuilder
     func translatorGlass<S: Shape>(in shape: S) -> some View {
+        #if os(iOS)
         if #available(iOS 26.0, *) {
             glassEffect(.regular, in: shape)
         } else {
             background(.ultraThinMaterial, in: shape)
                 .overlay(shape.stroke(.white.opacity(0.22), lineWidth: 0.5))
         }
+        #elseif os(macOS)
+        if #available(macOS 26.0, *) {
+            glassEffect(.regular, in: shape)
+        } else {
+            background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(.white.opacity(0.22), lineWidth: 0.5))
+        }
+        #endif
     }
 }
 
@@ -103,12 +126,20 @@ private extension Color {
     }
 
     static func adaptive(light: String, dark: String) -> Color {
+        #if canImport(UIKit)
         Color(uiColor: UIColor { traits in
             UIColor(hex: traits.userInterfaceStyle == .dark ? dark : light)
         })
+        #elseif canImport(AppKit)
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let match = appearance.bestMatch(from: [.darkAqua, .aqua])
+            return NSColor(hex: match == .darkAqua ? dark : light)
+        })
+        #endif
     }
 }
 
+#if canImport(UIKit)
 private extension UIColor {
     convenience init(hex: String) {
         let value = UInt64(hex, radix: 16) ?? 0
@@ -120,3 +151,16 @@ private extension UIColor {
         )
     }
 }
+#elseif canImport(AppKit)
+private extension NSColor {
+    convenience init(hex: String) {
+        let value = UInt64(hex, radix: 16) ?? 0
+        self.init(
+            red: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+}
+#endif

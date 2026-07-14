@@ -56,7 +56,7 @@ struct AppSettingsView: View {
                 } header: {
                     Text("Appearance")
                 } footer: {
-                    Text("Themes change the native chat palette. Appearance can follow the iPhone or stay light or dark.")
+                    Text("Themes change the native chat palette. Appearance can follow the system or stay light or dark.")
                 }
 
                 Section {
@@ -65,18 +65,26 @@ struct AppSettingsView: View {
                         session.forgetServer()
                     }
                 } footer: {
-                    Text("This forgets the address and password on this iPhone. It does not log WhatsApp out or delete backend data.")
+                    Text("This forgets the address and password on this device. It does not log WhatsApp out or delete backend data.")
                 }
             }
             .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
+            .platformInlineNavigationTitle()
             .toolbar {
+                #if os(macOS)
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Save GPT") { save() }
+                        .fontWeight(.semibold)
+                        .disabled(isLoading || isSaving)
+                }
+                #else
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save GPT") { save() }
                         .fontWeight(.semibold)
                         .disabled(isLoading || isSaving)
                 }
+                #endif
             }
             .task { await load() }
             .alert("Couldn’t save settings", isPresented: errorPresented) {

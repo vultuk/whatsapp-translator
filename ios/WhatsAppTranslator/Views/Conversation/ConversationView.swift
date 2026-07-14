@@ -34,7 +34,7 @@ struct ConversationView: View {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                         TextField("Search messages", text: $messageSearch)
-                            .textInputAutocapitalization(.never)
+                            .platformUncapitalizedInput()
                         Button("Close search", systemImage: "xmark.circle.fill") {
                             messageSearch = ""
                             showSearch = false
@@ -77,7 +77,7 @@ struct ConversationView: View {
             }
         }
         .navigationTitle(session.displayName(for: contact))
-        .navigationBarTitleDisplayMode(.inline)
+        .platformInlineNavigationTitle()
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Button { showSettings = true } label: {
@@ -102,17 +102,18 @@ struct ConversationView: View {
                 .buttonStyle(.plain)
                 .accessibilityHint("Opens nickname, timezone and translation settings")
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: platformTrailingToolbarPlacement) {
                 Button("Search messages", systemImage: "magnifyingglass") {
                     Task { await activateSearch() }
                 }
+                .keyboardShortcut("f", modifiers: .command)
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: platformTrailingToolbarPlacement) {
                 Button(starredOnly ? "Show all messages" : "Show starred only", systemImage: starredOnly ? "star.fill" : "star") {
                     Task { await toggleStarredFilter() }
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: platformTrailingToolbarPlacement) {
                 Menu("Conversation", systemImage: "ellipsis") {
                     Button("Conversation cost", systemImage: "dollarsign.circle") { showCost = true }
                     Button("Conversation settings", systemImage: "slider.horizontal.3") { showSettings = true }
@@ -139,61 +140,74 @@ struct ConversationView: View {
     private var messageTimeline: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 6) {
-                    if session.messageHistoryHasMore[contact.id] == true, messageSearch.isEmpty, !starredOnly {
-                        Button("Load earlier messages") {
-                            Task { await session.loadMessages(for: contact.id, older: true) }
-                        }
-                        .font(.caption.weight(.semibold))
-                        .buttonStyle(.bordered)
-                        .padding(.vertical, 10)
-                    }
-
-                    if visibleMessages.isEmpty {
-                        ContentUnavailableView(
-                            starredOnly ? "No starred messages" : "No messages found",
-                            systemImage: starredOnly ? "star" : "magnifyingglass",
-                            description: Text(starredOnly ? "Use the actions button under a message to star it." : "Try another search.")
-                        )
-                        .padding(.top, 80)
-                    }
-
-                    ForEach(Array(visibleMessages.enumerated()), id: \.element.id) { index, message in
-                        if shouldShowDate(before: index) {
-                            DatePill(date: message.date)
-                                .padding(.vertical, 10)
-                        }
-                        MessageBubble(
-                            message: message,
-                            isStarred: session.preferences.isStarred(messageID: message.id, contactID: contact.id),
-                            isBusy: session.activeMessageActionIDs.contains(message.id),
-                            image: session.messageImages[message.id],
-                            mediaURL: session.messageMediaURLs[message.id],
-                            mediaIsLoading: session.mediaLoadingIDs.contains(message.id),
-                            mediaFailed: session.mediaErrorIDs.contains(message.id),
-                            linkPreviews: message.extractedURLs.compactMap { session.linkPreviews[$0] },
-                            reply: { replyTarget = session.replyTarget(for: message) },
-                            translate: { Task { await session.translate(message) } },
-                            aiReply: { generateAIReply(to: message) },
-                            toggleStar: { session.preferences.toggleStar(messageID: message.id, contactID: contact.id) },
-                            react: { emoji in Task { await session.react(to: message, emoji: emoji) } },
-                            retryMedia: { Task { await session.retryMedia(for: message) } }
-                        )
-                        .id(message.id)
-                        .task {
-                            await session.loadMedia(for: message)
-                            for url in message.extractedURLs { await session.loadLinkPreview(for: url) }
-                        }
-                    }
+                #if os(macOS)
+                VStack(spacing: 6) {
+                    messageTimelineContent
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 14)
+                #else
+                LazyVStack(spacing: 6) {
+                    messageTimelineContent
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 14)
+                #endif
             }
-            .scrollDismissesKeyboard(.interactively)
+            .platformDismissesKeyboard()
             .defaultScrollAnchor(.bottom)
             .onChange(of: messages.count) {
                 guard messageSearch.isEmpty, !starredOnly, let id = messages.last?.id else { return }
                 withAnimation(.snappy) { proxy.scrollTo(id, anchor: .bottom) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var messageTimelineContent: some View {
+        if session.messageHistoryHasMore[contact.id] == true, messageSearch.isEmpty, !starredOnly {
+            Button("Load earlier messages") {
+                Task { await session.loadMessages(for: contact.id, older: true) }
+            }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(.bordered)
+            .padding(.vertical, 10)
+        }
+
+        if visibleMessages.isEmpty {
+            ContentUnavailableView(
+                starredOnly ? "No starred messages" : "No messages found",
+                systemImage: starredOnly ? "star" : "magnifyingglass",
+                description: Text(starredOnly ? "Use the actions button under a message to star it." : "Try another search.")
+            )
+            .padding(.top, 80)
+        }
+
+        ForEach(Array(visibleMessages.enumerated()), id: \.element.id) { index, message in
+            if shouldShowDate(before: index) {
+                DatePill(date: message.date)
+                    .padding(.vertical, 10)
+            }
+            MessageBubble(
+                message: message,
+                isStarred: session.preferences.isStarred(messageID: message.id, contactID: contact.id),
+                isBusy: session.activeMessageActionIDs.contains(message.id),
+                image: session.messageImages[message.id],
+                mediaURL: session.messageMediaURLs[message.id],
+                mediaIsLoading: session.mediaLoadingIDs.contains(message.id),
+                mediaFailed: session.mediaErrorIDs.contains(message.id),
+                linkPreviews: message.extractedURLs.compactMap { session.linkPreviews[$0] },
+                reply: { replyTarget = session.replyTarget(for: message) },
+                translate: { Task { await session.translate(message) } },
+                aiReply: { generateAIReply(to: message) },
+                toggleStar: { session.preferences.toggleStar(messageID: message.id, contactID: contact.id) },
+                react: { emoji in Task { await session.react(to: message, emoji: emoji) } },
+                retryMedia: { Task { await session.retryMedia(for: message) } }
+            )
+            .id(message.id)
+            .task {
+                await session.loadMedia(for: message)
+                for url in message.extractedURLs { await session.loadLinkPreview(for: url) }
             }
         }
     }
@@ -254,7 +268,9 @@ private struct ChatWallpaper: View {
                 Image(systemName: "message.fill")
                     .font(.system(size: 28))
                     .foregroundStyle(.primary.opacity(0.018))
+                    #if os(iOS)
                     .symbolEffect(.pulse, options: .repeating.speed(0.05))
+                    #endif
             }
             .ignoresSafeArea()
     }
@@ -321,7 +337,7 @@ private struct ConversationCostView: View {
                 }
             }
             .navigationTitle(session.displayName(for: contact))
-            .navigationBarTitleDisplayMode(.inline)
+            .platformInlineNavigationTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task { await load() }
         }

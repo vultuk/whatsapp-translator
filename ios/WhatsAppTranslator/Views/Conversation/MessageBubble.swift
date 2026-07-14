@@ -1,5 +1,10 @@
 import SwiftUI
+
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 enum MessageSwipeReply {
     static let triggerDistance: CGFloat = 56
@@ -21,7 +26,7 @@ struct MessageBubble: View {
     let message: ChatMessage
     let isStarred: Bool
     let isBusy: Bool
-    let image: UIImage?
+    let image: PlatformImage?
     let mediaURL: URL?
     let mediaIsLoading: Bool
     let mediaFailed: Bool
@@ -109,10 +114,14 @@ struct MessageBubble: View {
                             .buttonStyle(.plain)
                         }
                         if isBusy { ProgressView().controlSize(.mini) }
+                        #if os(iOS)
                         Spacer(minLength: 4)
+                        #else
+                        Spacer().frame(width: 8)
+                        #endif
                         if isStarred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
                         Text(message.date.formatted(date: .omitted, time: .shortened))
-                        if message.isFromMe { Image(systemName: "checkmark.done") }
+                        if message.isFromMe { Image(systemName: "checkmark") }
                         Button(showActions ? "Hide" : "Actions", systemImage: "ellipsis.circle") {
                             withAnimation(.snappy) { showActions.toggle() }
                         }
@@ -143,6 +152,9 @@ struct MessageBubble: View {
                 .contextMenu { actionMenu }
                 .offset(x: swipeOffset)
             }
+            #if os(macOS)
+            .frame(maxWidth: 680, alignment: message.isFromMe ? .trailing : .leading)
+            #endif
             .contentShape(Rectangle())
             .simultaneousGesture(
                 DragGesture(minimumDistance: 12)
@@ -151,7 +163,7 @@ struct MessageBubble: View {
                     }
                     .onEnded { value in
                         guard MessageSwipeReply.shouldReply(translation: value.translation) else { return }
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        performReplyFeedback()
                         reply()
                     }
             )
@@ -167,6 +179,14 @@ struct MessageBubble: View {
                 demoSwipeOffset = MessageSwipeReply.triggerDistance
             }
         }
+    }
+
+    private func performReplyFeedback() {
+        #if canImport(UIKit)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        #elseif canImport(AppKit)
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        #endif
     }
 
     private var visibleActionStrip: some View {

@@ -50,7 +50,7 @@ struct TimezonePickerView: View {
                 }
             }
             .navigationTitle("Contact timezone")
-            .navigationBarTitleDisplayMode(.inline)
+            .platformInlineNavigationTitle()
             .searchable(text: $searchText, prompt: "Search city or timezone")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

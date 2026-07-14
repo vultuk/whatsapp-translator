@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.vultuk
   deploymentTarget:
     iOS: "18.0"
+    macOS: "15.0"
   xcodeVersion: "26.0"
 settings:
   base:
@@ -39,6 +40,7 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: false
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: false
       configs:
         Debug:
           APS_ENVIRONMENT: development
@@ -121,6 +123,56 @@ targets:
               - INSendMessageIntent
               - INSearchForMessagesIntent
               - INSetMessageAttributeIntent
+  BabelBridgeMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: WhatsAppTranslator
+        excludes:
+          - WhatsAppTranslatorApp.swift
+          - App/PushNotificationCoordinator.swift
+          - App/MessagingIntentDonor.swift
+          - Info.plist
+          - WhatsAppTranslator.entitlements
+      - path: BabelBridgeMac
+    entitlements:
+      path: BabelBridgeMac/BabelBridgeMac.entitlements
+      properties:
+        com.apple.developer.aps-environment: $(APS_ENVIRONMENT)
+        com.apple.developer.usernotifications.communication: true
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)
+          - $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator
+        PRODUCT_NAME: Babel Bridge
+        PRODUCT_MODULE_NAME: BabelBridgeMac
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_HARDENED_RUNTIME: true
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.social-networking
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+        Release:
+          APS_ENVIRONMENT: production
+    info:
+      path: BabelBridgeMac/Info.plist
+      properties:
+        CFBundleDisplayName: Babel Bridge
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        KeychainAccessGroup: $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
+        LSApplicationCategoryType: public.app-category.social-networking
+        NSLocalNetworkUsageDescription: Connect to your self-hosted Babel Bridge backend.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSHumanReadableCopyright: Copyright © 2026 Simon Skinner. Open source under the repository license.
   WhatsAppTranslatorTests:
     type: bundle.unit-test
     platform: iOS
@@ -132,6 +184,20 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.tests
         GENERATE_INFOPLIST_FILE: true
+  BabelBridgeMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: BabelBridgeMacTests
+    dependencies:
+      - target: BabelBridgeMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.macos-tests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Babel Bridge.app/Contents/MacOS/Babel Bridge
+        BUNDLE_LOADER: $(TEST_HOST)
 schemes:
   WhatsAppTranslator:
     build:
@@ -141,3 +207,11 @@ schemes:
     test:
       targets:
         - WhatsAppTranslatorTests
+  BabelBridgeMac:
+    build:
+      targets:
+        BabelBridgeMac: all
+        BabelBridgeMacTests: [test]
+    test:
+      targets:
+        - BabelBridgeMacTests

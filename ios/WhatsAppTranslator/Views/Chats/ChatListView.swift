@@ -44,13 +44,28 @@ struct ChatListView: View {
                 }
             }
             .listStyle(.plain)
+            #if os(macOS)
+            .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
+            #endif
             .navigationTitle("Chats")
             .searchable(text: $session.searchText, prompt: "Search chats")
             .refreshable { await session.refresh() }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                #if os(macOS)
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button("Refresh chats", systemImage: "arrow.clockwise") {
+                        Task { await session.refresh() }
+                    }
+                    .keyboardShortcut("r", modifiers: .command)
+                    SettingsLink {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                }
+                #else
+                ToolbarItem(placement: platformTrailingToolbarPlacement) {
                     Button("Settings", systemImage: "gearshape") { showSettings = true }
                 }
+                #endif
             }
             .overlay {
                 if session.contacts.isEmpty {
