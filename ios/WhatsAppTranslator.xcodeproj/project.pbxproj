@@ -12,6 +12,7 @@
 		0895BC27BCE593660C12C549 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C87A75BF6020544068175DB /* APIClient.swift */; };
 		0CAC0EC5B9CBE295135A7DCD /* AppPreferencesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEBEFEEB15458A49DD869D9C /* AppPreferencesStore.swift */; };
 		0D6892E46742D1416C476117 /* IntentHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ABCA3D87C4A7D188D37B476 /* IntentHandler.swift */; };
+		13BC4A875F4704E35C735FB2 /* MacConversationHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A087BB866B922E2AD7803431 /* MacConversationHeader.swift */; };
 		18A02899E3E32C43FC548C4A /* ChatCacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3962C05E7905F4A73E9D2CE6 /* ChatCacheStore.swift */; };
 		1B669DCEE6EADCA60FFC9681 /* DraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0305EB10787A1AFD17B0763 /* DraftStore.swift */; };
 		1ECCB799BC4FB731B4395A0B /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B87B06CB38D86E0649AA09 /* APIModels.swift */; };
@@ -21,6 +22,7 @@
 		20EEEB892ABBB2D449414230 /* AppPreferencesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEBEFEEB15458A49DD869D9C /* AppPreferencesStore.swift */; };
 		21BC5B73FB87CE8E09C8B551 /* MacSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3308D79A3B4D94B8BD2E46 /* MacSettingsView.swift */; };
 		24321362342847513C38E92E /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6010E7F3A59C4304404C23EE /* CredentialStore.swift */; };
+		28194366BC7B62BBEAE2DF82 /* MacConversationHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A087BB866B922E2AD7803431 /* MacConversationHeader.swift */; };
 		28B2BC337201005F6D324D7D /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B87B06CB38D86E0649AA09 /* APIModels.swift */; };
 		28C3CA0F67263FDDB8B56BC6 /* DraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0305EB10787A1AFD17B0763 /* DraftStore.swift */; };
 		31D3E69573488B78D0CB06CD /* BackgroundMessageSynchronizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6FFEB6CEF1DC23D84E2D6E8 /* BackgroundMessageSynchronizer.swift */; };
@@ -147,6 +149,7 @@
 		9876CD3D330EDB50574EBCF2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		9ABCA3D87C4A7D188D37B476 /* IntentHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentHandler.swift; sourceTree = "<group>"; };
 		9C87A75BF6020544068175DB /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		A087BB866B922E2AD7803431 /* MacConversationHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacConversationHeader.swift; sourceTree = "<group>"; };
 		A64F362849BF63C72671AB9F /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		AA427F451FCCC2F453CC8AAC /* TimezonePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimezonePickerView.swift; sourceTree = "<group>"; };
 		B02D9A460B6438D75BA42C97 /* AppSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsView.swift; sourceTree = "<group>"; };
@@ -308,6 +311,7 @@
 			children = (
 				A64F362849BF63C72671AB9F /* ComposerView.swift */,
 				485D8A29673EDFD9E9DC6B01 /* ConversationView.swift */,
+				A087BB866B922E2AD7803431 /* MacConversationHeader.swift */,
 				ED7F14E9137C449ADE8AACC8 /* MessageBubble.swift */,
 				11C1D91E4A79E0B65279462F /* RichMessageContentView.swift */,
 			);
@@ -593,6 +597,7 @@
 				EA961E6FE2A5E1C0DAF697EB /* ConversationView.swift in Sources */,
 				4959160847534F73298211E3 /* CredentialStore.swift in Sources */,
 				28C3CA0F67263FDDB8B56BC6 /* DraftStore.swift in Sources */,
+				28194366BC7B62BBEAE2DF82 /* MacConversationHeader.swift in Sources */,
 				7D30E1D7FEA454CD203E0D42 /* MessageBubble.swift in Sources */,
 				F7596CDE24554F37EF0D0992 /* MessagingIntentDonor.swift in Sources */,
 				F6DCC3BA070D46AD7E60642E /* PlatformCompatibility.swift in Sources */,
@@ -627,6 +632,7 @@
 				C95EFE6BFB1C6B739D4284A1 /* ConversationView.swift in Sources */,
 				D960F4F1714B6508A081A5B5 /* CredentialStore.swift in Sources */,
 				1B669DCEE6EADCA60FFC9681 /* DraftStore.swift in Sources */,
+				13BC4A875F4704E35C735FB2 /* MacConversationHeader.swift in Sources */,
 				59B1A3EECD3C41CDA0F0F33A /* MacMessagingIntentDonor.swift in Sources */,
 				0637885AA7D925754EAE887B /* MacPushNotificationCoordinator.swift in Sources */,
 				21BC5B73FB87CE8E09C8B551 /* MacSettingsView.swift in Sources */,

@@ -22,6 +22,18 @@ final class BabelBridgeMacTests: XCTestCase {
         XCTAssertGreaterThan(data?.count ?? 0, 1_000)
     }
 
+    func testMinimumMacWindowCanContainTheLargestMessageBubble() {
+        let availableDetailWidth = MacChatLayoutMetrics.minimumWindowWidth
+            - MacChatLayoutMetrics.minimumSidebarWidth
+            - MacChatLayoutMetrics.timelineHorizontalPadding
+
+        XCTAssertGreaterThanOrEqual(
+            availableDetailWidth,
+            MacChatLayoutMetrics.maximumBubbleWidth,
+            "The minimum Mac window must not force message content outside its bubble."
+        )
+    }
+
     @MainActor
     func testMacUsesTheSharedPinnedConversationOrdering() {
         let pinned = Contact(

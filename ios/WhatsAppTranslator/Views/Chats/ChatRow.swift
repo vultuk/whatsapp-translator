@@ -9,25 +9,34 @@ struct ChatRow: View {
 
     var body: some View {
         HStack(spacing: 13) {
-            ContactAvatar(contact: contact, url: avatarURL)
+            ContactAvatar(contact: contact, url: avatarURL, size: avatarSize)
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
                     Text(displayName)
                         .font(.headline)
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
                     Spacer(minLength: 8)
                     Text(contact.lastMessageTime.chatListDate)
                         .font(.caption)
                         .foregroundStyle(contact.unreadCount > 0 ? palette.accent : .secondary)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 HStack(spacing: 8) {
                     if !draft.isEmpty {
                         Text("Draft: \(draft)")
                             .foregroundStyle(.orange)
                             .italic()
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(1)
                     } else {
                         Text(contact.lastMessagePreview ?? "No messages yet")
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(1)
                     }
                     Spacer(minLength: 6)
                     if contact.pinnedAt != nil {
@@ -42,14 +51,25 @@ struct ChatRow: View {
                             .padding(.horizontal, 7)
                             .padding(.vertical, 4)
                             .background(palette.accent, in: Capsule())
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                 }
                 .font(.subheadline)
-                .lineLimit(1)
             }
         }
         .padding(.vertical, 7)
+        #if os(macOS)
+        .frame(minHeight: 58)
+        #endif
         .contentShape(Rectangle())
+    }
+
+    private var avatarSize: CGFloat {
+        #if os(macOS)
+        44
+        #else
+        52
+        #endif
     }
 
 }

@@ -131,6 +131,7 @@ struct RichMessageContentView: View {
             Text(displayText)
                 .font(.body)
                 .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

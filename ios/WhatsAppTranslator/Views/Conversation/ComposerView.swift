@@ -42,11 +42,7 @@ struct ComposerView: View {
 
             HStack(alignment: .bottom, spacing: 9) {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .semibold))
-                        .frame(width: 36, height: 36)
-                        .background(.ultraThinMaterial, in: Circle())
-                        .overlay(Circle().stroke(.white.opacity(0.22), lineWidth: 0.5))
+                    addImageLabel
                 }
                 .disabled(isSending)
                 .accessibilityLabel("Send image")
@@ -54,39 +50,9 @@ struct ComposerView: View {
                 TextField("Message", text: $text, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($focused)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .translatorGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .modifier(ComposerInputStyle())
 
-                Button {
-                    guard !isSending else { return }
-                    send()
-                } label: {
-                    Group {
-                        if isSending {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(.white)
-                                .transition(.scale.combined(with: .opacity))
-                        } else {
-                            Image(systemName: "paperplane.fill")
-                                .transition(.scale.combined(with: .opacity))
-                        }
-                    }
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.circle)
-                .controlSize(.small)
-                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending)
-                .allowsHitTesting(!isSending)
-                .accessibilityLabel(isSending ? "Sending message" : "Send message")
-                .accessibilityValue(isSending ? "In progress" : "")
-                .animation(.snappy, value: isSending)
-                #if os(macOS)
-                .keyboardShortcut(.return, modifiers: .command)
-                #endif
+                sendButton
             }
             .padding(.horizontal, 12)
             .padding(.top, reply == nil ? 8 : 2)
@@ -136,8 +102,101 @@ struct ComposerView: View {
         }
     }
 
+    @ViewBuilder
+    private var addImageLabel: some View {
+        #if os(macOS)
+        Image(systemName: "plus")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 34, height: 34)
+            .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        #else
+        Image(systemName: "plus")
+            .font(.system(size: 18, weight: .semibold))
+            .frame(width: 36, height: 36)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().stroke(.white.opacity(0.22), lineWidth: 0.5))
+        #endif
+    }
+
+    @ViewBuilder
+    private var sendButton: some View {
+        #if os(macOS)
+        Button {
+            guard !isSending else { return }
+            send()
+        } label: {
+            sendButtonLabel
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .frame(width: 34, height: 34)
+        .background(palette.accent, in: RoundedRectangle(cornerRadius: 9))
+        .opacity(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending ? 0.42 : 1)
+        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending)
+        .allowsHitTesting(!isSending)
+        .keyboardShortcut(.return, modifiers: .command)
+        .accessibilityLabel(isSending ? "Sending message" : "Send message")
+        .accessibilityValue(isSending ? "In progress" : "")
+        .animation(.snappy, value: isSending)
+        #else
+        Button {
+            guard !isSending else { return }
+            send()
+        } label: {
+            sendButtonLabel
+                .frame(width: 36, height: 36)
+        }
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.circle)
+        .controlSize(.small)
+        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending)
+        .allowsHitTesting(!isSending)
+        .accessibilityLabel(isSending ? "Sending message" : "Send message")
+        .accessibilityValue(isSending ? "In progress" : "")
+        .animation(.snappy, value: isSending)
+        #endif
+    }
+
+    @ViewBuilder
+    private var sendButtonLabel: some View {
+        if isSending {
+            ProgressView()
+                .controlSize(.small)
+                .tint(.white)
+                .transition(.scale.combined(with: .opacity))
+        } else {
+            Image(systemName: "paperplane.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .transition(.scale.combined(with: .opacity))
+        }
+    }
+
     private var pickerErrorPresented: Binding<Bool> {
         Binding(get: { pickerError != nil }, set: { if !$0 { pickerError = nil } })
+    }
+}
+
+private struct ComposerInputStyle: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(.primary.opacity(0.09), lineWidth: 0.5)
+            }
+        #else
+        content
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .translatorGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        #endif
     }
 }
 

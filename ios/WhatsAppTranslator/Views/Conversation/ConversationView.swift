@@ -30,6 +30,21 @@ struct ConversationView: View {
         ZStack {
             ChatWallpaper()
             VStack(spacing: 0) {
+                #if os(macOS)
+                MacConversationHeader(
+                    contact: contact,
+                    displayName: session.displayName(for: contact),
+                    avatarURL: session.avatarURLs[contact.id],
+                    localTime: session.localTimeDescription(for: contact.id),
+                    usage: usage,
+                    starredOnly: starredOnly,
+                    showContactSettings: { showSettings = true },
+                    search: { Task { await activateSearch() } },
+                    toggleStarred: { Task { await toggleStarredFilter() } },
+                    showCost: { showCost = true },
+                    showConversationSettings: { showSettings = true }
+                )
+                #endif
                 if showSearch {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -76,9 +91,10 @@ struct ConversationView: View {
                 )
             }
         }
-        .navigationTitle(session.displayName(for: contact))
+        .navigationTitle(platformNavigationTitle)
         .platformInlineNavigationTitle()
         .toolbar {
+            #if os(iOS)
             ToolbarItem(placement: .principal) {
                 Button { showSettings = true } label: {
                     HStack(spacing: 9) {
@@ -119,6 +135,7 @@ struct ConversationView: View {
                     Button("Conversation settings", systemImage: "slider.horizontal.3") { showSettings = true }
                 }
             }
+            #endif
         }
         .task {
             draft = ProcessInfo.processInfo.arguments.contains("-demo") ? "" : session.draftStore.text(for: contact.id)
@@ -144,7 +161,7 @@ struct ConversationView: View {
                 VStack(spacing: 6) {
                     messageTimelineContent
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, MacChatLayoutMetrics.timelineHorizontalPadding / 2)
                 .padding(.vertical, 14)
                 #else
                 LazyVStack(spacing: 6) {
@@ -161,6 +178,14 @@ struct ConversationView: View {
                 withAnimation(.snappy) { proxy.scrollTo(id, anchor: .bottom) }
             }
         }
+    }
+
+    private var platformNavigationTitle: String {
+        #if os(macOS)
+        "Babel Bridge"
+        #else
+        session.displayName(for: contact)
+        #endif
     }
 
     @ViewBuilder

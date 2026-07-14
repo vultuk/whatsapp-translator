@@ -9,47 +9,15 @@ struct ChatListView: View {
         @Bindable var session = session
 
         NavigationSplitView {
-            List(selection: $session.selectedContactID) {
-                ForEach(session.filteredContacts) { contact in
-                    NavigationLink(value: contact.id) {
-                        ChatRow(
-                            contact: contact,
-                            displayName: session.displayName(for: contact),
-                            draft: session.draftStore.text(for: contact.id),
-                            avatarURL: session.avatarURLs[contact.id]
-                        )
-                    }
-                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                        Button {
-                            Task { await session.togglePin(contact) }
-                        } label: {
-                            Label(
-                                contact.pinnedAt == nil ? "Pin" : "Unpin",
-                                systemImage: contact.pinnedAt == nil ? "pin" : "pin.slash"
-                            )
-                        }
-                        .tint(palette.accent)
-                    }
-                    .contextMenu {
-                        Button(
-                            contact.pinnedAt == nil ? "Pin conversation" : "Unpin conversation",
-                            systemImage: contact.pinnedAt == nil ? "pin" : "pin.slash"
-                        ) {
-                            Task { await session.togglePin(contact) }
-                        }
-                    }
-                    .task { await session.loadAvatar(for: contact.id) }
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                }
-            }
-            .listStyle(.plain)
+            sidebarContent(selection: $session.selectedContactID, searchText: $session.searchText)
             #if os(macOS)
-            .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
+            .navigationSplitViewColumnWidth(
+                min: MacChatLayoutMetrics.minimumSidebarWidth,
+                ideal: MacChatLayoutMetrics.idealSidebarWidth,
+                max: MacChatLayoutMetrics.maximumSidebarWidth
+            )
             #endif
             .navigationTitle("Chats")
-            .searchable(text: $session.searchText, prompt: "Search chats")
-            .refreshable { await session.refresh() }
             .toolbar {
                 #if os(macOS)
                 ToolbarItemGroup(placement: .primaryAction) {
@@ -57,9 +25,13 @@ struct ChatListView: View {
                         Task { await session.refresh() }
                     }
                     .keyboardShortcut("r", modifiers: .command)
+                    .labelStyle(.iconOnly)
+                    .help("Refresh chats")
                     SettingsLink {
                         Label("Settings", systemImage: "gearshape")
                     }
+                    .labelStyle(.iconOnly)
+                    .help("Settings")
                 }
                 #else
                 ToolbarItem(placement: platformTrailingToolbarPlacement) {
@@ -89,6 +61,81 @@ struct ChatListView: View {
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
         }
+    }
+
+    @ViewBuilder
+    private func sidebarContent(
+        selection: Binding<String?>,
+        searchText: Binding<String>
+    ) -> some View {
+        #if os(macOS)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search chats", text: searchText)
+                    .textFieldStyle(.plain)
+                if !searchText.wrappedValue.isEmpty {
+                    Button("Clear search", systemImage: "xmark.circle.fill") {
+                        searchText.wrappedValue = ""
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+
+            Divider()
+            contactList(selection: selection)
+        }
+        #else
+        contactList(selection: selection)
+            .searchable(text: searchText, prompt: "Search chats")
+            .refreshable { await session.refresh() }
+        #endif
+    }
+
+    private func contactList(selection: Binding<String?>) -> some View {
+        List(selection: selection) {
+            ForEach(session.filteredContacts) { contact in
+                NavigationLink(value: contact.id) {
+                    ChatRow(
+                        contact: contact,
+                        displayName: session.displayName(for: contact),
+                        draft: session.draftStore.text(for: contact.id),
+                        avatarURL: session.avatarURLs[contact.id]
+                    )
+                }
+                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                    Button {
+                        Task { await session.togglePin(contact) }
+                    } label: {
+                        Label(
+                            contact.pinnedAt == nil ? "Pin" : "Unpin",
+                            systemImage: contact.pinnedAt == nil ? "pin" : "pin.slash"
+                        )
+                    }
+                    .tint(palette.accent)
+                }
+                .contextMenu {
+                    Button(
+                        contact.pinnedAt == nil ? "Pin conversation" : "Unpin conversation",
+                        systemImage: contact.pinnedAt == nil ? "pin" : "pin.slash"
+                    ) {
+                        Task { await session.togglePin(contact) }
+                    }
+                }
+                .task { await session.loadAvatar(for: contact.id) }
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+            }
+        }
+        .listStyle(.plain)
     }
 }
 

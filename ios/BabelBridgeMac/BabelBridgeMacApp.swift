@@ -14,14 +14,20 @@ struct BabelBridgeMacApp: App {
                 .environment(\.translatorPalette, TranslatorPalette.make(session.preferences.theme))
                 .tint(TranslatorPalette.make(session.preferences.theme).accent)
                 .preferredColorScheme(session.preferences.colorMode.colorScheme)
-                .frame(minWidth: 860, minHeight: 560)
+                .frame(
+                    minWidth: MacChatLayoutMetrics.minimumWindowWidth,
+                    minHeight: MacChatLayoutMetrics.minimumWindowHeight
+                )
                 .task { await session.start() }
                 .onChange(of: scenePhase) { _, phase in
                     guard phase == .active else { return }
                     Task { await session.becameActive() }
                 }
         }
-        .defaultSize(width: 1180, height: 760)
+        .defaultSize(
+            width: MacChatLayoutMetrics.defaultWindowWidth,
+            height: MacChatLayoutMetrics.defaultWindowHeight
+        )
         .windowToolbarStyle(.unifiedCompact)
         .commands {
             SidebarCommands()

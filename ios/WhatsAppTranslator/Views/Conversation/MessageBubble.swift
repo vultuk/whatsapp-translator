@@ -106,30 +106,7 @@ struct MessageBubble: View {
                         }
                     }
 
-                    HStack(spacing: 4) {
-                        if message.isTranslated {
-                            Button(showAlternate ? "Original" : "Translated", systemImage: "character.bubble") {
-                                withAnimation(.snappy) { showAlternate.toggle() }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        if isBusy { ProgressView().controlSize(.mini) }
-                        #if os(iOS)
-                        Spacer(minLength: 4)
-                        #else
-                        Spacer().frame(width: 8)
-                        #endif
-                        if isStarred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
-                        Text(message.date.formatted(date: .omitted, time: .shortened))
-                        if message.isFromMe { Image(systemName: "checkmark") }
-                        Button(showActions ? "Hide" : "Actions", systemImage: "ellipsis.circle") {
-                            withAnimation(.snappy) { showActions.toggle() }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("Reply, translate, star or react")
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    messageMetadata
 
                     if showActions {
                         visibleActionStrip
@@ -153,7 +130,10 @@ struct MessageBubble: View {
                 .offset(x: swipeOffset)
             }
             #if os(macOS)
-            .frame(maxWidth: 680, alignment: message.isFromMe ? .trailing : .leading)
+            .frame(
+                maxWidth: MacChatLayoutMetrics.maximumBubbleWidth,
+                alignment: message.isFromMe ? .trailing : .leading
+            )
             #endif
             .contentShape(Rectangle())
             .simultaneousGesture(
@@ -189,7 +169,74 @@ struct MessageBubble: View {
         #endif
     }
 
+    private var messageMetadata: some View {
+        HStack(spacing: 6) {
+            if message.isTranslated {
+                Button {
+                    withAnimation(.snappy) { showAlternate.toggle() }
+                } label: {
+                    Label(showAlternate ? "Original" : "Translated", systemImage: "character.bubble")
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+            }
+            if isBusy { ProgressView().controlSize(.mini) }
+            #if os(macOS)
+            Spacer().frame(width: 8)
+            #else
+            Spacer(minLength: 8)
+            #endif
+            if isStarred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
+            Text(message.date.formatted(date: .omitted, time: .shortened))
+                .fixedSize(horizontal: true, vertical: false)
+            if message.isFromMe {
+                Image(systemName: "checkmark")
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            Button {
+                withAnimation(.snappy) { showActions.toggle() }
+            } label: {
+                Image(systemName: showActions ? "xmark.circle.fill" : "ellipsis.circle")
+            }
+            .buttonStyle(.plain)
+            .help(showActions ? "Hide message actions" : "Show message actions")
+            .accessibilityLabel(showActions ? "Hide message actions" : "Show message actions")
+            .accessibilityHint("Reply, translate, star or react")
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+    }
+
     private var visibleActionStrip: some View {
+        #if os(macOS)
+        HStack(spacing: 6) {
+            compactActionButton("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
+            if message.canTranslate {
+                compactActionButton("Translate", systemImage: "character.bubble", action: translate)
+            }
+            if message.canGenerateAIReply {
+                compactActionButton("AI reply", systemImage: "sparkles", action: aiReply)
+            }
+            compactActionButton(
+                isStarred ? "Unstar" : "Star",
+                systemImage: isStarred ? "star.fill" : "star",
+                action: toggleStar
+            )
+            Menu {
+                ForEach(["👍", "❤️", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
+                    Button(emoji) { react(emoji) }
+                }
+            } label: {
+                compactActionLabel(systemImage: "face.smiling")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help("React")
+            .accessibilityLabel("React")
+        }
+        .foregroundStyle(palette.deepAccent)
+        .padding(.top, 2)
+        #else
         HStack(spacing: 10) {
             actionButton("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
             if message.canTranslate {
@@ -210,7 +257,34 @@ struct MessageBubble: View {
         .font(.caption2.weight(.medium))
         .foregroundStyle(palette.deepAccent)
         .padding(.top, 2)
+        #endif
     }
+
+    #if os(macOS)
+    private func compactActionButton(
+        _ title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            action()
+            withAnimation(.snappy) { showActions = false }
+        } label: {
+            compactActionLabel(systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+    }
+
+    private func compactActionLabel(systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 13, weight: .semibold))
+            .frame(width: 28, height: 26)
+            .background(.primary.opacity(0.065), in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+    }
+    #endif
 
     private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button {
@@ -280,6 +354,7 @@ private struct LinkPreviewCard: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(2)
+                            .truncationMode(.tail)
                         if let description = preview.description {
                             Text(description)
                                 .font(.caption2)

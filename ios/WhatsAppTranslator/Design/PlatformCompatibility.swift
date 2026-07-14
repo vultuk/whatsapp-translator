@@ -172,3 +172,17 @@ var platformTrailingToolbarPlacement: ToolbarItemPlacement {
     .topBarTrailing
     #endif
 }
+
+#if os(macOS)
+enum MacChatLayoutMetrics {
+    static let minimumWindowWidth: CGFloat = 980
+    static let minimumWindowHeight: CGFloat = 620
+    static let defaultWindowWidth: CGFloat = 1_260
+    static let defaultWindowHeight: CGFloat = 800
+    static let minimumSidebarWidth: CGFloat = 300
+    static let idealSidebarWidth: CGFloat = 330
+    static let maximumSidebarWidth: CGFloat = 380
+    static let maximumBubbleWidth: CGFloat = 620
+    static let timelineHorizontalPadding: CGFloat = 32
+}
+#endif
