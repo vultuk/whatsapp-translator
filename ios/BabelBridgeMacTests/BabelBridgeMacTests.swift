@@ -16,6 +16,12 @@ final class BabelBridgeMacTests: XCTestCase {
         XCTAssertEqual(reply.textInputButtonTitle, "Send")
     }
 
+    func testMacDeclaresSendMessageUserActivity() {
+        let activityTypes = Bundle.main.object(forInfoDictionaryKey: "NSUserActivityTypes") as? [String]
+
+        XCTAssertTrue(activityTypes?.contains("INSendMessageIntent") == true)
+    }
+
     func testCrossPlatformImageCanEncodeJPEGData() {
         let image = DemoImageFactory.landscape(size: CGSize(width: 320, height: 210))
         let data = image.platformJPEGData(compressionQuality: 0.8)

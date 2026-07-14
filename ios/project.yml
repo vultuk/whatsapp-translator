@@ -10,7 +10,7 @@ settings:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: SUR6QUSSV6
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 9
+    CURRENT_PROJECT_VERSION: 10
     MARKETING_VERSION: 1.0.0
 targets:
   WhatsAppTranslator:
@@ -170,6 +170,8 @@ targets:
         KeychainAccessGroup: $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
         LSApplicationCategoryType: public.app-category.social-networking
         NSLocalNetworkUsageDescription: Connect to your self-hosted Babel Bridge backend.
+        NSUserActivityTypes:
+          - INSendMessageIntent
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSHumanReadableCopyright: Copyright © 2026 Simon Skinner. Open source under the repository license.
