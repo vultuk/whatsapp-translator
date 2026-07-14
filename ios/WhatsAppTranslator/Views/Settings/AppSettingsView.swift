@@ -34,10 +34,12 @@ struct AppSettingsView: View {
                     Picker("GPT model", selection: modelBinding) {
                         ForEach(models, id: \.0) { Text($0.1).tag($0.0) }
                     }
+                    .platformCompactControlTypography()
                     .disabled(isLoading || isSaving)
                     Picker("Reasoning", selection: effortBinding) {
                         ForEach(efforts, id: \.0) { Text($0.1).tag($0.0) }
                     }
+                    .platformCompactControlTypography()
                     .disabled(isLoading || isSaving)
                 } header: {
                     Text("OpenAI")
@@ -49,9 +51,11 @@ struct AppSettingsView: View {
                     Picker("Theme", selection: themeBinding) {
                         ForEach(AppTheme.allCases) { theme in Text(theme.title).tag(theme) }
                     }
+                    .platformCompactControlTypography()
                     Picker("Appearance", selection: colorModeBinding) {
                         ForEach(AppColorMode.allCases) { mode in Text(mode.title).tag(mode) }
                     }
+                    .platformCompactControlTypography()
                     ThemePreview(theme: session.preferences.theme)
                 } header: {
                     Text("Appearance")
@@ -91,6 +95,12 @@ struct AppSettingsView: View {
                 Button("OK") { error = nil }
             } message: { Text(error ?? "Please try again.") }
         }
+        #if os(macOS)
+        .platformSheetSize(
+            minWidth: MacChatLayoutMetrics.settingsSheetMinimumWidth,
+            minHeight: MacChatLayoutMetrics.settingsSheetMinimumHeight
+        )
+        #endif
     }
 
     private var modelBinding: Binding<String> {
@@ -155,6 +165,7 @@ private struct ThemePreview: View {
         .font(.caption)
         .padding(12)
         .background(palette.chatBackground, in: RoundedRectangle(cornerRadius: 14))
+        .platformCompactControlTypography()
         .animation(.snappy, value: theme)
     }
 }

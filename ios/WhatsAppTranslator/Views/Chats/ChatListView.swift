@@ -132,7 +132,11 @@ struct ChatListView: View {
                 }
                 .task { await session.loadAvatar(for: contact.id) }
                 .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
+                .listRowBackground(
+                    session.selectedContactID == contact.id
+                        ? palette.accent.opacity(0.14)
+                        : Color.clear
+                )
             }
         }
         .listStyle(.plain)

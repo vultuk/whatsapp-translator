@@ -23,6 +23,7 @@ enum MessageSwipeReply {
 
 struct MessageBubble: View {
     @Environment(\.translatorPalette) private var palette
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let message: ChatMessage
     let isStarred: Bool
     let isBusy: Bool
@@ -48,7 +49,7 @@ struct MessageBubble: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            if message.isFromMe { Spacer(minLength: 52) }
+            if message.isFromMe { Spacer(minLength: bubbleEdgeInset) }
             ZStack(alignment: .leading) {
                 Image(systemName: "arrowshape.turn.up.left.fill")
                     .font(.system(size: 17, weight: .semibold))
@@ -148,7 +149,7 @@ struct MessageBubble: View {
                     }
             )
             .accessibilityAction(named: "Reply") { reply() }
-            if !message.isFromMe { Spacer(minLength: 52) }
+            if !message.isFromMe { Spacer(minLength: bubbleEdgeInset) }
         }
         .frame(maxWidth: .infinity)
         .task {
@@ -175,10 +176,15 @@ struct MessageBubble: View {
                 Button {
                     withAnimation(.snappy) { showAlternate.toggle() }
                 } label: {
-                    Label(showAlternate ? "Original" : "Translated", systemImage: "character.bubble")
-                        .lineLimit(1)
+                    if usesCompactMessageChrome {
+                        Image(systemName: "character.bubble")
+                    } else {
+                        Label(showAlternate ? "Original" : "Translated", systemImage: "character.bubble")
+                            .lineLimit(1)
+                    }
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(showAlternate ? "Show translated message" : "Show original message")
             }
             if isBusy { ProgressView().controlSize(.mini) }
             #if os(macOS)
@@ -205,8 +211,10 @@ struct MessageBubble: View {
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
+        .platformCompactControlTypography()
     }
 
+    @ViewBuilder
     private var visibleActionStrip: some View {
         #if os(macOS)
         HStack(spacing: 6) {
@@ -237,26 +245,30 @@ struct MessageBubble: View {
         .foregroundStyle(palette.deepAccent)
         .padding(.top, 2)
         #else
-        HStack(spacing: 10) {
-            actionButton("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
-            if message.canTranslate {
-                actionButton("Translate", systemImage: "character.bubble", action: translate)
-            }
-            if message.canGenerateAIReply {
-                actionButton("AI reply", systemImage: "sparkles", action: aiReply)
-            }
-            actionButton(isStarred ? "Unstar" : "Star", systemImage: isStarred ? "star.fill" : "star", action: toggleStar)
-            Menu {
-                ForEach(["👍", "❤️", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
-                    Button(emoji) { react(emoji) }
+        if usesCompactMessageChrome {
+            compactMobileActionStrip
+        } else {
+            HStack(spacing: 10) {
+                actionButton("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
+                if message.canTranslate {
+                    actionButton("Translate", systemImage: "character.bubble", action: translate)
                 }
-            } label: {
-                actionLabel("React", systemImage: "face.smiling")
+                if message.canGenerateAIReply {
+                    actionButton("AI reply", systemImage: "sparkles", action: aiReply)
+                }
+                actionButton(isStarred ? "Unstar" : "Star", systemImage: isStarred ? "star.fill" : "star", action: toggleStar)
+                Menu {
+                    ForEach(["👍", "❤️", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
+                        Button(emoji) { react(emoji) }
+                    }
+                } label: {
+                    actionLabel("React", systemImage: "face.smiling")
+                }
             }
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(palette.deepAccent)
+            .padding(.top, 2)
         }
-        .font(.caption2.weight(.medium))
-        .foregroundStyle(palette.deepAccent)
-        .padding(.top, 2)
         #endif
     }
 
@@ -286,6 +298,58 @@ struct MessageBubble: View {
     }
     #endif
 
+    #if os(iOS)
+    private var compactMobileActionStrip: some View {
+        HStack(spacing: 8) {
+            compactMobileActionButton("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
+            if message.canTranslate {
+                compactMobileActionButton("Translate", systemImage: "character.bubble", action: translate)
+            }
+            if message.canGenerateAIReply {
+                compactMobileActionButton("AI reply", systemImage: "sparkles", action: aiReply)
+            }
+            compactMobileActionButton(
+                isStarred ? "Unstar" : "Star",
+                systemImage: isStarred ? "star.fill" : "star",
+                action: toggleStar
+            )
+            Menu {
+                ForEach(["👍", "❤️", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
+                    Button(emoji) { react(emoji) }
+                }
+            } label: {
+                compactMobileActionLabel(systemImage: "face.smiling")
+            }
+            .accessibilityLabel("React")
+        }
+        .foregroundStyle(palette.deepAccent)
+        .padding(.top, 2)
+    }
+
+    private func compactMobileActionButton(
+        _ title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            action()
+            withAnimation(.snappy) { showActions = false }
+        } label: {
+            compactMobileActionLabel(systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
+    private func compactMobileActionLabel(systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 17, weight: .semibold))
+            .frame(width: 40, height: 38)
+            .background(.primary.opacity(0.065), in: RoundedRectangle(cornerRadius: 10))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+    }
+    #endif
+
     private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button {
             action()
@@ -303,6 +367,14 @@ struct MessageBubble: View {
             Text(title).lineLimit(1)
         }
         .frame(minWidth: 42)
+    }
+
+    private var usesCompactMessageChrome: Bool {
+        NativeLayoutPolicy.usesCompactMessageChrome(for: dynamicTypeSize)
+    }
+
+    private var bubbleEdgeInset: CGFloat {
+        usesCompactMessageChrome ? 18 : 52
     }
 
     @ViewBuilder

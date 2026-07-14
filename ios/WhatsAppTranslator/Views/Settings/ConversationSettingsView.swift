@@ -15,13 +15,19 @@ struct ConversationSettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Nickname", text: presentationBinding(\.nickname))
+                    LabeledContent("Nickname") {
+                        TextField(
+                            "",
+                            text: presentationBinding(\.nickname),
+                            prompt: Text("Optional")
+                        )
+                        .multilineTextAlignment(.trailing)
+                        .accessibilityLabel("Nickname")
+                    }
                     Button {
                         showTimezonePicker = true
                     } label: {
-                        HStack {
-                            Text("Contact timezone").foregroundStyle(.primary)
-                            Spacer()
+                        LabeledContent {
                             VStack(alignment: .trailing, spacing: 1) {
                                 Text(presentation.timezoneIdentifier.map(TimezonePickerView.friendlyName) ?? "Not set")
                                 if let identifier = presentation.timezoneIdentifier {
@@ -30,25 +36,49 @@ struct ConversationSettingsView: View {
                             }
                             .foregroundStyle(.secondary)
                             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                        } label: {
+                            Text("Contact timezone")
+                                .foregroundStyle(.primary)
                         }
                     }
+                    .buttonStyle(.plain)
                 } header: {
                     Text("Contact")
                 } footer: {
                     Text("Nickname and timezone stay on this device. The timezone shows the contact’s current local time in the chat header.")
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Section {
-                    TextField("Conversation language", text: optionalBinding(\.languageOverride))
-                        .platformWordsInput()
-                    TextField("Style, e.g. friendly or formal", text: optionalBinding(\.translationStyle))
+                    LabeledContent("Language") {
+                        TextField(
+                            "",
+                            text: optionalBinding(\.languageOverride),
+                            prompt: Text("Automatic")
+                        )
+                            .platformWordsInput()
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityLabel("Language")
+                    }
+                    LabeledContent("Style") {
+                        TextField(
+                            "",
+                            text: optionalBinding(\.translationStyle),
+                            prompt: Text("Optional")
+                        )
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityLabel("Style")
+                    }
                     Toggle("Send original after translation", isOn: $settings.sendOriginalFollowUp)
                 } header: {
                     Text("Translation")
                 } footer: {
                     Text("When enabled, the translated message sends first, followed immediately by what you originally typed.")
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .platformGroupedFormStyle()
+            .platformCompactControlTypography()
             .navigationTitle(session.displayName(for: contact))
             .platformInlineNavigationTitle()
             .disabled(isLoading || isSaving)
@@ -70,6 +100,12 @@ struct ConversationSettingsView: View {
                 TimezonePickerView(selection: $presentation.timezoneIdentifier)
             }
         }
+        #if os(macOS)
+        .platformSheetSize(
+            minWidth: MacChatLayoutMetrics.settingsSheetMinimumWidth,
+            minHeight: MacChatLayoutMetrics.settingsSheetMinimumHeight
+        )
+        #endif
     }
 
     private func optionalBinding(_ keyPath: WritableKeyPath<ConversationSettings, String?>) -> Binding<String> {

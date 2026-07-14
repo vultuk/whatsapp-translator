@@ -133,8 +133,8 @@ struct ComposerView: View {
         .foregroundStyle(.white)
         .frame(width: 34, height: 34)
         .background(palette.accent, in: RoundedRectangle(cornerRadius: 9))
-        .opacity(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending ? 0.42 : 1)
-        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending)
+        .opacity(isSendDisabled ? 0.42 : 1)
+        .disabled(isSendDisabled)
         .allowsHitTesting(!isSending)
         .keyboardShortcut(.return, modifiers: .command)
         .accessibilityLabel(isSending ? "Sending message" : "Send message")
@@ -146,12 +146,16 @@ struct ComposerView: View {
             send()
         } label: {
             sendButtonLabel
-                .frame(width: 36, height: 36)
+                .frame(width: 46, height: 46)
         }
-        .buttonStyle(.borderedProminent)
-        .buttonBorderShape(.circle)
-        .controlSize(.small)
-        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending)
+        .buttonStyle(.plain)
+        .foregroundStyle(isSendDisabled ? Color.platformSecondaryLabel : .white)
+        .background(
+            isSendDisabled ? Color.primary.opacity(0.08) : palette.accent,
+            in: Circle()
+        )
+        .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
+        .disabled(isSendDisabled)
         .allowsHitTesting(!isSending)
         .accessibilityLabel(isSending ? "Sending message" : "Send message")
         .accessibilityValue(isSending ? "In progress" : "")
@@ -169,8 +173,13 @@ struct ComposerView: View {
         } else {
             Image(systemName: "paperplane.fill")
                 .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(isSendDisabled ? Color.platformSecondaryLabel : .white)
                 .transition(.scale.combined(with: .opacity))
         }
+    }
+
+    private var isSendDisabled: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
     }
 
     private var pickerErrorPresented: Binding<Bool> {
@@ -268,5 +277,11 @@ private struct ImageComposerSheet: View {
                 }
             }
         }
+        #if os(macOS)
+        .platformSheetSize(
+            minWidth: MacChatLayoutMetrics.mediaSheetMinimumWidth,
+            minHeight: MacChatLayoutMetrics.mediaSheetMinimumHeight
+        )
+        #endif
     }
 }

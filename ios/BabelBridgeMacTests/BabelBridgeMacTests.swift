@@ -34,6 +34,12 @@ final class BabelBridgeMacTests: XCTestCase {
         )
     }
 
+    func testMacSheetsHaveEnoughRoomForTheirLabelsAndValues() {
+        XCTAssertGreaterThanOrEqual(MacChatLayoutMetrics.settingsSheetMinimumWidth, 520)
+        XCTAssertGreaterThanOrEqual(MacChatLayoutMetrics.costSheetMinimumWidth, 400)
+        XCTAssertGreaterThanOrEqual(MacChatLayoutMetrics.mediaSheetMinimumWidth, 520)
+    }
+
     @MainActor
     func testMacUsesTheSharedPinnedConversationOrdering() {
         let pinned = Contact(

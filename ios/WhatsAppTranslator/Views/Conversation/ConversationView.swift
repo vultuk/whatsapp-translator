@@ -103,34 +103,30 @@ struct ConversationView: View {
                             Text(session.displayName(for: contact))
                                 .font(.headline)
                                 .lineLimit(1)
-                            HStack(spacing: 4) {
-                                if let localTime = session.localTimeDescription(for: contact.id) { Text(localTime) }
-                                if let usage {
-                                    if session.localTimeDescription(for: contact.id) != nil { Text("·") }
-                                    Text(usage.costUsd.formatted(.currency(code: "USD").precision(.fractionLength(4))))
-                                }
-                            }
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            Text(conversationHeaderSubtitle)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                     }
+                    .platformCompactControlTypography()
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Opens nickname, timezone and translation settings")
             }
             ToolbarItem(placement: platformTrailingToolbarPlacement) {
-                Button("Search messages", systemImage: "magnifyingglass") {
-                    Task { await activateSearch() }
-                }
-                .keyboardShortcut("f", modifiers: .command)
-            }
-            ToolbarItem(placement: platformTrailingToolbarPlacement) {
-                Button(starredOnly ? "Show all messages" : "Show starred only", systemImage: starredOnly ? "star.fill" : "star") {
-                    Task { await toggleStarredFilter() }
-                }
-            }
-            ToolbarItem(placement: platformTrailingToolbarPlacement) {
                 Menu("Conversation", systemImage: "ellipsis") {
+                    Button("Search messages", systemImage: "magnifyingglass") {
+                        Task { await activateSearch() }
+                    }
+                    .keyboardShortcut("f", modifiers: .command)
+                    Button(
+                        starredOnly ? "Show all messages" : "Show starred only",
+                        systemImage: starredOnly ? "star.fill" : "star"
+                    ) {
+                        Task { await toggleStarredFilter() }
+                    }
+                    Divider()
                     Button("Conversation cost", systemImage: "dollarsign.circle") { showCost = true }
                     Button("Conversation settings", systemImage: "slider.horizontal.3") { showSettings = true }
                 }
@@ -186,6 +182,10 @@ struct ConversationView: View {
         #else
         session.displayName(for: contact)
         #endif
+    }
+
+    private var conversationHeaderSubtitle: String {
+        session.localTimeDescription(for: contact.id) ?? "Auto-translation on"
     }
 
     @ViewBuilder
@@ -344,10 +344,10 @@ private struct ConversationCostView: View {
             List {
                 if let usage {
                     Section("Conversation cost") {
-                        LabeledContent("Total", value: usage.costUsd.formatted(.currency(code: "USD").precision(.fractionLength(4))))
-                        LabeledContent("Input tokens", value: usage.inputTokens.formatted())
-                        LabeledContent("Cached input", value: usage.cachedInputTokens.formatted())
-                        LabeledContent("Output tokens", value: usage.outputTokens.formatted())
+                        costRow("Total", usage.costUsd.formatted(.currency(code: "USD").precision(.fractionLength(4))))
+                        costRow("Input tokens", usage.inputTokens.formatted())
+                        costRow("Cached input", usage.cachedInputTokens.formatted())
+                        costRow("Output tokens", usage.outputTokens.formatted())
                     }
                 } else if let error {
                     VStack(spacing: 14) {
@@ -366,11 +366,25 @@ private struct ConversationCostView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task { await load() }
         }
+        #if os(macOS)
+        .platformSheetSize(
+            minWidth: MacChatLayoutMetrics.costSheetMinimumWidth,
+            minHeight: MacChatLayoutMetrics.costSheetMinimumHeight
+        )
+        #endif
     }
 
     private func load() async {
         error = nil
         do { usage = try await session.conversationUsage(for: contact.id) }
         catch { self.error = error.localizedDescription }
+    }
+
+    private func costRow(_ label: String, _ value: String) -> some View {
+        LabeledContent(label) {
+            Text(value)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
     }
 }

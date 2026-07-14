@@ -47,6 +47,7 @@ struct TimezonePickerView: View {
                             if selection == identifier { Image(systemName: "checkmark").foregroundStyle(.tint) }
                         }
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .navigationTitle("Contact timezone")
@@ -56,6 +57,12 @@ struct TimezonePickerView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             }
         }
+        #if os(macOS)
+        .platformSheetSize(
+            minWidth: MacChatLayoutMetrics.settingsSheetMinimumWidth,
+            minHeight: MacChatLayoutMetrics.settingsSheetMinimumHeight
+        )
+        #endif
     }
 
     static func friendlyName(_ identifier: String) -> String {

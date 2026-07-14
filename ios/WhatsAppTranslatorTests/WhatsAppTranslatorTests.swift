@@ -1,9 +1,18 @@
 import XCTest
 import Intents
+import SwiftUI
 import UserNotifications
 @testable import WhatsAppTranslator
 
 final class WhatsAppTranslatorTests: XCTestCase {
+    func testAccessibilityLayoutUsesStackedRowsAndCompactMessageChrome() {
+        XCTAssertFalse(NativeLayoutPolicy.usesStackedChatRow(for: .large))
+        XCTAssertFalse(NativeLayoutPolicy.usesCompactMessageChrome(for: .large))
+        XCTAssertTrue(NativeLayoutPolicy.usesStackedChatRow(for: .accessibility1))
+        XCTAssertTrue(NativeLayoutPolicy.usesCompactMessageChrome(for: .accessibility1))
+        XCTAssertTrue(NativeLayoutPolicy.usesCompactMessageChrome(for: .accessibility5))
+    }
+
     func testServerConfigurationNormalizesAddress() throws {
         let configuration = try ServerConfiguration.make(
             address: " translator.example.com/ ",

@@ -163,6 +163,61 @@ extension View {
         self
         #endif
     }
+
+    @ViewBuilder
+    func platformCompactControlTypography() -> some View {
+        #if os(iOS)
+        dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder
+    func platformSheetSize(minWidth: CGFloat, minHeight: CGFloat) -> some View {
+        #if os(macOS)
+        frame(width: minWidth, height: minHeight)
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder
+    func platformGroupedFormStyle() -> some View {
+        #if os(macOS)
+        formStyle(.grouped)
+        #else
+        self
+        #endif
+    }
+}
+
+enum NativeLayoutPolicy {
+    static func usesStackedChatRow(for dynamicTypeSize: DynamicTypeSize) -> Bool {
+        dynamicTypeSize.isAccessibilitySize
+    }
+
+    static func usesCompactMessageChrome(for dynamicTypeSize: DynamicTypeSize) -> Bool {
+        dynamicTypeSize.isAccessibilitySize
+    }
+}
+
+extension Color {
+    static var platformPrimaryLabel: Color {
+        #if canImport(UIKit)
+        Color(uiColor: .label)
+        #else
+        Color(nsColor: .labelColor)
+        #endif
+    }
+
+    static var platformSecondaryLabel: Color {
+        #if canImport(UIKit)
+        Color(uiColor: .secondaryLabel)
+        #else
+        Color(nsColor: .secondaryLabelColor)
+        #endif
+    }
 }
 
 var platformTrailingToolbarPlacement: ToolbarItemPlacement {
@@ -184,5 +239,11 @@ enum MacChatLayoutMetrics {
     static let maximumSidebarWidth: CGFloat = 380
     static let maximumBubbleWidth: CGFloat = 620
     static let timelineHorizontalPadding: CGFloat = 32
+    static let settingsSheetMinimumWidth: CGFloat = 560
+    static let settingsSheetMinimumHeight: CGFloat = 500
+    static let costSheetMinimumWidth: CGFloat = 420
+    static let costSheetMinimumHeight: CGFloat = 320
+    static let mediaSheetMinimumWidth: CGFloat = 560
+    static let mediaSheetMinimumHeight: CGFloat = 520
 }
 #endif

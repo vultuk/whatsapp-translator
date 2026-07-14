@@ -116,9 +116,12 @@ final class AppSession {
     }
 
     func start() async {
+        if ProcessInfo.processInfo.arguments.contains("-demoOnboarding") {
+            phase = .needsConfiguration
+            return
+        }
         if demoMode {
             loadDemoData()
-            await PushNotificationCoordinator.shared.activate(for: self)
             return
         }
         guard let stored = credentials.load() else {
