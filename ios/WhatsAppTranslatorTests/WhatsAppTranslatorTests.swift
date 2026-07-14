@@ -75,6 +75,40 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(reply.textInputButtonTitle, "Send")
     }
 
+    func testSiriVocabularyProvidesEnglishExamplesForEverySupportedMessagingIntent() throws {
+        let vocabularyURL = try XCTUnwrap(
+            Bundle.main.url(
+                forResource: "AppIntentVocabulary",
+                withExtension: "plist",
+                subdirectory: nil,
+                localization: "en"
+            )
+        )
+        let data = try Data(contentsOf: vocabularyURL)
+        let propertyList = try PropertyListSerialization.propertyList(from: data, format: nil)
+        let root = try XCTUnwrap(propertyList as? [String: Any])
+        let phraseEntries = try XCTUnwrap(root["IntentPhrases"] as? [[String: Any]])
+        let examplesByIntent = Dictionary(
+            uniqueKeysWithValues: phraseEntries.compactMap { entry -> (String, [String])? in
+                guard let intentName = entry["IntentName"] as? String,
+                      let examples = entry["IntentExamples"] as? [String] else {
+                    return nil
+                }
+                return (intentName, examples)
+            }
+        )
+
+        for intentName in [
+            "INSendMessageIntent",
+            "INSearchForMessagesIntent",
+            "INSetMessageAttributeIntent",
+        ] {
+            let examples = try XCTUnwrap(examplesByIntent[intentName], "Missing examples for \(intentName)")
+            XCTAssertFalse(examples.isEmpty, "Expected at least one example for \(intentName)")
+            XCTAssertTrue(examples.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        }
+    }
+
     func testMessagingNotificationRoutingReadsBackendMetadata() {
         let routing = MessagingNotificationRouting(userInfo: [
             "contactId": "family@g.us",

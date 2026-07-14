@@ -64,6 +64,7 @@
 		D5A470D75918E5401AB30CD9 /* TranslatorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4BF31391B23EBC8C173DBB4 /* TranslatorTheme.swift */; };
 		D960F4F1714B6508A081A5B5 /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6010E7F3A59C4304404C23EE /* CredentialStore.swift */; };
 		DD42C6E7433B8669604B8506 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72CC6194ACA0A742FF886222 /* RootView.swift */; };
+		DDA6514D0C610C364F26A2B1 /* AppIntentVocabulary.plist in Resources */ = {isa = PBXBuildFile; fileRef = 7826C2FBB6D8E247CC6D9AC9 /* AppIntentVocabulary.plist */; };
 		DE532ACEF0383C22096D0706 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 38664CBA8762F693B0DE2C00 /* Assets.xcassets */; };
 		DE94537DEDEBA5E986E96C3D /* ChatListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AEC105D96EBB09CD38C98D6 /* ChatListView.swift */; };
 		E0730DE955BFBF9B93F71A80 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 38664CBA8762F693B0DE2C00 /* Assets.xcassets */; };
@@ -146,6 +147,7 @@
 		7AFD701213B538B835780375 /* BabelBridgeMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BabelBridgeMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7CA83F4E6F46DFED5F8A8152 /* BabelBridgeMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BabelBridgeMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E50ABB31D617C33E5D18AB3 /* ChatRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRow.swift; sourceTree = "<group>"; };
+		901D4F327F868AD55515BD83 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist; name = en; path = en.lproj/AppIntentVocabulary.plist; sourceTree = "<group>"; };
 		9876CD3D330EDB50574EBCF2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		9ABCA3D87C4A7D188D37B476 /* IntentHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentHandler.swift; sourceTree = "<group>"; };
 		9C87A75BF6020544068175DB /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
@@ -252,6 +254,7 @@
 				0722A5293307242D843D4E79 /* WhatsAppTranslator.entitlements */,
 				DA3585A0CD9B815DA310E607 /* WhatsAppTranslatorApp.swift */,
 				D4F13284E1D16BF275717E08 /* App */,
+				7826C2FBB6D8E247CC6D9AC9 /* AppIntentVocabulary.plist */,
 				142F625DF0148FD2863629DC /* Design */,
 				34752D4D8AD64795CA488C7A /* Models */,
 				D0C2063A713CA22DBC1FF047 /* Services */,
@@ -534,6 +537,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DDA6514D0C610C364F26A2B1 /* AppIntentVocabulary.plist in Resources */,
 				DE532ACEF0383C22096D0706 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -679,6 +683,17 @@
 		};
 /* End PBXTargetDependency section */
 
+/* Begin PBXVariantGroup section */
+		7826C2FBB6D8E247CC6D9AC9 /* AppIntentVocabulary.plist */ = {
+			isa = PBXVariantGroup;
+			children = (
+				901D4F327F868AD55515BD83 /* en */,
+			);
+			name = AppIntentVocabulary.plist;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
 /* Begin XCBuildConfiguration section */
 		12C8B117E11603BD3FCE1EA8 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -772,7 +787,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -890,7 +905,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
