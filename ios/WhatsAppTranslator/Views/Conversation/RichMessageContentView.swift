@@ -167,12 +167,44 @@ private struct InlineVideoPlayer: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        MacInlineVideoPlayer(player: player)
+            .frame(width: 280, height: 190)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .onDisappear { player.pause() }
+        #else
         VideoPlayer(player: player)
             .frame(width: 280, height: 190)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .onDisappear { player.pause() }
+        #endif
     }
 }
+
+#if os(macOS)
+private struct MacInlineVideoPlayer: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let playerView = AVPlayerView()
+        playerView.player = player
+        playerView.controlsStyle = .inline
+        playerView.videoGravity = .resizeAspect
+        return playerView
+    }
+
+    func updateNSView(_ playerView: AVPlayerView, context: Context) {
+        if playerView.player !== player {
+            playerView.player = player
+        }
+    }
+
+    static func dismantleNSView(_ playerView: AVPlayerView, coordinator: Void) {
+        playerView.player?.pause()
+        playerView.player = nil
+    }
+}
+#endif
 
 private struct AudioMessagePlayer: View {
     let url: URL
