@@ -48,6 +48,17 @@ final class BabelBridgeMacTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(MacChatLayoutMetrics.mediaSheetMinimumWidth, 520)
     }
 
+    func testMacMessageTextMakesDetectedURLsClickable() {
+        let attributedText = MessageTextLinkifier.attributedString(
+            from: "Watch https://youtube.com/shorts/example?is=abc now."
+        )
+
+        XCTAssertEqual(
+            attributedText.runs.compactMap(\.link?.absoluteString),
+            ["https://youtube.com/shorts/example?is=abc"]
+        )
+    }
+
     func testPhotoViewerZoomClampsAndDoubleClickTogglesMagnification() {
         XCTAssertEqual(PhotoViewerZoom.clampedScale(0.5), 1)
         XCTAssertEqual(PhotoViewerZoom.clampedScale(3), 3)

@@ -422,6 +422,19 @@ final class WhatsAppTranslatorTests: XCTestCase {
         ])
     }
 
+    func testMessageTextLinkifierMakesEveryDetectedURLClickable() throws {
+        let text = "Watch https://youtube.com/shorts/example?is=abc and visit https://example.org/help."
+        let attributedText = MessageTextLinkifier.attributedString(from: text)
+
+        XCTAssertEqual(
+            attributedText.runs.compactMap(\.link?.absoluteString),
+            [
+                "https://youtube.com/shorts/example?is=abc",
+                "https://example.org/help",
+            ]
+        )
+    }
+
     func testSendMessageRequestEncodesReplyContext() throws {
         let request = SendMessageRequest(
             contactId: "chat@g.us",

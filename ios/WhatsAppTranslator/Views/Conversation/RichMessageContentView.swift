@@ -1,5 +1,30 @@
 import AVKit
+import Foundation
 import SwiftUI
+
+enum MessageTextLinkifier {
+    static func attributedString(from text: String) -> AttributedString {
+        var attributedText = AttributedString(text)
+        guard let detector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue
+        ) else {
+            return attributedText
+        }
+
+        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        for match in detector.matches(in: text, range: fullRange) {
+            guard let url = match.url,
+                  let stringRange = Range(match.range, in: text),
+                  let lowerBound = AttributedString.Index(stringRange.lowerBound, within: attributedText),
+                  let upperBound = AttributedString.Index(stringRange.upperBound, within: attributedText) else {
+                continue
+            }
+            attributedText[lowerBound..<upperBound].link = url
+        }
+
+        return attributedText
+    }
+}
 
 struct RichMessageContentView: View {
     let message: ChatMessage
@@ -88,7 +113,7 @@ struct RichMessageContentView: View {
     @ViewBuilder
     private var caption: some View {
         if let caption = message.content?.caption?.trimmingCharacters(in: .whitespacesAndNewlines), !caption.isEmpty {
-            Text(caption)
+            Text(MessageTextLinkifier.attributedString(from: caption))
                 .font(.body)
                 .textSelection(.enabled)
         }
@@ -146,7 +171,7 @@ struct RichMessageContentView: View {
                 .font(.body.italic())
                 .foregroundStyle(.secondary)
         default:
-            Text(displayText)
+            Text(MessageTextLinkifier.attributedString(from: displayText))
                 .font(.body)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
