@@ -5,6 +5,12 @@ import UserNotifications
 @testable import WhatsAppTranslator
 
 final class WhatsAppTranslatorTests: XCTestCase {
+    func testExpectedRequestCancellationsDoNotBecomeUserFacingErrors() {
+        XCTAssertTrue(AppSession.isExpectedCancellation(CancellationError()))
+        XCTAssertTrue(AppSession.isExpectedCancellation(URLError(.cancelled)))
+        XCTAssertFalse(AppSession.isExpectedCancellation(URLError(.timedOut)))
+    }
+
     func testNotificationSenderUsesExactPhoneNumberIdentity() {
         let identity = NotificationPersonIdentity.sender(
             senderID: "447700900123",

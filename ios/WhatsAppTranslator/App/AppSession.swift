@@ -152,6 +152,7 @@ final class AppSession {
             self.contacts = try await contacts
             await persistCache()
         } catch {
+            guard !Self.isExpectedCancellation(error) else { return }
             presentError("Couldn’t refresh chats", error)
         }
     }
@@ -174,6 +175,7 @@ final class AppSession {
             try? await api.markRead(contactID: contactID)
             await persistCache()
         } catch {
+            guard !Self.isExpectedCancellation(error) else { return }
             presentError("Couldn’t load messages", error)
         }
     }
@@ -188,6 +190,7 @@ final class AppSession {
             messageHistoryHasMore[contactID] = false
             await persistCache()
         } catch {
+            guard !Self.isExpectedCancellation(error) else { return }
             presentError("Couldn’t load the full conversation", error)
         }
     }
@@ -589,6 +592,20 @@ final class AppSession {
     private func presentError(_ title: String, _ message: String) {
         errorTitle = title
         errorMessage = message
+    }
+
+    nonisolated static func isExpectedCancellation(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+        let error = error as NSError
+        if error.domain == NSURLErrorDomain, error.code == URLError.cancelled.rawValue {
+            return true
+        }
+        guard let underlying = error.userInfo[NSUnderlyingErrorKey] as? Error else {
+            return false
+        }
+        return isExpectedCancellation(underlying)
     }
 
     func normalizeMessages(_ values: [ChatMessage]) -> [ChatMessage] {
