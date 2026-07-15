@@ -359,6 +359,14 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(MessageSwipeReply.offset(translation: CGSize(width: 120, height: 2)), 72)
     }
 
+    func testPhotoViewerZoomClampsAndDoubleTapTogglesMagnification() {
+        XCTAssertEqual(PhotoViewerZoom.clampedScale(0.5), 1)
+        XCTAssertEqual(PhotoViewerZoom.clampedScale(3), 3)
+        XCTAssertEqual(PhotoViewerZoom.clampedScale(8), 5)
+        XCTAssertEqual(PhotoViewerZoom.toggledScale(from: 1), 2.5)
+        XCTAssertEqual(PhotoViewerZoom.toggledScale(from: 2.5), 1)
+    }
+
     @MainActor
     func testPinnedContactsStayAboveUnpinnedChatsInPinOrder() {
         let recent = Contact(

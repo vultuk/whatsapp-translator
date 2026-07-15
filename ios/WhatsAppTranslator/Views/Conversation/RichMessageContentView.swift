@@ -9,6 +9,7 @@ struct RichMessageContentView: View {
     let isLoading: Bool
     let failed: Bool
     let retry: () -> Void
+    @State private var showPhotoViewer = false
 
     var body: some View {
         Group {
@@ -59,6 +60,23 @@ struct RichMessageContentView: View {
                 .scaledToFit()
                 .frame(maxWidth: maxWidth, maxHeight: maxHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(7)
+                        .background(.black.opacity(0.56), in: Circle())
+                        .padding(7)
+                }
+                .contentShape(Rectangle())
+                .highPriorityGesture(
+                    TapGesture().onEnded { showPhotoViewer = true }
+                )
+                .help("View photo full screen")
+                .accessibilityLabel("View photo full screen")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { showPhotoViewer = true }
+                .photoViewer(isPresented: $showPhotoViewer, image: image)
         } else {
             mediaPlaceholder(
                 systemImage: message.mediaKind == .sticker ? "face.smiling" : "photo.fill",

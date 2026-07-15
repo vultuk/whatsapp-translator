@@ -48,6 +48,14 @@ final class BabelBridgeMacTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(MacChatLayoutMetrics.mediaSheetMinimumWidth, 520)
     }
 
+    func testPhotoViewerZoomClampsAndDoubleClickTogglesMagnification() {
+        XCTAssertEqual(PhotoViewerZoom.clampedScale(0.5), 1)
+        XCTAssertEqual(PhotoViewerZoom.clampedScale(3), 3)
+        XCTAssertEqual(PhotoViewerZoom.clampedScale(8), 5)
+        XCTAssertEqual(PhotoViewerZoom.toggledScale(from: 1), 2.5)
+        XCTAssertEqual(PhotoViewerZoom.toggledScale(from: 2.5), 1)
+    }
+
     @MainActor
     func testVideoMessageCanMountWithoutCrashing() {
         let message = ChatMessage(
