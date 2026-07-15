@@ -331,6 +331,7 @@ impl MessageStore {
 
         // Add last_message_preview column and backfill it for faster contact list loads
         self.migrate_add_last_message_preview_column(&conn)?;
+        self.migrate_refresh_translated_contact_previews(&conn)?;
 
         // Add style_profiles table for AI reply generation
         self.migrate_add_style_profiles_table(&conn)?;
@@ -486,43 +487,87 @@ impl MessageStore {
                 "ALTER TABLE contacts ADD COLUMN last_message_preview TEXT",
                 [],
             )?;
-
-            let mut stmt = conn.prepare(
-                r#"
-                SELECT 
-                    c.id,
-                    m.content_json,
-                    m.content_type,
-                    m.is_from_me
-                FROM contacts c
-                LEFT JOIN (
-                    SELECT contact_id, content_json, content_type, is_from_me,
-                           ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY timestamp DESC, rowid DESC) as rn
-                    FROM messages
-                ) m ON m.contact_id = c.id AND m.rn = 1
-                "#,
-            )?;
-
-            let rows: Vec<(String, Option<String>, Option<String>, Option<bool>)> = stmt
-                .query_map([], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-
-            for (contact_id, content_json, content_type, is_from_me) in rows {
-                let preview = Self::generate_message_preview(
-                    content_json.as_deref(),
-                    content_type.as_deref(),
-                    is_from_me.unwrap_or(false),
-                );
-                conn.execute(
-                    "UPDATE contacts SET last_message_preview = ? WHERE id = ?",
-                    params![preview, contact_id],
-                )?;
-            }
-
+            Self::backfill_contact_previews(conn)?;
             info!("Database migration complete: added last_message_preview");
+        }
+
+        Ok(())
+    }
+
+    fn migrate_refresh_translated_contact_previews(&self, conn: &Connection) -> Result<()> {
+        let version: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?",
+                params!["translated_contact_previews_version"],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if version.as_deref() == Some("1") {
+            return Ok(());
+        }
+
+        info!("Migrating database: refreshing translated contact previews...");
+        Self::backfill_contact_previews(conn)?;
+        conn.execute(
+            r#"
+            INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            "#,
+            params!["translated_contact_previews_version", "1"],
+        )?;
+        info!("Database migration complete: refreshed translated contact previews");
+        Ok(())
+    }
+
+    fn backfill_contact_previews(conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT
+                c.id,
+                m.content_json,
+                m.content_type,
+                m.is_from_me,
+                m.translated_text
+            FROM contacts c
+            LEFT JOIN (
+                SELECT contact_id, content_json, content_type, is_from_me, translated_text,
+                       ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY timestamp DESC, rowid DESC) as rn
+                FROM messages
+            ) m ON m.contact_id = c.id AND m.rn = 1
+            "#,
+        )?;
+
+        let rows: Vec<(
+            String,
+            Option<String>,
+            Option<String>,
+            Option<bool>,
+            Option<String>,
+        )> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })?
+            .filter_map(|row| row.ok())
+            .collect();
+        drop(stmt);
+
+        for (contact_id, content_json, content_type, is_from_me, translated_text) in rows {
+            let preview = Self::generate_message_preview(
+                content_json.as_deref(),
+                content_type.as_deref(),
+                is_from_me.unwrap_or(false),
+                translated_text.as_deref(),
+            );
+            conn.execute(
+                "UPDATE contacts SET last_message_preview = ? WHERE id = ?",
+                params![preview, contact_id],
+            )?;
         }
 
         Ok(())
@@ -746,6 +791,7 @@ impl MessageStore {
             Some(&msg.content_json),
             Some(&msg.content_type),
             msg.is_from_me,
+            msg.translated_text.as_deref(),
         );
 
         conn.execute(
@@ -794,9 +840,10 @@ impl MessageStore {
         translated_text: Option<&str>,
         source_language: Option<&str>,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
 
-        conn.execute(
+        tx.execute(
             r#"
             UPDATE messages 
             SET translated_text = ?1, source_language = ?2, is_translated = 1
@@ -804,6 +851,19 @@ impl MessageStore {
             "#,
             params![translated_text, source_language, message_id],
         )?;
+
+        let contact_id: Option<String> = tx
+            .query_row(
+                "SELECT contact_id FROM messages WHERE id = ?",
+                params![message_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(contact_id) = contact_id {
+            Self::refresh_contact_last_message(&tx, &contact_id)?;
+        }
+
+        tx.commit()?;
 
         Ok(())
     }
@@ -888,25 +948,34 @@ impl MessageStore {
         conn: &rusqlite::Transaction<'_>,
         contact_id: &str,
     ) -> Result<()> {
-        let latest: Option<(i64, String, String, bool)> = conn
+        let latest: Option<(i64, String, String, bool, Option<String>)> = conn
             .query_row(
                 r#"
-                SELECT timestamp, content_json, content_type, is_from_me
+                SELECT timestamp, content_json, content_type, is_from_me, translated_text
                 FROM messages
                 WHERE contact_id = ?
                 ORDER BY timestamp DESC, id DESC
                 LIMIT 1
                 "#,
                 params![contact_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .optional()?;
 
-        if let Some((timestamp, content_json, content_type, is_from_me)) = latest {
+        if let Some((timestamp, content_json, content_type, is_from_me, translated_text)) = latest {
             let preview = Self::generate_message_preview(
                 Some(&content_json),
                 Some(&content_type),
                 is_from_me,
+                translated_text.as_deref(),
             );
             conn.execute(
                 r#"
@@ -972,8 +1041,14 @@ impl MessageStore {
         content_json: Option<&str>,
         content_type: Option<&str>,
         is_from_me: bool,
+        translated_text: Option<&str>,
     ) -> Option<String> {
         let prefix = if is_from_me { "You: " } else { "" };
+        let translated_text = (!is_from_me)
+            .then_some(translated_text)
+            .flatten()
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
 
         let content_type = content_type?;
         let content_json = content_json?;
@@ -984,18 +1059,19 @@ impl MessageStore {
         let content_type_lower = content_type.to_lowercase();
         let preview = match content_type_lower.as_str() {
             "text" => {
-                let body = content
-                    .get("body")
-                    .or_else(|| content.get("text"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let body = translated_text.unwrap_or_else(|| {
+                    content
+                        .get("body")
+                        .or_else(|| content.get("text"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                });
                 let truncated: String = body.chars().take(50).collect();
                 format!("{}{}", prefix, truncated)
             }
             "image" => {
-                let caption = content
-                    .get("caption")
-                    .and_then(|v| v.as_str())
+                let caption = translated_text
+                    .or_else(|| content.get("caption").and_then(|v| v.as_str()))
                     .map(|c| {
                         let truncated: String = c.chars().take(30).collect();
                         format!(" {}", truncated)
@@ -1004,9 +1080,8 @@ impl MessageStore {
                 format!("{}[ Image ]{}", prefix, caption)
             }
             "video" => {
-                let caption = content
-                    .get("caption")
-                    .and_then(|v| v.as_str())
+                let caption = translated_text
+                    .or_else(|| content.get("caption").and_then(|v| v.as_str()))
                     .map(|c| {
                         let truncated: String = c.chars().take(30).collect();
                         format!(" {}", truncated)
@@ -2595,6 +2670,98 @@ mod tests {
             .expect("contact");
         assert_eq!(contact.last_message_time, 1_700_000_000_000);
         assert_eq!(contact.last_message_preview.as_deref(), Some("older"));
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn incoming_translated_message_uses_translation_for_contact_preview() {
+        let (store, data_dir) = test_store();
+        insert_test_contact(&store);
+        let mut message = test_message("Szia, hogy vagy?", 1_700_000_000_000);
+        message.translated_text = Some("Hi, how are you?".to_string());
+        message.source_language = Some("Hungarian".to_string());
+        message.is_translated = true;
+
+        store
+            .add_message(&message)
+            .expect("insert translated message");
+
+        let contact = store
+            .get_contact("chat@example.test")
+            .expect("contact query")
+            .expect("contact");
+        assert_eq!(
+            contact.last_message_preview.as_deref(),
+            Some("Hi, how are you?")
+        );
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn translating_latest_message_refreshes_contact_preview() {
+        let (store, data_dir) = test_store();
+        insert_test_contact(&store);
+        store
+            .add_message(&test_message("Szia, hogy vagy?", 1_700_000_000_000))
+            .expect("insert untranslated message");
+
+        store
+            .update_message_translation(
+                "Szia, hogy vagy?",
+                Some("Hi, how are you?"),
+                Some("Hungarian"),
+            )
+            .expect("translate message");
+
+        let contact = store
+            .get_contact("chat@example.test")
+            .expect("contact query")
+            .expect("contact");
+        assert_eq!(
+            contact.last_message_preview.as_deref(),
+            Some("Hi, how are you?")
+        );
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn startup_migration_refreshes_existing_translated_contact_previews() {
+        let (store, data_dir) = test_store();
+        insert_test_contact(&store);
+        let mut message = test_message("Szia, hogy vagy?", 1_700_000_000_000);
+        message.translated_text = Some("Hi, how are you?".to_string());
+        message.source_language = Some("Hungarian".to_string());
+        message.is_translated = true;
+        store
+            .add_message(&message)
+            .expect("insert translated message");
+        {
+            let conn = store.conn.lock().expect("database lock");
+            conn.execute(
+                "UPDATE contacts SET last_message_preview = ? WHERE id = ?",
+                params!["Szia, hogy vagy?", "chat@example.test"],
+            )
+            .expect("restore legacy preview");
+            conn.execute(
+                "DELETE FROM app_settings WHERE key = ?",
+                params!["translated_contact_previews_version"],
+            )
+            .expect("reset migration marker");
+        }
+        drop(store);
+
+        let reopened = MessageStore::new(&data_dir).expect("reopen store");
+        let contact = reopened
+            .get_contact("chat@example.test")
+            .expect("contact query")
+            .expect("contact");
+        assert_eq!(
+            contact.last_message_preview.as_deref(),
+            Some("Hi, how are you?")
+        );
 
         let _ = std::fs::remove_dir_all(data_dir);
     }
