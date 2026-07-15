@@ -47,10 +47,7 @@ struct ComposerView: View {
                 .disabled(isSending)
                 .accessibilityLabel("Send image")
 
-                TextField("Message", text: $text, axis: .vertical)
-                    .lineLimit(1...6)
-                    .focused($focused)
-                    .modifier(ComposerInputStyle())
+                composerInput
 
                 sendButton
             }
@@ -100,6 +97,40 @@ struct ComposerView: View {
                 pendingPhoto = PendingPhoto(data: data, mimeType: "image/jpeg", image: image)
             }
         }
+    }
+
+    @ViewBuilder
+    private var composerInput: some View {
+        #if os(macOS)
+        ZStack(alignment: .topLeading) {
+            TextEditor(text: $text)
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .frame(height: macEditorHeight)
+                .focused($focused)
+
+            if text.isEmpty {
+                Text("Message")
+                    .font(.body)
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 5)
+                    .padding(.top, 5)
+                    .allowsHitTesting(false)
+            }
+        }
+        .modifier(ComposerInputStyle())
+        #else
+        TextField("Message", text: $text, axis: .vertical)
+            .lineLimit(1...6)
+            .focused($focused)
+            .modifier(ComposerInputStyle())
+        #endif
+    }
+
+    private var macEditorHeight: CGFloat {
+        let explicitLineCount = text.components(separatedBy: .newlines).count
+        let visibleLineCount = min(max(explicitLineCount, 1), 6)
+        return CGFloat(visibleLineCount * 19 + 5)
     }
 
     @ViewBuilder

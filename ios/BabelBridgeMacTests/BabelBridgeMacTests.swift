@@ -57,6 +57,28 @@ final class BabelBridgeMacTests: XCTestCase {
     }
 
     @MainActor
+    func testComposerUsesAMultilineMacTextEditor() {
+        let view = ComposerView(
+            text: .constant("First line"),
+            reply: nil,
+            isSending: false,
+            cancelReply: {},
+            sendImage: { _, _, _ in true },
+            send: {}
+        )
+        let hostingView = NSHostingView(rootView: view)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 140)
+
+        hostingView.layoutSubtreeIfNeeded()
+
+        let textViews = hostingView.descendants(ofType: NSTextView.self)
+        XCTAssertTrue(
+            textViews.contains(where: { $0.isEditable && $0.isVerticallyResizable }),
+            "The Mac composer must use an editable multiline text view so Return inserts a newline."
+        )
+    }
+
+    @MainActor
     func testVideoMessageCanMountWithoutCrashing() {
         let message = ChatMessage(
             id: "video-message",
@@ -123,5 +145,13 @@ final class BabelBridgeMacTests: XCTestCase {
         )
 
         XCTAssertEqual(AppSession.orderedContacts([recent, pinned]).map(\.id), ["pinned", "recent"])
+    }
+}
+
+private extension NSView {
+    func descendants<T: NSView>(ofType type: T.Type) -> [T] {
+        subviews.flatMap { view in
+            (view as? T).map { [$0] } ?? view.descendants(ofType: type)
+        }
     }
 }
