@@ -5,6 +5,32 @@ import UserNotifications
 @testable import WhatsAppTranslator
 
 final class WhatsAppTranslatorTests: XCTestCase {
+    func testNotificationSenderUsesExactPhoneNumberIdentity() {
+        let identity = NotificationPersonIdentity.sender(
+            senderID: "447700900123",
+            senderName: "Eileen Skinner"
+        )
+
+        XCTAssertEqual(identity.handleValue, "+447700900123")
+        XCTAssertEqual(identity.handleType, .phoneNumber)
+        XCTAssertFalse(identity.isContactSuggestion)
+        XCTAssertEqual(identity.suggestionType, .none)
+
+        let formattedIdentity = NotificationPersonIdentity.sender(
+            senderID: "+44 (7700) 900-123",
+            senderName: "Eileen Skinner"
+        )
+        XCTAssertEqual(formattedIdentity.handleValue, "+447700900123")
+
+        let appIdentity = NotificationPersonIdentity.sender(
+            senderID: "whatsapp-user-id",
+            senderName: "Eileen Skinner"
+        )
+        XCTAssertEqual(appIdentity.handleType, .unknown)
+        XCTAssertTrue(appIdentity.isContactSuggestion)
+        XCTAssertEqual(appIdentity.suggestionType, .instantMessageAddress)
+    }
+
     func testAccessibilityLayoutUsesStackedRowsAndCompactMessageChrome() {
         XCTAssertFalse(NativeLayoutPolicy.usesStackedChatRow(for: .large))
         XCTAssertFalse(NativeLayoutPolicy.usesCompactMessageChrome(for: .large))

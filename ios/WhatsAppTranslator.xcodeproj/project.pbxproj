@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		004886FBA006C0F19D72FFAB /* NotificationPersonIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB8E2F4B70ED44CF81F07EC8 /* NotificationPersonIdentity.swift */; };
 		0637885AA7D925754EAE887B /* MacPushNotificationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE317AB7309F0B77BD8B858A /* MacPushNotificationCoordinator.swift */; };
 		088A4B67DC7DF9EC64E2B40B /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C87A75BF6020544068175DB /* APIClient.swift */; };
 		0895BC27BCE593660C12C549 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C87A75BF6020544068175DB /* APIClient.swift */; };
@@ -32,6 +33,7 @@
 		38B05F163DCBB049B5A04754 /* ServerConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5E191235093F4FC4348DD04 /* ServerConfiguration.swift */; };
 		38BAB93EFE7CE18D1BAADA6C /* ConnectionSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3229E151805995BAC765CA5 /* ConnectionSetupView.swift */; };
 		3CCF6B3013E9F72DC0019A99 /* ChatRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E50ABB31D617C33E5D18AB3 /* ChatRow.swift */; };
+		3D9CF110C0682067828A34E9 /* NotificationPersonIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB8E2F4B70ED44CF81F07EC8 /* NotificationPersonIdentity.swift */; };
 		47E4E3D3A703CBEF36C23457 /* WhatsAppTranslatorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA3585A0CD9B815DA310E607 /* WhatsAppTranslatorApp.swift */; };
 		4959160847534F73298211E3 /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6010E7F3A59C4304404C23EE /* CredentialStore.swift */; };
 		5277F679F5387039D6EC96AB /* WhatsAppTranslatorIntents.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E0E1B6DD2CC4727A47717ED2 /* WhatsAppTranslatorIntents.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -173,6 +175,7 @@
 		E8641F0C0A7B92FE42645A04 /* BabelBridgeMacTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabelBridgeMacTests.swift; sourceTree = "<group>"; };
 		ED7F14E9137C449ADE8AACC8 /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubble.swift; sourceTree = "<group>"; };
 		FA3308D79A3B4D94B8BD2E46 /* MacSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsView.swift; sourceTree = "<group>"; };
+		FB8E2F4B70ED44CF81F07EC8 /* NotificationPersonIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationPersonIdentity.swift; sourceTree = "<group>"; };
 		FD30FD5EDF3A40DD9E412307 /* WhatsAppTranslatorNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = WhatsAppTranslatorNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -263,6 +266,14 @@
 			path = WhatsAppTranslator;
 			sourceTree = "<group>";
 		};
+		79EDE821BD354313D43E4C34 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				FB8E2F4B70ED44CF81F07EC8 /* NotificationPersonIdentity.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
 		8774AAFAC446E0F2D0F05FB5 /* Chats */ = {
 			isa = PBXGroup;
 			children = (
@@ -291,6 +302,7 @@
 			children = (
 				5A653A7D2C841EF327C87764 /* BabelBridgeMac */,
 				0BE9110C2F3E1B267B583EF3 /* BabelBridgeMacTests */,
+				79EDE821BD354313D43E4C34 /* Shared */,
 				5ED0B644C6980B5F3CD84B89 /* WhatsAppTranslator */,
 				4C6053CE6CFDFDAB754190BC /* WhatsAppTranslatorIntents */,
 				D81D096B9F0A6F9A76FBA135 /* WhatsAppTranslatorNotificationService */,
@@ -557,6 +569,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				004886FBA006C0F19D72FFAB /* NotificationPersonIdentity.swift in Sources */,
 				9EAAA157655EE3324293FD46 /* NotificationService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -604,6 +617,7 @@
 				28194366BC7B62BBEAE2DF82 /* MacConversationHeader.swift in Sources */,
 				7D30E1D7FEA454CD203E0D42 /* MessageBubble.swift in Sources */,
 				F7596CDE24554F37EF0D0992 /* MessagingIntentDonor.swift in Sources */,
+				3D9CF110C0682067828A34E9 /* NotificationPersonIdentity.swift in Sources */,
 				F6DCC3BA070D46AD7E60642E /* PlatformCompatibility.swift in Sources */,
 				FA6E1D00CCEB2274A72A4339 /* PushNotificationCoordinator.swift in Sources */,
 				78E3B708559B4FCB3AB4D251 /* RichMessageContentView.swift in Sources */,
@@ -787,7 +801,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -905,7 +919,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;

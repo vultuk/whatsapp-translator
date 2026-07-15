@@ -52,22 +52,23 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             finish(with: content)
             return
         }
-        let senderID = (userInfo["senderId"] as? String)?.nilIfBlank ?? senderName
+        let senderID = (userInfo["senderId"] as? String)?.nilIfBlank
         let conversationName = (userInfo["conversationName"] as? String)?.nilIfBlank
         let isGroup = (userInfo["chatType"] as? String) == "group" || contactID.contains("@g.us")
         let body = (userInfo["messageBody"] as? String)?.nilIfBlank ?? content.body
         let speakableGroupName = isGroup
             ? conversationName.map(INSpeakableString.init(spokenPhrase:))
             : nil
+        let identity = NotificationPersonIdentity.sender(senderID: senderID, senderName: senderName)
         let sender = INPerson(
-            personHandle: INPersonHandle(value: senderID, type: .unknown),
+            personHandle: INPersonHandle(value: identity.handleValue, type: identity.handleType),
             nameComponents: nil,
             displayName: senderName,
             image: avatarData.map(INImage.init(imageData:)),
             contactIdentifier: nil,
-            customIdentifier: senderID,
-            isContactSuggestion: true,
-            suggestionType: .instantMessageAddress
+            customIdentifier: senderID ?? senderName,
+            isContactSuggestion: identity.isContactSuggestion,
+            suggestionType: identity.suggestionType
         )
         let intent = INSendMessageIntent(
             recipients: nil,
