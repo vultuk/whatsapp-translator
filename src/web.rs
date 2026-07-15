@@ -129,6 +129,9 @@ pub enum WebSocketEvent {
     Message {
         message: StoredMessage,
     },
+    Reaction {
+        message: StoredMessage,
+    },
     Typing {
         chat_id: String,
         user_id: String,
@@ -148,6 +151,14 @@ pub enum WebSocketEvent {
     Error {
         error: String,
     },
+}
+
+fn live_event_for_message(message: StoredMessage) -> WebSocketEvent {
+    if message.content_type.eq_ignore_ascii_case("reaction") {
+        WebSocketEvent::Reaction { message }
+    } else {
+        WebSocketEvent::Message { message }
+    }
 }
 
 /// API status response
@@ -555,7 +566,7 @@ impl AppState {
 
     /// Broadcast a new message
     pub fn broadcast_message(&self, message: StoredMessage) {
-        let _ = self.broadcast_tx.send(WebSocketEvent::Message { message });
+        let _ = self.broadcast_tx.send(live_event_for_message(message));
     }
 
     pub async fn send_push_notification(&self, message: &StoredMessage) {
@@ -3943,6 +3954,24 @@ mod tests {
         ));
         assert!(!should_send_push_notification(&reaction, None));
         assert!(should_send_push_notification(&incoming_target, None));
+    }
+
+    #[test]
+    fn reaction_messages_use_a_dedicated_live_event() {
+        let mut reaction = test_outgoing_message("reaction", 1_700_000_000_002);
+        reaction.content_type = "Reaction".to_string();
+        reaction.content = Some(serde_json::json!({
+            "type": "reaction",
+            "emoji": "❤️",
+            "target_message_id": "outgoing",
+        }));
+
+        let event = live_event_for_message(reaction);
+        assert!(matches!(event, WebSocketEvent::Reaction { .. }));
+        assert_eq!(
+            serde_json::to_value(event).expect("serialize event")["type"],
+            "reaction"
+        );
     }
 
     #[test]

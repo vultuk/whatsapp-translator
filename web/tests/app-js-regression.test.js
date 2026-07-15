@@ -211,12 +211,14 @@ test('send response adds the confirmed original follow-up to the local conversat
 });
 
 test('loaded reaction records are merged instead of rendered as standalone messages', () => {
+  const handleMessageBody = extractMethodBody(appJs, 'handleMessage');
   const normalizeBody = extractMethodBody(appJs, 'normalizeLoadedMessages');
   const loadMessagesBody = extractMethodBody(appJs, 'loadMessages');
   const loadOlderMessagesBody = extractMethodBody(appJs, 'loadOlderMessages');
   const renderContentBody = extractMethodBody(appJs, 'renderContent');
   const getMessagePreviewBody = extractMethodBody(appJs, 'getMessagePreview');
 
+  assert.match(handleMessageBody, /case 'reaction':\s*this\.handleReactionMessage\(data\.message\)/);
   assert.match(normalizeBody, /this\.applyReactionToMessages\(/);
   assert.match(normalizeBody, /this\.isDisplayableMessage\(message\)/);
   assert.match(loadMessagesBody, /this\.normalizeLoadedMessages\(contactId,\s*messages\)/);

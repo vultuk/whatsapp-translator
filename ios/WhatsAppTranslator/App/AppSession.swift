@@ -533,14 +533,16 @@ final class AppSession {
 
     private func handle(_ event: LiveEvent) {
         switch event.type {
-        case "message":
+        case "message", "reaction":
             guard let message = event.message else { return }
             messages[message.contactId] = normalizeMessages((messages[message.contactId] ?? []) + [message])
-            updateContactPreview(
-                contactID: message.contactId,
-                preview: message.displayText,
-                timestamp: message.timestamp
-            )
+            if !message.isReaction {
+                updateContactPreview(
+                    contactID: message.contactId,
+                    preview: message.displayText,
+                    timestamp: message.timestamp
+                )
+            }
             persistCacheSoon()
         case "status":
             if let connected = event.connected {

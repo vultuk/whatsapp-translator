@@ -481,6 +481,25 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(normalized.first?.reactions?["❤️"], ["3630"])
     }
 
+    @MainActor
+    func testDeclaredReactionTypeCannotRenderAsAStandaloneMessage() throws {
+        let target = try decodeMessage(
+            id: "m1",
+            contentType: "Text",
+            content: #"{"type":"text","body":"Agreed"}"#
+        )
+        let reaction = try decodeMessage(
+            id: "r1",
+            contentType: "Reaction",
+            content: #"{"type":"text","body":"Reaction","emoji":"❤️","target_message_id":"m1"}"#
+        )
+
+        XCTAssertTrue(reaction.isReaction)
+        let normalized = AppSession(demoMode: false).normalizeMessages([target, reaction])
+        XCTAssertEqual(normalized.map(\.id), ["m1"])
+        XCTAssertEqual(normalized.first?.reactions?["❤️"], ["3630"])
+    }
+
     private func decodeMessage(id: String, contentType: String, content: String) throws -> ChatMessage {
         let data = Data(
             """

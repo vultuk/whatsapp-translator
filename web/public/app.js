@@ -1803,6 +1803,10 @@ class WhatsAppClient {
       case 'message':
         this.handleNewMessage(data.message);
         break;
+
+      case 'reaction':
+        this.handleReactionMessage(data.message);
+        break;
       
       case 'typing':
         this.handleTyping(data);
@@ -2015,7 +2019,9 @@ class WhatsAppClient {
   }
 
   isReactionMessage(message) {
-    return this.getMessageContentType(message) === 'reaction';
+    const declaredType = String(message?.contentType || message?.content_type || '').toLowerCase();
+    const embeddedType = String(message?.content?.type || '').toLowerCase();
+    return declaredType === 'reaction' || embeddedType === 'reaction';
   }
 
   isDisplayableMessage(message) {

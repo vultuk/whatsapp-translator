@@ -103,7 +103,10 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     var normalizedContentType: String {
         content?.type?.lowercased().nilIfBlank ?? contentType.lowercased()
     }
-    var isReaction: Bool { normalizedContentType == "reaction" }
+    var isReaction: Bool {
+        contentType.caseInsensitiveCompare("reaction") == .orderedSame
+            || content?.type?.caseInsensitiveCompare("reaction") == .orderedSame
+    }
     var mediaKind: MessageMediaKind? { MessageMediaKind(rawValue: normalizedContentType) }
     var isImage: Bool { mediaKind == .image }
     var canTranslate: Bool { !isFromMe && !isTranslated && contentText != nil }
