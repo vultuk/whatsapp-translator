@@ -1716,14 +1716,7 @@ async fn send_message(
                     settings.language_override.is_some()
                 );
 
-                // If there's a language override, always translate (even English -> other)
-                // Otherwise, use the normal translate_to which skips if already in target
-                let force_translate = settings.language_override.is_some();
-
-                match translator
-                    .translate_outgoing(&req.text, &conv_lang, force_translate)
-                    .await
-                {
+                match translator.translate_outgoing(&req.text, &conv_lang).await {
                     Ok((translated, usage)) => {
                         // Record usage if there was actual API usage
                         if usage.input_tokens > 0 {

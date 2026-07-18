@@ -239,7 +239,17 @@ impl WhatsAppMcpServer {
         // Translate the message if needed based on conversation language
         let (text_to_send, was_translated, target_language) =
             if let Some(translator) = &self.state.translator {
-                match self.state.store.get_conversation_language(contact_id, 10) {
+                let configured_language = self
+                    .state
+                    .store
+                    .get_conversation_settings(contact_id)
+                    .ok()
+                    .and_then(|settings| settings.language_override);
+                let conversation_language = match configured_language {
+                    Some(language) => Ok(Some(language)),
+                    None => self.state.store.get_conversation_language(contact_id, 10),
+                };
+                match conversation_language {
                     Ok(Some(conv_lang)) => {
                         info!(
                             "MCP: Conversation language for {} is {}",

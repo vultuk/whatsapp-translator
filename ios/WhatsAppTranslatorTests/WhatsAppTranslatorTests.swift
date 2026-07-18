@@ -350,6 +350,9 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertTrue(MessageSwipeReply.shouldReply(translation: CGSize(width: 64, height: 4)))
         XCTAssertFalse(MessageSwipeReply.shouldReply(translation: CGSize(width: 70, height: 80)))
         XCTAssertFalse(MessageSwipeReply.shouldReply(translation: CGSize(width: -80, height: 2)))
+        XCTAssertFalse(MessageSwipeReply.shouldBegin(velocity: CGPoint(x: 20, y: 80)))
+        XCTAssertFalse(MessageSwipeReply.shouldBegin(velocity: CGPoint(x: -80, y: 2)))
+        XCTAssertTrue(MessageSwipeReply.shouldBegin(velocity: CGPoint(x: 80, y: 20)))
     }
 
     func testSwipeToReplyOffsetIgnoresVerticalAndLeftwardDragsAndClampsItsReveal() {

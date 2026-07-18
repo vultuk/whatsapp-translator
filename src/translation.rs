@@ -400,10 +400,6 @@ impl TranslationService {
         text: &str,
         target_language: &str,
     ) -> Result<(bool, String, UsageInfo)> {
-        if text.trim().len() < 5 {
-            return Ok((true, target_language.to_string(), UsageInfo::default()));
-        }
-
         let instructions = format!(
             "Detect the language of the provided text. Set isTargetLanguage to true only if the text is already written primarily in {}.",
             target_language
@@ -528,11 +524,10 @@ impl TranslationService {
         &self,
         text: &str,
         target_language: &str,
-        force: bool,
     ) -> Result<(String, UsageInfo)> {
         let mut total_usage = UsageInfo::default();
 
-        if !force && target_language.eq_ignore_ascii_case(&self.default_language) {
+        if target_language.eq_ignore_ascii_case(&self.default_language) {
             return Ok((text.to_string(), total_usage));
         }
 
@@ -540,7 +535,7 @@ impl TranslationService {
             self.detect_language(text, target_language).await?;
         total_usage = Self::combine_usage(&total_usage, &detection_usage);
 
-        if !force && (is_target_lang || detected_lang.eq_ignore_ascii_case(target_language)) {
+        if is_target_lang || detected_lang.eq_ignore_ascii_case(target_language) {
             debug!(
                 "Text already in target language ({}), skipping translation",
                 target_language
@@ -549,8 +544,8 @@ impl TranslationService {
         }
 
         info!(
-            "Translating outgoing message from {} to {} (force: {})",
-            detected_lang, target_language, force
+            "Translating outgoing message from {} to {}",
+            detected_lang, target_language
         );
 
         let (translated, translation_usage) = self
@@ -572,11 +567,14 @@ impl TranslationService {
     pub async fn process_text(
         &self,
         text: &str,
-        language_override: Option<&str>,
+        _contact_language: Option<&str>,
         translation_style: Option<&str>,
     ) -> Result<TranslationResult> {
         let mut total_usage = UsageInfo::default();
-        let target_language = language_override.unwrap_or(&self.default_language);
+        // A conversation language identifies the contact's language. Incoming
+        // text must always be translated in the other direction, back to the
+        // app owner's default language.
+        let target_language = &self.default_language;
 
         if text.trim().is_empty() {
             return Ok(TranslationResult {
@@ -932,6 +930,7 @@ mod tests {
     use crate::storage::OpenAiSettings;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
@@ -958,7 +957,7 @@ mod tests {
         let handle = thread::spawn(move || {
             for response in responses {
                 let (mut stream, _) = listener.accept().expect("accept mock request");
-                read_http_request(&mut stream);
+                let _ = read_http_request(&mut stream);
                 let body = response.body.as_bytes();
                 write!(
                     stream,
@@ -974,7 +973,36 @@ mod tests {
         (format!("http://{}", addr), handle)
     }
 
-    fn read_http_request(stream: &mut TcpStream) {
+    fn spawn_capturing_openai_mock(
+        responses: Vec<MockResponse>,
+    ) -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let addr = listener.local_addr().expect("mock server addr");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured_requests = Arc::clone(&requests);
+        let handle = thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept mock request");
+                captured_requests
+                    .lock()
+                    .expect("lock captured requests")
+                    .push(read_http_request(&mut stream));
+                let body = response.body.as_bytes();
+                write!(
+                    stream,
+                    "HTTP/1.1 {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    response.status,
+                    body.len()
+                )
+                .expect("write response headers");
+                stream.write_all(body).expect("write response body");
+            }
+        });
+
+        (format!("http://{}", addr), requests, handle)
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> String {
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("set read timeout");
@@ -1012,6 +1040,8 @@ mod tests {
             }
             data.extend_from_slice(&buffer[..bytes_read]);
         }
+
+        String::from_utf8(data).expect("mock request should be UTF-8")
     }
 
     #[test]
@@ -1126,6 +1156,93 @@ mod tests {
             error.to_string().contains("Translation failed"),
             "unexpected error: {error:#}"
         );
+        server.join().expect("mock server should finish");
+    }
+
+    #[tokio::test]
+    async fn configured_contact_language_translates_incoming_text_back_to_default_language() {
+        let detection_response = r#"{
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": "{\"language\":\"Hungarian\",\"isTargetLanguage\":false}"
+                }]
+            }],
+            "usage": { "input_tokens": 8, "output_tokens": 3 }
+        }"#;
+        let translation_response = r#"{
+            "output": [{
+                "type": "message",
+                "content": [{ "type": "output_text", "text": "Good morning" }]
+            }],
+            "usage": { "input_tokens": 10, "output_tokens": 2 }
+        }"#;
+        let (api_url, requests, server) = spawn_capturing_openai_mock(vec![
+            MockResponse {
+                status: "200 OK",
+                body: detection_response.to_string(),
+            },
+            MockResponse {
+                status: "200 OK",
+                body: translation_response.to_string(),
+            },
+        ]);
+        let service = TranslationService::new_with_api_url(api_url);
+
+        let result = service
+            .process_text("Jó reggelt", Some("Hungarian"), None)
+            .await
+            .expect("incoming Hungarian message should translate");
+
+        assert!(result.needs_translation);
+        assert_eq!(result.translated_text.as_deref(), Some("Good morning"));
+        let requests = requests.lock().expect("lock captured requests");
+        assert!(requests[0].contains("primarily in English"));
+        assert!(requests[1].contains("Hungarian to English"));
+        server.join().expect("mock server should finish");
+    }
+
+    #[tokio::test]
+    async fn short_outgoing_text_is_still_translated_to_configured_contact_language() {
+        let detection_response = r#"{
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": "{\"language\":\"English\",\"isTargetLanguage\":false}"
+                }]
+            }],
+            "usage": { "input_tokens": 6, "output_tokens": 3 }
+        }"#;
+        let translation_response = r#"{
+            "output": [{
+                "type": "message",
+                "content": [{ "type": "output_text", "text": "Szia" }]
+            }],
+            "usage": { "input_tokens": 7, "output_tokens": 2 }
+        }"#;
+        let (api_url, requests, server) = spawn_capturing_openai_mock(vec![
+            MockResponse {
+                status: "200 OK",
+                body: detection_response.to_string(),
+            },
+            MockResponse {
+                status: "200 OK",
+                body: translation_response.to_string(),
+            },
+        ]);
+        let service = TranslationService::new_with_api_url(api_url);
+
+        let (translated, _) = service
+            .translate_outgoing("Hi", "Hungarian")
+            .await
+            .expect("short outgoing English message should translate");
+
+        assert_eq!(translated, "Szia");
+        let requests = requests.lock().expect("lock captured requests");
+        assert!(requests[0].contains("primarily in Hungarian"));
+        assert!(requests[1].contains("English to Hungarian"));
         server.join().expect("mock server should finish");
     }
 }
