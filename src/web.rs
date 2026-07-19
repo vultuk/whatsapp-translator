@@ -27,7 +27,7 @@ use tokio::sync::{broadcast, oneshot, RwLock};
 use tower_http::services::ServeDir;
 use tracing::{error, info, warn};
 
-use crate::bridge::BridgeCommand;
+use crate::bridge::{BridgeCommand, BridgeImage};
 use crate::mcp::WhatsAppMcpServer;
 use crate::oauth::{
     generate_token, AccessToken, AuthorizationCode, AuthorizeRequest, OAuthClientRegistration,
@@ -43,7 +43,12 @@ const WEB_AUTH_TOKEN_TTL_SECONDS: i64 = 12 * 60 * 60;
 const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_IMAGE_BASE64_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4;
 const MAX_IMAGE_REQUEST_BYTES: usize = MAX_IMAGE_BASE64_BYTES + 1024 * 1024;
+const MAX_ALBUM_IMAGES: usize = 30;
+const MAX_ALBUM_BYTES: usize = 64 * 1024 * 1024;
+const MAX_ALBUM_BASE64_BYTES: usize = MAX_ALBUM_BYTES.div_ceil(3) * 4;
+const MAX_ALBUM_REQUEST_BYTES: usize = MAX_ALBUM_BASE64_BYTES + 2 * 1024 * 1024;
 const SEND_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
+const ALBUM_SEND_RESULT_TIMEOUT: Duration = Duration::from_secs(180);
 const OAUTH_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone)]
@@ -95,6 +100,8 @@ pub struct BridgeSendResult {
     pub success: bool,
     pub message_id: Option<String>,
     pub timestamp: Option<i64>,
+    pub message_ids: Vec<String>,
+    pub timestamps: Vec<i64>,
     pub error: Option<String>,
 }
 
@@ -248,6 +255,25 @@ pub struct SendImageRequest {
     pub reply_to_sender_name: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendImageItemRequest {
+    pub media_data: String,
+    pub mime_type: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendImagesRequest {
+    pub contact_id: String,
+    pub images: Vec<SendImageItemRequest>,
+    pub caption: Option<String>,
+    pub reply_to: Option<String>,
+    pub reply_to_sender: Option<String>,
+    pub reply_to_text: Option<String>,
+    pub reply_to_sender_name: Option<String>,
+}
+
 /// Send image response
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -286,6 +312,27 @@ fn validate_image_payload(
         mime_type,
         decoded_size: decoded.len(),
     })
+}
+
+fn validate_album_payloads(
+    images: &[SendImageItemRequest],
+) -> Result<Vec<ValidatedImagePayload>, String> {
+    if !(2..=MAX_ALBUM_IMAGES).contains(&images.len()) {
+        return Err(format!(
+            "Choose between 2 and {} images for an album.",
+            MAX_ALBUM_IMAGES
+        ));
+    }
+
+    let validated = images
+        .iter()
+        .map(|image| validate_image_payload(&image.media_data, &image.mime_type))
+        .collect::<Result<Vec<_>, _>>()?;
+    let total_size: usize = validated.iter().map(|image| image.decoded_size).sum();
+    if total_size > MAX_ALBUM_BYTES {
+        return Err("The selected album is too large. Maximum combined size is 64MB.".to_string());
+    }
+    Ok(validated)
 }
 
 fn normalize_image_mime_type(mime_type: &str) -> Result<String, String> {
@@ -802,7 +849,17 @@ impl AppState {
         request_id: i32,
         rx: oneshot::Receiver<BridgeSendResult>,
     ) -> Result<BridgeSendResult, SendConfirmationError> {
-        match tokio::time::timeout(SEND_RESULT_TIMEOUT, rx).await {
+        self.wait_for_send_result_with_timeout(request_id, rx, SEND_RESULT_TIMEOUT)
+            .await
+    }
+
+    async fn wait_for_send_result_with_timeout(
+        &self,
+        request_id: i32,
+        rx: oneshot::Receiver<BridgeSendResult>,
+        timeout: Duration,
+    ) -> Result<BridgeSendResult, SendConfirmationError> {
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(_)) => {
                 self.cancel_pending_send(request_id).await;
@@ -818,6 +875,13 @@ impl AppState {
     /// Reconcile a bridge send_result with a temporary stored row and release waiters.
     pub async fn handle_send_result(&self, mut result: BridgeSendResult) {
         result.timestamp = normalize_bridge_timestamp_millis(result.timestamp);
+        result.timestamps = result
+            .timestamps
+            .into_iter()
+            .map(|timestamp| {
+                normalize_bridge_timestamp_millis(Some(timestamp)).unwrap_or(timestamp)
+            })
+            .collect();
         let pending = self
             .pending_send_requests
             .write()
@@ -933,6 +997,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/send-image",
             post(send_image).layer(DefaultBodyLimit::max(MAX_IMAGE_REQUEST_BYTES)),
+        )
+        .route(
+            "/api/send-images",
+            post(send_images).layer(DefaultBodyLimit::max(MAX_ALBUM_REQUEST_BYTES)),
         )
         .route("/api/react", post(send_reaction))
         .route("/api/ai-compose", post(ai_compose))
@@ -2273,6 +2341,211 @@ async fn send_image(
     Json(SendImageResponse {
         message_id: confirmed_message_id,
         timestamp: confirmed_timestamp,
+    })
+    .into_response()
+}
+
+async fn send_images(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SendImagesRequest>,
+) -> impl IntoResponse {
+    if req.contact_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "contact_id is required" })),
+        )
+            .into_response();
+    }
+
+    let validated = match validate_album_payloads(&req.images) {
+        Ok(images) => images,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+
+    if !*state.connected.read().await {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "Not connected to WhatsApp" })),
+        )
+            .into_response();
+    }
+
+    let request_id = state.next_request_id();
+    let rx = state.register_pending_send(request_id, None).await;
+    let command = BridgeCommand::SendImages {
+        request_id: Some(request_id),
+        to: req.contact_id.clone(),
+        images: req
+            .images
+            .iter()
+            .zip(validated.iter())
+            .map(|(image, validated)| BridgeImage {
+                media_data: image.media_data.clone(),
+                mime_type: validated.mime_type.clone(),
+            })
+            .collect(),
+        caption: req.caption.clone(),
+        reply_to: req.reply_to.clone(),
+        reply_to_sender: req.reply_to_sender.clone(),
+        reply_to_text: req.reply_to_text.clone(),
+    };
+
+    if let Err(error) = state.send_bridge_command(command).await {
+        state.cancel_pending_send(request_id).await;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to send album: {}", error) })),
+        )
+            .into_response();
+    }
+
+    let send_result = match state
+        .wait_for_send_result_with_timeout(request_id, rx, ALBUM_SEND_RESULT_TIMEOUT)
+        .await
+    {
+        Ok(result) => result,
+        Err(SendConfirmationError::Timeout) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(serde_json::json!({ "error": "Timed out waiting for WhatsApp album confirmation" })),
+            )
+                .into_response();
+        }
+        Err(SendConfirmationError::ChannelClosed) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": "WhatsApp album confirmation channel closed" })),
+            )
+                .into_response();
+        }
+    };
+
+    if !send_result.success {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": send_result.error.unwrap_or_else(|| "WhatsApp rejected the album".to_string())
+            })),
+        )
+            .into_response();
+    }
+    if send_result.message_ids.len() != req.images.len() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": "WhatsApp returned an incomplete album confirmation" })),
+        )
+            .into_response();
+    }
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let contact_info = state.store.get_contact(&req.contact_id).ok().flatten();
+    let contact_name = contact_info
+        .as_ref()
+        .and_then(|contact| contact.name.clone());
+    let contact_phone = contact_info
+        .as_ref()
+        .and_then(|contact| contact.phone.clone());
+    let chat_type = contact_info
+        .as_ref()
+        .and_then(|contact| contact.contact_type.clone())
+        .unwrap_or_else(|| "private".to_string());
+    let sender_name = state.name.read().await.clone();
+    let sender_phone = state.phone.read().await.clone();
+    let mut stored_ids: Vec<String> = Vec::new();
+
+    for (index, ((image, validated), message_id)) in req
+        .images
+        .iter()
+        .zip(validated.iter())
+        .zip(send_result.message_ids.iter())
+        .enumerate()
+    {
+        let timestamp = send_result
+            .timestamps
+            .get(index)
+            .copied()
+            .unwrap_or(now + index as i64);
+        let caption = if index == 0 {
+            req.caption.clone()
+        } else {
+            None
+        };
+        let reply_context = if index == 0 {
+            req.reply_to.as_ref().map(|reply_to| {
+                serde_json::json!({
+                    "messageId": reply_to,
+                    "senderName": req.reply_to_sender_name.clone().unwrap_or_else(|| {
+                        req.reply_to_sender.clone().unwrap_or_else(|| "Unknown".to_string())
+                    }),
+                    "text": req.reply_to_text.clone().unwrap_or_default()
+                })
+            })
+        } else {
+            None
+        };
+        let content = serde_json::json!({
+            "type": "image",
+            "mime_type": validated.mime_type,
+            "caption": caption,
+            "media_data": image.media_data,
+            "file_size": validated.decoded_size,
+            "reply_context": reply_context
+        });
+        let stored_message = StoredMessage {
+            id: message_id.clone(),
+            contact_id: req.contact_id.clone(),
+            timestamp,
+            is_from_me: true,
+            is_forwarded: false,
+            sender_name: sender_name.clone(),
+            sender_phone: sender_phone.clone(),
+            contact_name: contact_name.clone(),
+            contact_phone: contact_phone.clone(),
+            chat_type: chat_type.clone(),
+            content_type: "Image".to_string(),
+            content_json: content.to_string(),
+            content: Some(content),
+            original_text: None,
+            translated_text: None,
+            source_language: None,
+            is_translated: false,
+            delivery_status: Some("sent".to_string()),
+        };
+        if let Err(error) = state.store.add_message(&stored_message) {
+            for stored_id in &stored_ids {
+                let _ = state.store.delete_message(stored_id);
+            }
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to store sent album: {}", error) })),
+            )
+                .into_response();
+        }
+        stored_ids.push(message_id.clone());
+    }
+
+    let last_timestamp = send_result.timestamps.last().copied().unwrap_or(now);
+    if let Err(error) = state.store.upsert_contact(
+        &req.contact_id,
+        contact_name.as_deref(),
+        contact_phone.as_deref(),
+        Some(&chat_type),
+        last_timestamp,
+    ) {
+        warn!("Failed to update contact after album send: {}", error);
+    }
+
+    Json(SendImageResponse {
+        message_id: send_result
+            .message_id
+            .unwrap_or_else(|| send_result.message_ids[0].clone()),
+        timestamp: send_result.timestamp.unwrap_or(now),
     })
     .into_response()
 }
@@ -4397,6 +4670,8 @@ mod tests {
                 success: true,
                 message_id: Some("real_1".to_string()),
                 timestamp: Some(1_700_000_005),
+                message_ids: Vec::new(),
+                timestamps: Vec::new(),
                 error: None,
             })
             .await;
@@ -4444,6 +4719,8 @@ mod tests {
                 success: false,
                 message_id: None,
                 timestamp: None,
+                message_ids: Vec::new(),
+                timestamps: Vec::new(),
                 error: Some("rate limited".to_string()),
             })
             .await;
@@ -4471,6 +4748,27 @@ mod tests {
         assert!(payload.decoded_size > 0);
     }
 
+    #[test]
+    fn album_payload_validation_preserves_order_and_requires_multiple_images() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+        let images = vec![
+            SendImageItemRequest {
+                media_data: png.to_string(),
+                mime_type: "image/png".to_string(),
+            },
+            SendImageItemRequest {
+                media_data: png.to_string(),
+                mime_type: "image/png".to_string(),
+            },
+        ];
+        let validated = validate_album_payloads(&images).expect("valid album");
+        assert_eq!(validated.len(), 2);
+        assert_eq!(validated[0].mime_type, "image/png");
+
+        let error = validate_album_payloads(&images[..1]).unwrap_err();
+        assert_eq!(error, "Choose between 2 and 30 images for an album.");
+    }
+
     #[tokio::test]
     async fn send_image_route_accepts_payloads_larger_than_axum_default_body_limit() {
         let (state, data_dir) = test_state(None);
@@ -4485,6 +4783,37 @@ mod tests {
                     "contactId": "chat@example.test",
                     "mediaData": BASE64_STANDARD.encode(jpeg),
                     "mimeType": "image/jpeg"
+                })
+                .to_string(),
+            ))
+            .expect("request");
+
+        let response = create_router(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn send_images_route_accepts_album_payload_larger_than_axum_default_body_limit() {
+        let (state, data_dir) = test_state(None);
+        let mut jpeg = vec![0_u8; 1024 * 1024 + 256];
+        jpeg[..3].copy_from_slice(&[0xff, 0xd8, 0xff]);
+        let encoded = BASE64_STANDARD.encode(jpeg);
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri("/api/send-images")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "contactId": "chat@example.test",
+                    "images": [
+                        { "mediaData": encoded, "mimeType": "image/jpeg" },
+                        { "mediaData": encoded, "mimeType": "image/jpeg" }
+                    ]
                 })
                 .to_string(),
             ))

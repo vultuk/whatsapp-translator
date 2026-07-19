@@ -289,27 +289,51 @@ final class AppSession {
         to contactID: String,
         reply: MessageReplyTarget? = nil
     ) async -> Bool {
-        guard !data.isEmpty, data.count <= 16 * 1_024 * 1_024 else {
-            presentError("Couldn’t send image", "Images must be smaller than 16 MB.")
+        await sendImages(
+            [OutgoingImage(data: data, mimeType: mimeType)],
+            caption: caption,
+            to: contactID,
+            reply: reply
+        )
+    }
+
+    func sendImages(
+        _ images: [OutgoingImage],
+        caption: String? = nil,
+        to contactID: String,
+        reply: MessageReplyTarget? = nil
+    ) async -> Bool {
+        guard !images.isEmpty, images.count <= 30 else {
+            presentError("Couldn’t send photos", "Choose between 1 and 30 photos.")
+            return false
+        }
+        guard images.allSatisfy({ !$0.data.isEmpty && $0.data.count <= 16 * 1_024 * 1_024 }) else {
+            presentError("Couldn’t send photos", "Each photo must be smaller than 16 MB.")
+            return false
+        }
+        guard images.reduce(0, { $0 + $1.data.count }) <= 64 * 1_024 * 1_024 else {
+            presentError("Couldn’t send photos", "The selected photos must be smaller than 64 MB combined.")
             return false
         }
         sendingContactIDs.insert(contactID)
         defer { sendingContactIDs.remove(contactID) }
 
         if demoMode {
-            let message = ChatMessage.demoImage(contactID: contactID)
-            messages[contactID, default: []].append(message)
-            await storeMedia(data, mimeType: mimeType, for: message)
+            for image in images {
+                let message = ChatMessage.demoImage(contactID: contactID)
+                messages[contactID, default: []].append(message)
+                await storeMedia(image.data, mimeType: image.mimeType, for: message)
+            }
             return true
         }
 
         do {
-            _ = try await api.sendImage(contactID: contactID, data: data, mimeType: mimeType, caption: caption, reply: reply)
+            _ = try await api.sendImages(contactID: contactID, images: images, caption: caption, reply: reply)
             await loadMessages(for: contactID)
             await refresh()
             return true
         } catch {
-            presentError("Couldn’t send image", error)
+            presentError("Couldn’t send photos", error)
             return false
         }
     }

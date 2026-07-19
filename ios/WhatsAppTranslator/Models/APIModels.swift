@@ -342,6 +342,26 @@ struct SendImageRequest: Encodable, Sendable {
     let replyToSenderName: String?
 }
 
+struct OutgoingImage: Sendable {
+    let data: Data
+    let mimeType: String
+}
+
+struct SendImageItemRequest: Encodable, Sendable {
+    let mediaData: String
+    let mimeType: String
+}
+
+struct SendImagesRequest: Encodable, Sendable {
+    let contactId: String
+    let images: [SendImageItemRequest]
+    let caption: String?
+    let replyTo: String?
+    let replyToSender: String?
+    let replyToText: String?
+    let replyToSenderName: String?
+}
+
 struct SendImageResponse: Decodable, Sendable {
     let messageId: String
     let timestamp: Int64

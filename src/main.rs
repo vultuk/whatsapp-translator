@@ -367,6 +367,8 @@ async fn handle_web_event(
             success,
             message_id,
             timestamp,
+            message_ids,
+            timestamps,
             error,
         } => {
             state
@@ -375,6 +377,8 @@ async fn handle_web_event(
                     success,
                     message_id: message_id.clone(),
                     timestamp,
+                    message_ids,
+                    timestamps,
                     error: error.clone(),
                 })
                 .await;
@@ -808,6 +812,7 @@ async fn handle_terminal_event(
             message_id,
             timestamp,
             error,
+            ..
         } => {
             if success {
                 debug!(
@@ -902,6 +907,8 @@ impl serde::Serialize for BridgeEvent {
                 success,
                 message_id,
                 timestamp,
+                message_ids,
+                timestamps,
                 error,
             } => {
                 map.serialize_entry("type", "send_result")?;
@@ -912,6 +919,12 @@ impl serde::Serialize for BridgeEvent {
                 }
                 if let Some(ts) = timestamp {
                     map.serialize_entry("timestamp", ts)?;
+                }
+                if !message_ids.is_empty() {
+                    map.serialize_entry("message_ids", message_ids)?;
+                }
+                if !timestamps.is_empty() {
+                    map.serialize_entry("timestamps", timestamps)?;
                 }
                 if let Some(err) = error {
                     map.serialize_entry("error", err)?;

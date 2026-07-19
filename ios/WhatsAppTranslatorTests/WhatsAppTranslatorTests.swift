@@ -581,6 +581,30 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(payload["replyToSenderName"] as? String, "Virág")
     }
 
+    func testSendImagesRequestEncodesOrderedAlbumAndReplyContext() throws {
+        let request = SendImagesRequest(
+            contactId: "chat@g.us",
+            images: [
+                SendImageItemRequest(mediaData: "first", mimeType: "image/jpeg"),
+                SendImageItemRequest(mediaData: "second", mimeType: "image/png"),
+            ],
+            caption: "Holiday",
+            replyTo: "message-1",
+            replyToSender: "447700900123@s.whatsapp.net",
+            replyToText: "Send photos",
+            replyToSenderName: "Virág"
+        )
+
+        let data = try JSONEncoder().encode(request)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let images = try XCTUnwrap(payload["images"] as? [[String: Any]])
+        XCTAssertEqual(images.count, 2)
+        XCTAssertEqual(images[0]["mediaData"] as? String, "first")
+        XCTAssertEqual(images[1]["mimeType"] as? String, "image/png")
+        XCTAssertEqual(payload["caption"] as? String, "Holiday")
+        XCTAssertEqual(payload["replyTo"] as? String, "message-1")
+    }
+
     func testAppPreferencesPersistStarsConversationPresentationAndTheme() throws {
         let suite = "WhatsAppTranslatorPreferencesTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

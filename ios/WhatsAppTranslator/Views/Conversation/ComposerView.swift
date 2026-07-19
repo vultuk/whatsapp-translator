@@ -8,10 +8,10 @@ struct ComposerView: View {
     let reply: MessageReplyTarget?
     let isSending: Bool
     let cancelReply: () -> Void
-    let sendImage: (Data, String, String?) async -> Bool
+    let sendImages: ([OutgoingImage], String?) async -> Bool
     let send: () -> Void
-    @State private var selectedPhoto: PhotosPickerItem?
-    @State private var pendingPhoto: PendingPhoto?
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var pendingPhotos: PendingPhotoSelection?
     @State private var pickerError: String?
     @FocusState private var focused: Bool
 
@@ -41,11 +41,11 @@ struct ComposerView: View {
             }
 
             HStack(alignment: .bottom, spacing: 9) {
-                PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 30, matching: .images) {
                     addImageLabel
                 }
                 .disabled(isSending)
-                .accessibilityLabel("Send image")
+                .accessibilityLabel("Send photos")
 
                 composerInput
 
@@ -56,34 +56,23 @@ struct ComposerView: View {
             .padding(.bottom, 9)
         }
         .background(.ultraThinMaterial)
-        .onChange(of: selectedPhoto) { _, item in
-            guard let item else { return }
+        .onChange(of: selectedPhotos) { _, items in
+            guard !items.isEmpty else { return }
             Task {
-                defer { selectedPhoto = nil }
-                guard let data = try? await item.loadTransferable(type: Data.self) else {
-                    pickerError = "The selected image couldn’t be read. Please choose another image."
-                    return
-                }
-                let allowed = ["image/jpeg", "image/png", "image/gif", "image/webp"]
-                let selectedMimeType = item.supportedContentTypes
-                    .first(where: { type in type.preferredMIMEType.map(allowed.contains) ?? false })?
-                    .preferredMIMEType
-                if let selectedMimeType {
-                    guard let image = PlatformImage(data: data) else {
-                        pickerError = "The selected file isn’t a supported image."
+                defer { selectedPhotos = [] }
+                var prepared: [PendingPhoto] = []
+                for item in items {
+                    guard let photo = await preparePhoto(item) else {
+                        pickerError = "One of the selected photos couldn’t be read. Please choose the photos again."
                         return
                     }
-                    pendingPhoto = PendingPhoto(data: data, mimeType: selectedMimeType, image: image)
-                } else if let image = PlatformImage(data: data),
-                          let jpeg = image.platformJPEGData(compressionQuality: 0.9) {
-                    pendingPhoto = PendingPhoto(data: jpeg, mimeType: "image/jpeg", image: image)
-                } else {
-                    pickerError = "The selected file isn’t a supported image."
+                    prepared.append(photo)
                 }
+                pendingPhotos = PendingPhotoSelection(photos: prepared)
             }
         }
-        .sheet(item: $pendingPhoto) { photo in
-            ImageComposerSheet(photo: photo, reply: reply, send: sendImage)
+        .sheet(item: $pendingPhotos) { selection in
+            ImageComposerSheet(photos: selection.photos, reply: reply, send: sendImages)
         }
         .alert("Couldn’t prepare image", isPresented: pickerErrorPresented) {
             Button("OK") { pickerError = nil }
@@ -91,11 +80,15 @@ struct ComposerView: View {
             Text(pickerError ?? "Please choose another image.")
         }
         .task {
-            guard ProcessInfo.processInfo.arguments.contains("-demoImageComposer"), pendingPhoto == nil else { return }
-            let image = DemoImageFactory.landscape(size: CGSize(width: 800, height: 600))
-            if let data = image.platformJPEGData(compressionQuality: 0.9) {
-                pendingPhoto = PendingPhoto(data: data, mimeType: "image/jpeg", image: image)
+            let arguments = ProcessInfo.processInfo.arguments
+            guard arguments.contains("-demoImageComposer") || arguments.contains("-demoImageAlbumComposer"), pendingPhotos == nil else { return }
+            let count = arguments.contains("-demoImageAlbumComposer") ? 4 : 1
+            let photos = (0..<count).compactMap { index -> PendingPhoto? in
+                let image = DemoImageFactory.landscape(size: CGSize(width: 800 - index * 80, height: 600 + index * 40))
+                guard let data = image.platformJPEGData(compressionQuality: 0.9) else { return nil }
+                return PendingPhoto(data: data, mimeType: "image/jpeg", image: image)
             }
+            pendingPhotos = PendingPhotoSelection(photos: photos)
         }
     }
 
@@ -216,6 +209,21 @@ struct ComposerView: View {
     private var pickerErrorPresented: Binding<Bool> {
         Binding(get: { pickerError != nil }, set: { if !$0 { pickerError = nil } })
     }
+
+    private func preparePhoto(_ item: PhotosPickerItem) async -> PendingPhoto? {
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let image = PlatformImage(data: data) else {
+            return nil
+        }
+        let allowed = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+        if let mimeType = item.supportedContentTypes
+            .first(where: { type in type.preferredMIMEType.map(allowed.contains) ?? false })?
+            .preferredMIMEType {
+            return PendingPhoto(data: data, mimeType: mimeType, image: image)
+        }
+        guard let jpeg = image.platformJPEGData(compressionQuality: 0.9) else { return nil }
+        return PendingPhoto(data: jpeg, mimeType: "image/jpeg", image: image)
+    }
 }
 
 private struct ComposerInputStyle: ViewModifier {
@@ -247,23 +255,29 @@ private struct PendingPhoto: Identifiable {
     let image: PlatformImage
 }
 
+private struct PendingPhotoSelection: Identifiable {
+    let id = UUID()
+    let photos: [PendingPhoto]
+}
+
 private struct ImageComposerSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let photo: PendingPhoto
+    let photos: [PendingPhoto]
     let reply: MessageReplyTarget?
-    let send: (Data, String, String?) async -> Bool
+    let send: ([OutgoingImage], String?) async -> Bool
     @State private var caption = ""
     @State private var isSending = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                Image(platformImage: photo.image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: 440)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .padding(.horizontal)
+                photoPreview
+
+                if photos.count > 1 {
+                    Label("\(photos.count) photos selected", systemImage: "photo.stack.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
 
                 if let reply {
                     Label("Replying to \(reply.senderName)", systemImage: "arrowshape.turn.up.left")
@@ -281,7 +295,7 @@ private struct ImageComposerSheet: View {
                 Spacer(minLength: 0)
             }
             .padding(.top)
-            .navigationTitle("Send image")
+            .navigationTitle(photos.count == 1 ? "Send photo" : "Send \(photos.count) photos")
             .platformInlineNavigationTitle()
             .platformInteractiveDismissDisabled(isSending)
             .toolbar {
@@ -294,7 +308,8 @@ private struct ImageComposerSheet: View {
                         isSending = true
                         Task {
                             let cleanCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if await send(photo.data, photo.mimeType, cleanCaption.isEmpty ? nil : cleanCaption) {
+                            let images = photos.map { OutgoingImage(data: $0.data, mimeType: $0.mimeType) }
+                            if await send(images, cleanCaption.isEmpty ? nil : cleanCaption) {
                                 dismiss()
                             } else {
                                 isSending = false
@@ -314,5 +329,39 @@ private struct ImageComposerSheet: View {
             minHeight: MacChatLayoutMetrics.mediaSheetMinimumHeight
         )
         #endif
+    }
+
+    @ViewBuilder
+    private var photoPreview: some View {
+        if photos.count == 1, let photo = photos.first {
+            Image(platformImage: photo.image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: 440)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .padding(.horizontal)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 10) {
+                    ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                        ZStack(alignment: .topTrailing) {
+                            Image(platformImage: photo.image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 150, height: 210)
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            Text("\(index + 1)")
+                                .font(.caption.bold())
+                                .foregroundStyle(.white)
+                                .frame(width: 26, height: 26)
+                                .background(.black.opacity(0.62), in: Circle())
+                                .padding(8)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+            .frame(height: 210)
+        }
     }
 }

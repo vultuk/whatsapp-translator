@@ -136,6 +136,40 @@ actor APIClient {
         )
     }
 
+    func sendImages(
+        contactID: String,
+        images: [OutgoingImage],
+        caption: String? = nil,
+        reply: MessageReplyTarget? = nil
+    ) async throws -> SendImageResponse {
+        if images.count == 1, let image = images.first {
+            return try await sendImage(
+                contactID: contactID,
+                data: image.data,
+                mimeType: image.mimeType,
+                caption: caption,
+                reply: reply
+            )
+        }
+        let payload = SendImagesRequest(
+            contactId: contactID,
+            images: images.map {
+                SendImageItemRequest(mediaData: $0.data.base64EncodedString(), mimeType: $0.mimeType)
+            },
+            caption: caption,
+            replyTo: reply?.messageID,
+            replyToSender: reply?.senderJID,
+            replyToText: reply?.text,
+            replyToSenderName: reply?.senderName
+        )
+        return try await authorizedRequest(
+            "/api/send-images",
+            method: "POST",
+            body: JSONEncoder.backend.encode(payload),
+            timeoutInterval: 180
+        )
+    }
+
     func react(to message: ChatMessage, emoji: String, senderJID: String?) async throws {
         let payload = SendReactionRequest(
             contactId: message.contactId,
@@ -274,13 +308,14 @@ actor APIClient {
     private func authorizedRequest<T: Decodable & Sendable>(
         _ path: String,
         method: String = "GET",
-        body: Data? = nil
+        body: Data? = nil,
+        timeoutInterval: TimeInterval? = nil
     ) async throws -> T {
         do {
-            return try await request(path, method: method, body: body, authenticated: true)
+            return try await request(path, method: method, body: body, authenticated: true, timeoutInterval: timeoutInterval)
         } catch APIError.unauthorized {
             _ = try await authenticate()
-            return try await request(path, method: method, body: body, authenticated: true)
+            return try await request(path, method: method, body: body, authenticated: true, timeoutInterval: timeoutInterval)
         }
     }
 
@@ -288,13 +323,15 @@ actor APIClient {
         _ path: String,
         method: String = "GET",
         body: Data? = nil,
-        authenticated: Bool
+        authenticated: Bool,
+        timeoutInterval: TimeInterval? = nil
     ) async throws -> T {
         guard let configuration else { throw APIError.notConfigured }
         guard let url = URL(string: path, relativeTo: configuration.baseURL)?.absoluteURL else {
             throw APIError.invalidServer
         }
         var request = URLRequest(url: url)
+        if let timeoutInterval { request.timeoutInterval = timeoutInterval }
         request.httpMethod = method
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

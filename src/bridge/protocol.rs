@@ -31,6 +31,10 @@ pub enum BridgeEvent {
         success: bool,
         message_id: Option<String>,
         timestamp: Option<i64>,
+        #[serde(default)]
+        message_ids: Vec<String>,
+        #[serde(default)]
+        timestamps: Vec<i64>,
         error: Option<String>,
     },
 
@@ -292,6 +296,22 @@ pub enum BridgeCommand {
         reply_to_text: Option<String>,
     },
 
+    /// Send multiple images as one grouped WhatsApp album.
+    SendImages {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<i32>,
+        to: String,
+        images: Vec<BridgeImage>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reply_to: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reply_to_sender: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reply_to_text: Option<String>,
+    },
+
     /// Send a reaction to a message
     SendReaction {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -328,6 +348,12 @@ pub enum BridgeCommand {
 
     /// Request logout (clears session)
     Logout,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BridgeImage {
+    pub media_data: String,
+    pub mime_type: String,
 }
 
 impl Chat {
@@ -434,5 +460,26 @@ mod tests {
             BridgeEvent::Receipt { message_ids, status }
                 if message_ids == vec!["message-1", "message-2"] && status == "read"
         ));
+    }
+
+    #[test]
+    fn test_send_images_command_serializes_album_payload() {
+        let command = BridgeCommand::SendImages {
+            request_id: Some(7),
+            to: "chat@example.test".to_string(),
+            images: vec![BridgeImage {
+                media_data: "aW1hZ2U=".to_string(),
+                mime_type: "image/jpeg".to_string(),
+            }],
+            caption: Some("Summer".to_string()),
+            reply_to: None,
+            reply_to_sender: None,
+            reply_to_text: None,
+        };
+
+        let json = serde_json::to_value(command).expect("serialize album command");
+        assert_eq!(json["type"], "send_images");
+        assert_eq!(json["images"][0]["mime_type"], "image/jpeg");
+        assert_eq!(json["caption"], "Summer");
     }
 }

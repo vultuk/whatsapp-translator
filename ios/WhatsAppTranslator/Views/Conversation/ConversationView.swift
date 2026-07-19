@@ -86,7 +86,7 @@ struct ConversationView: View {
                     reply: replyTarget,
                     isSending: session.sendingContactIDs.contains(contact.id),
                     cancelReply: { replyTarget = nil },
-                    sendImage: sendImage,
+                    sendImages: sendImages,
                     send: send
                 )
             }
@@ -253,9 +253,9 @@ struct ConversationView: View {
         }
     }
 
-    private func sendImage(_ data: Data, _ mimeType: String, _ caption: String?) async -> Bool {
+    private func sendImages(_ images: [OutgoingImage], _ caption: String?) async -> Bool {
         let reply = replyTarget
-        if await session.sendImage(data: data, mimeType: mimeType, caption: caption, to: contact.id, reply: reply) {
+        if await session.sendImages(images, caption: caption, to: contact.id, reply: reply) {
             replyTarget = nil
             return true
         }

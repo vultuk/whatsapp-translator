@@ -179,6 +179,19 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			SendEvent(NewSendResultEvent(cmd.RequestID, true, messageID, timestamp, ""))
 		}
 
+	case "send_images":
+		if cmd.To == "" || len(cmd.Images) < 2 {
+			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, "missing 'to' or at least two images"))
+			return
+		}
+
+		messageID, timestamp, messageIDs, timestamps, err := client.SendImageAlbum(ctx, cmd.To, cmd.Images, cmd.Caption, cmd.ReplyTo, cmd.ReplyToSender, cmd.ReplyToText)
+		if err != nil {
+			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, err.Error()))
+		} else {
+			SendEvent(NewAlbumSendResultEvent(cmd.RequestID, messageID, timestamp, messageIDs, timestamps))
+		}
+
 	case "send_reaction":
 		if cmd.To == "" || cmd.MessageID == "" {
 			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, "missing 'to' or 'message_id' field"))

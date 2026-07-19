@@ -134,12 +134,19 @@ type Mention struct {
 
 // SendResultEvent is sent after attempting to send a message
 type SendResultEvent struct {
-	Type      string `json:"type"`
-	RequestID int    `json:"request_id"`
-	Success   bool   `json:"success"`
-	MessageID string `json:"message_id,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Type       string   `json:"type"`
+	RequestID  int      `json:"request_id"`
+	Success    bool     `json:"success"`
+	MessageID  string   `json:"message_id,omitempty"`
+	Timestamp  int64    `json:"timestamp,omitempty"`
+	MessageIDs []string `json:"message_ids,omitempty"`
+	Timestamps []int64  `json:"timestamps,omitempty"`
+	Error      string   `json:"error,omitempty"`
+}
+
+type ImagePayload struct {
+	MediaData string `json:"media_data"`
+	MimeType  string `json:"mime_type"`
 }
 
 // ProfilePictureEvent is sent with profile picture data
@@ -176,9 +183,10 @@ type Command struct {
 	To        string `json:"to,omitempty"`
 	Text      string `json:"text,omitempty"`
 	// For send_image command
-	MediaData string `json:"media_data,omitempty"` // Base64 encoded image
-	MimeType  string `json:"mime_type,omitempty"`
-	Caption   string `json:"caption,omitempty"`
+	MediaData string         `json:"media_data,omitempty"` // Base64 encoded image
+	MimeType  string         `json:"mime_type,omitempty"`
+	Caption   string         `json:"caption,omitempty"`
+	Images    []ImagePayload `json:"images,omitempty"`
 	// For send_reaction command
 	MessageID string `json:"message_id,omitempty"` // Target message ID to react to
 	Emoji     string `json:"emoji,omitempty"`      // Reaction emoji (empty to remove)
@@ -248,6 +256,18 @@ func NewSendResultEvent(requestID int, success bool, messageID string, timestamp
 		MessageID: messageID,
 		Timestamp: timestamp,
 		Error:     errMsg,
+	}
+}
+
+func NewAlbumSendResultEvent(requestID int, messageID string, timestamp int64, messageIDs []string, timestamps []int64) SendResultEvent {
+	return SendResultEvent{
+		Type:       "send_result",
+		RequestID:  requestID,
+		Success:    true,
+		MessageID:  messageID,
+		Timestamp:  timestamp,
+		MessageIDs: messageIDs,
+		Timestamps: timestamps,
 	}
 }
 
