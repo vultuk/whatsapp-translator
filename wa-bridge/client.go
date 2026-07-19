@@ -578,6 +578,89 @@ func (c *Client) buildContact(jid types.JID, alternate types.JID) Contact {
 	return contact
 }
 
+func (c *Client) buildMentions(jids []string) []Mention {
+	mentions := make([]Mention, 0, len(jids))
+	for _, jidString := range jids {
+		jid, err := types.ParseJID(jidString)
+		if err != nil || jid.User == "" {
+			continue
+		}
+
+		originalContact := c.buildContact(jid, types.JID{})
+		contact := originalContact
+		if jid.Server == "lid" && c.client.Store.LIDs != nil {
+			if phoneJID, err := c.client.Store.LIDs.GetPNForLID(c.ctx, jid); err == nil && phoneJID.User != "" {
+				phoneContact := c.buildContact(phoneJID, types.JID{})
+				contact.Phone = phoneJID.User
+				if phoneContact.Name != "" {
+					contact.Name = phoneContact.Name
+				} else if contact.Name == "" {
+					contact.Name = originalContact.Name
+				}
+			}
+		}
+
+		mentions = append(mentions, Mention{
+			JID:   jidString,
+			Phone: contact.Phone,
+			Name:  contact.Name,
+		})
+	}
+	return mentions
+}
+
+func mentionTokenUser(jid string) string {
+	if parsed, err := types.ParseJID(jid); err == nil {
+		return parsed.User
+	}
+	if user, _, found := strings.Cut(jid, "@"); found {
+		return user
+	}
+	return jid
+}
+
+func replaceMentionTokens(text string, mentions []Mention) string {
+	for _, mention := range mentions {
+		user := mentionTokenUser(mention.JID)
+		if user == "" {
+			continue
+		}
+
+		displayName := mention.Name
+		if displayName == "" {
+			displayName = mention.Phone
+		}
+		if displayName == "" || displayName == user {
+			continue
+		}
+
+		token := "@" + user
+		for start := 0; start < len(text); {
+			relativeIndex := strings.Index(text[start:], token)
+			if relativeIndex < 0 {
+				break
+			}
+			index := start + relativeIndex
+			end := index + len(token)
+			if end < len(text) && text[end] >= '0' && text[end] <= '9' {
+				start = end
+				continue
+			}
+			text = text[:index] + "@" + displayName + text[end:]
+			start = index + len(displayName) + 1
+		}
+	}
+	return text
+}
+
+func (c *Client) resolveMentions(text string, contextInfo *waE2E.ContextInfo) (string, []Mention) {
+	if contextInfo == nil || len(contextInfo.GetMentionedJID()) == 0 {
+		return text, nil
+	}
+	mentions := c.buildMentions(contextInfo.GetMentionedJID())
+	return replaceMentionTokens(text, mentions), mentions
+}
+
 // buildChat creates a Chat from message info
 func (c *Client) buildChat(info types.MessageInfo) Chat {
 	chatJID := normalizePrivateChatJID(info)
@@ -636,9 +719,11 @@ func (c *Client) buildMessageContent(msg *waE2E.Message) MessageContent {
 		if msg.ExtendedTextMessage.Text != nil {
 			body = *msg.ExtendedTextMessage.Text
 		}
+		body, mentions := c.resolveMentions(body, msg.ExtendedTextMessage.ContextInfo)
 		return MessageContent{
-			Type: "text",
-			Body: body,
+			Type:     "text",
+			Body:     body,
+			Mentions: mentions,
 		}
 	}
 
@@ -650,7 +735,7 @@ func (c *Client) buildMessageContent(msg *waE2E.Message) MessageContent {
 			FileSize: getUint64(msg.ImageMessage.FileLength),
 		}
 		if msg.ImageMessage.Caption != nil {
-			content.Caption = *msg.ImageMessage.Caption
+			content.Caption, content.Mentions = c.resolveMentions(*msg.ImageMessage.Caption, msg.ImageMessage.ContextInfo)
 		}
 		if msg.ImageMessage.FileSHA256 != nil {
 			content.FileHash = hex.EncodeToString(msg.ImageMessage.FileSHA256)
@@ -666,7 +751,7 @@ func (c *Client) buildMessageContent(msg *waE2E.Message) MessageContent {
 			FileSize: getUint64(msg.VideoMessage.FileLength),
 		}
 		if msg.VideoMessage.Caption != nil {
-			content.Caption = *msg.VideoMessage.Caption
+			content.Caption, content.Mentions = c.resolveMentions(*msg.VideoMessage.Caption, msg.VideoMessage.ContextInfo)
 		}
 		if msg.VideoMessage.Seconds != nil {
 			dur := *msg.VideoMessage.Seconds
@@ -703,7 +788,7 @@ func (c *Client) buildMessageContent(msg *waE2E.Message) MessageContent {
 			content.FileName = *msg.DocumentMessage.FileName
 		}
 		if msg.DocumentMessage.Caption != nil {
-			content.Caption = *msg.DocumentMessage.Caption
+			content.Caption, content.Mentions = c.resolveMentions(*msg.DocumentMessage.Caption, msg.DocumentMessage.ContextInfo)
 		}
 		return content
 	}

@@ -17,3 +17,32 @@ func TestNewReceiptEventNormalizesWhatsAppReceiptTypes(t *testing.T) {
 		t.Fatalf("expected two read message IDs, got %#v", read)
 	}
 }
+
+func TestReplaceMentionTokensUsesResolvedContactNames(t *testing.T) {
+	mentions := []Mention{
+		{JID: "33419157352505@lid", Phone: "447700900123", Name: "Simon"},
+		{JID: "447700900456@s.whatsapp.net", Phone: "447700900456", Name: "David"},
+	}
+
+	got := replaceMentionTokens(
+		"One for @33419157352505 and @447700900456. Not @334191573525050.",
+		mentions,
+	)
+	want := "One for @Simon and @David. Not @334191573525050."
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestReplaceMentionTokensFallsBackToPhoneThenJIDUser(t *testing.T) {
+	mentions := []Mention{
+		{JID: "33419157352505@lid", Phone: "447700900123"},
+		{JID: "998877@lid"},
+	}
+
+	got := replaceMentionTokens("Hi @33419157352505 and @998877", mentions)
+	want := "Hi @447700900123 and @998877"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
