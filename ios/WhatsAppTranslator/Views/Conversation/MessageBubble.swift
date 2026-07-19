@@ -130,6 +130,8 @@ struct MessageBubble: View {
         max(demoSwipeOffset, MessageSwipeReply.offset(translation: swipeTranslation))
     }
 
+    private var isStandaloneEmoji: Bool { message.standaloneEmojiText != nil }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if message.isFromMe { Spacer(minLength: bubbleEdgeInset) }
@@ -149,6 +151,13 @@ struct MessageBubble: View {
                         Text(sender)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(palette.deepAccent)
+                            .padding(.horizontal, isStandaloneEmoji ? 9 : 0)
+                            .padding(.vertical, isStandaloneEmoji ? 4 : 0)
+                            .background {
+                                if isStandaloneEmoji {
+                                    Capsule().fill(.ultraThinMaterial)
+                                }
+                            }
                     }
                     if let reply = message.content?.replyContext {
                         VStack(alignment: .leading, spacing: 2) {
@@ -164,15 +173,23 @@ struct MessageBubble: View {
                         .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
                     }
 
-                    RichMessageContentView(
-                        message: message,
-                        displayText: showAlternate ? (message.alternateText ?? message.displayText) : message.displayText,
-                        image: image,
-                        mediaURL: mediaURL,
-                        isLoading: mediaIsLoading,
-                        failed: mediaFailed,
-                        retry: retryMedia
-                    )
+                    if let emoji = message.standaloneEmojiText {
+                        Text(emoji)
+                            .font(.system(size: standaloneEmojiFontSize))
+                            .fixedSize(horizontal: true, vertical: true)
+                            .textSelection(.enabled)
+                            .accessibilityLabel("Emoji: \(emoji)")
+                    } else {
+                        RichMessageContentView(
+                            message: message,
+                            displayText: showAlternate ? (message.alternateText ?? message.displayText) : message.displayText,
+                            image: image,
+                            mediaURL: mediaURL,
+                            isLoading: mediaIsLoading,
+                            failed: mediaFailed,
+                            retry: retryMedia
+                        )
+                    }
 
                     ForEach(linkPreviews, id: \.url) { preview in
                         LinkPreviewCard(preview: preview)
@@ -190,26 +207,32 @@ struct MessageBubble: View {
                         }
                     }
 
-                    messageMetadata
+                    if isStandaloneEmoji {
+                        standaloneEmojiMetadata
+                    } else {
+                        messageMetadata
+                    }
 
                     if showActions {
                         visibleActionStrip
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(
-                    message.isFromMe ? palette.outgoingBubble : palette.incomingBubble,
-                    in: UnevenRoundedRectangle(
-                        topLeadingRadius: message.isFromMe ? 17 : 4,
-                        bottomLeadingRadius: 17,
-                        bottomTrailingRadius: 17,
-                        topTrailingRadius: message.isFromMe ? 4 : 17,
-                        style: .continuous
-                    )
-                )
-                .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
+                .padding(.horizontal, isStandaloneEmoji ? 4 : 12)
+                .padding(.vertical, isStandaloneEmoji ? 2 : 9)
+                .background {
+                    if !isStandaloneEmoji {
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: message.isFromMe ? 17 : 4,
+                            bottomLeadingRadius: 17,
+                            bottomTrailingRadius: 17,
+                            topTrailingRadius: message.isFromMe ? 4 : 17,
+                            style: .continuous
+                        )
+                        .fill(message.isFromMe ? palette.outgoingBubble : palette.incomingBubble)
+                        .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
+                    }
+                }
                 .contextMenu { actionMenu }
                 .offset(x: swipeOffset)
             }
@@ -274,8 +297,7 @@ struct MessageBubble: View {
             Text(message.date.formatted(date: .omitted, time: .shortened))
                 .fixedSize(horizontal: true, vertical: false)
             if message.isFromMe {
-                Image(systemName: "checkmark")
-                    .fixedSize(horizontal: true, vertical: false)
+                MessageDeliveryIndicator(state: message.deliveryState)
             }
             Button {
                 withAnimation(.snappy) { showActions.toggle() }
@@ -290,6 +312,24 @@ struct MessageBubble: View {
         .font(.caption2)
         .foregroundStyle(.secondary)
         .platformCompactControlTypography()
+    }
+
+    private var standaloneEmojiMetadata: some View {
+        HStack(spacing: 5) {
+            if isBusy { ProgressView().controlSize(.mini) }
+            if isStarred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
+            Text(message.date.formatted(date: .omitted, time: .shortened))
+            if message.isFromMe {
+                MessageDeliveryIndicator(state: message.deliveryState)
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: Capsule())
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -455,6 +495,14 @@ struct MessageBubble: View {
         usesCompactMessageChrome ? 18 : 52
     }
 
+    private var standaloneEmojiFontSize: CGFloat {
+        switch message.standaloneEmojiText?.count {
+        case 1: 60
+        case 2: 52
+        default: 46
+        }
+    }
+
     @ViewBuilder
     private var actionMenu: some View {
         Button("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
@@ -476,6 +524,28 @@ struct MessageBubble: View {
                 showAlternate.toggle()
             }
         }
+    }
+}
+
+private struct MessageDeliveryIndicator: View {
+    let state: MessageDeliveryState
+
+    var body: some View {
+        HStack(spacing: -4) {
+            Image(systemName: "checkmark")
+            if state == .delivered || state == .read {
+                Image(systemName: "checkmark")
+            }
+        }
+        .foregroundStyle(
+            state == .read
+                ? Color(red: 83 / 255, green: 189 / 255, blue: 235 / 255)
+                : Color.platformSecondaryLabel
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(state.accessibilityLabel)
+        .help(state.accessibilityLabel)
     }
 }
 

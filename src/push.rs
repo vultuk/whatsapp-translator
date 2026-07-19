@@ -550,6 +550,7 @@ mod tests {
             translated_text: Some("Hello".to_string()),
             source_language: Some("Hungarian".to_string()),
             is_translated: true,
+            delivery_status: None,
         };
 
         let notification = PushNotification::from_message_with_avatar(
@@ -606,6 +607,7 @@ mod tests {
             translated_text: None,
             source_language: None,
             is_translated: false,
+            delivery_status: None,
         };
 
         let target_content = json!({"type": "text", "body": "Mother... slow down!"});

@@ -342,6 +342,7 @@ impl WhatsAppMcpServer {
             },
             source_language: target_language.clone(),
             is_translated: was_translated,
+            delivery_status: Some("sent".to_string()),
         };
 
         // Store the message

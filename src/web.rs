@@ -140,6 +140,10 @@ pub enum WebSocketEvent {
     MarkAsRead {
         chat_id: String,
     },
+    Receipt {
+        message_ids: Vec<String>,
+        status: String,
+    },
     SendResult {
         request_id: i32,
         success: bool,
@@ -567,6 +571,13 @@ impl AppState {
     /// Broadcast a new message
     pub fn broadcast_message(&self, message: StoredMessage) {
         let _ = self.broadcast_tx.send(live_event_for_message(message));
+    }
+
+    pub fn broadcast_receipt(&self, message_ids: Vec<String>, status: String) {
+        let _ = self.broadcast_tx.send(WebSocketEvent::Receipt {
+            message_ids,
+            status,
+        });
     }
 
     pub async fn send_push_notification(&self, message: &StoredMessage) {
@@ -1831,6 +1842,7 @@ async fn send_message(
         },
         source_language: target_language.clone(), // The language we translated TO
         is_translated: was_translated,
+        delivery_status: Some("sent".to_string()),
     };
 
     if let Err(e) = state.store.add_message(&stored_msg) {
@@ -1994,6 +2006,7 @@ async fn send_original_follow_up(
         translated_text: None,
         source_language: None,
         is_translated: false,
+        delivery_status: Some("sent".to_string()),
     };
 
     state
@@ -2157,6 +2170,7 @@ async fn send_image(
         translated_text: None,
         source_language: None,
         is_translated: false,
+        delivery_status: Some("sent".to_string()),
     };
 
     // Store the message
@@ -3920,6 +3934,7 @@ mod tests {
             translated_text: None,
             source_language: None,
             is_translated: false,
+            delivery_status: Some("sent".to_string()),
         }
     }
 

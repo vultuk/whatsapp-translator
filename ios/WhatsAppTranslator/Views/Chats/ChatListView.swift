@@ -21,6 +21,7 @@ struct ChatListView: View {
             .toolbar {
                 #if os(macOS)
                 ToolbarItemGroup(placement: .primaryAction) {
+                    updatesToolbarButton
                     Button("Refresh chats", systemImage: "arrow.clockwise") {
                         Task { await session.refresh() }
                     }
@@ -34,7 +35,8 @@ struct ChatListView: View {
                     .help("Settings")
                 }
                 #else
-                ToolbarItem(placement: platformTrailingToolbarPlacement) {
+                ToolbarItemGroup(placement: platformTrailingToolbarPlacement) {
+                    updatesToolbarButton
                     Button("Settings", systemImage: "gearshape") { showSettings = true }
                 }
                 #endif
@@ -60,6 +62,24 @@ struct ChatListView: View {
         .navigationSplitViewStyle(.balanced)
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
+        }
+    }
+
+    @ViewBuilder
+    private var updatesToolbarButton: some View {
+        if let updates = session.updatesContact {
+            Button {
+                session.selectedContactID = updates.id
+            } label: {
+                UpdatesToolbarIcon(unreadCount: updates.unreadCount)
+            }
+            .accessibilityLabel("Updates")
+            .accessibilityValue(
+                updates.unreadCount == 0
+                    ? "No unread updates"
+                    : "\(updates.unreadCount) unread"
+            )
+            .help("Updates")
         }
     }
 
@@ -140,6 +160,29 @@ struct ChatListView: View {
             }
         }
         .listStyle(.plain)
+    }
+}
+
+private struct UpdatesToolbarIcon: View {
+    @Environment(\.translatorPalette) private var palette
+    let unreadCount: Int
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Image(systemName: unreadCount > 0 ? "bell.fill" : "bell")
+                .frame(width: 28, height: 28)
+
+            if unreadCount > 0 {
+                Text(unreadCount > 99 ? "99+" : "\(unreadCount)")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .frame(minWidth: 16, minHeight: 16)
+                    .background(palette.accent, in: Capsule())
+                    .offset(x: 7, y: -5)
+            }
+        }
+        .padding(.trailing, unreadCount > 0 ? 7 : 0)
     }
 }
 

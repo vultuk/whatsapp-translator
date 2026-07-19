@@ -26,7 +26,10 @@ struct Contact: Codable, Identifiable, Hashable, Sendable {
     let pinnedAt: Int64?
     let lastMessagePreview: String?
 
-    var displayName: String { name?.nilIfBlank ?? phone?.nilIfBlank ?? "Unknown chat" }
+    var isUpdates: Bool { id.caseInsensitiveCompare("status@broadcast") == .orderedSame || type == "status" }
+    var showsAsUpdatesToolbarItem: Bool { isUpdates }
+    var showsInChatList: Bool { !isUpdates }
+    var displayName: String { isUpdates ? "Updates" : (name?.nilIfBlank ?? phone?.nilIfBlank ?? "Unknown chat") }
     var isGroup: Bool { type == "group" || id.contains("@g.us") }
     var initials: String {
         let parts = displayName.split(separator: " ").prefix(2)
@@ -72,7 +75,17 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     let translatedText: String?
     let sourceLanguage: String?
     let isTranslated: Bool
+    var deliveryStatus: String? = nil
     var reactions: [String: [String]]? = nil
+
+    var deliveryState: MessageDeliveryState {
+        guard isFromMe else { return .none }
+        return switch deliveryStatus?.lowercased() {
+        case "read", "played": .read
+        case "delivered": .delivered
+        default: .sent
+        }
+    }
 
     var displayText: String {
         let richFallback: String? = switch normalizedContentType {
@@ -109,6 +122,15 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     }
     var mediaKind: MessageMediaKind? { MessageMediaKind(rawValue: normalizedContentType) }
     var isImage: Bool { mediaKind == .image }
+    var standaloneEmojiText: String? {
+        guard normalizedContentType == "text", content?.replyContext == nil else { return nil }
+        let value = displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let characters = Array(value)
+        guard (1...3).contains(characters.count), characters.allSatisfy(\.isEmojiCharacter) else {
+            return nil
+        }
+        return value
+    }
     var canTranslate: Bool { !isFromMe && !isTranslated && contentText != nil }
     var canGenerateAIReply: Bool { !isFromMe && contentText != nil }
     var contentText: String? { content?.body?.nilIfBlank ?? content?.caption?.nilIfBlank }
@@ -149,6 +171,33 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
             let cleaned = value.trimmingCharacters(in: CharacterSet(charactersIn: "()[]{}<>,.!?;:\"'"))
             guard cleaned.hasPrefix("https://") || cleaned.hasPrefix("http://") else { return nil }
             return URL(string: cleaned)
+        }
+    }
+}
+
+private extension Character {
+    var isEmojiCharacter: Bool {
+        let scalars = unicodeScalars
+        if scalars.count == 1, let scalar = scalars.first, scalar.isASCII,
+           (scalar.properties.numericType != nil || scalar.value == 35 || scalar.value == 42) {
+            return false
+        }
+        return scalars.contains { $0.properties.isEmoji }
+    }
+}
+
+enum MessageDeliveryState: Equatable, Sendable {
+    case none
+    case sent
+    case delivered
+    case read
+
+    var accessibilityLabel: String {
+        switch self {
+        case .none: ""
+        case .sent: "Sent"
+        case .delivered: "Delivered"
+        case .read: "Read"
         }
     }
 }
@@ -384,6 +433,17 @@ struct LiveEvent: Decodable, Sendable {
     let connected: Bool?
     let chatId: String?
     let message: ChatMessage?
+    let messageIds: [String]?
+    let status: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case connected
+        case message
+        case status
+        case chatId = "chat_id"
+        case messageIds = "message_ids"
+    }
 }
 
 private extension String {

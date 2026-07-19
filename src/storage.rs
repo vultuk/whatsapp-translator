@@ -54,6 +54,8 @@ pub struct StoredMessage {
     pub source_language: Option<String>,
     #[serde(rename = "isTranslated")]
     pub is_translated: bool,
+    #[serde(rename = "deliveryStatus", default)]
+    pub delivery_status: Option<String>,
 }
 
 /// Stored contact
@@ -206,6 +208,7 @@ impl MessageStore {
                 chat_type TEXT,
                 content_type TEXT NOT NULL,
                 content_json TEXT NOT NULL,
+                delivery_status TEXT,
                 FOREIGN KEY (contact_id) REFERENCES contacts(id)
             );
 
@@ -319,6 +322,7 @@ impl MessageStore {
 
         // Add translation columns if they don't exist (migration for existing databases)
         self.migrate_add_translation_columns(&conn)?;
+        self.migrate_add_delivery_status_column(&conn)?;
         self.migrate_add_cached_usage_column(&conn)?;
 
         // Fix contact types based on JID suffix
@@ -339,6 +343,25 @@ impl MessageStore {
         // Add conversation settings columns.
         self.migrate_add_conversation_settings_columns(&conn)?;
 
+        Ok(())
+    }
+
+    fn migrate_add_delivery_status_column(&self, conn: &Connection) -> Result<()> {
+        let exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'delivery_status'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+            > 0;
+        if !exists {
+            conn.execute("ALTER TABLE messages ADD COLUMN delivery_status TEXT", [])?;
+        }
+        conn.execute(
+            "UPDATE messages SET delivery_status = 'sent' WHERE is_from_me = 1 AND delivery_status IS NULL",
+            [],
+        )?;
         Ok(())
     }
 
@@ -799,8 +822,8 @@ impl MessageStore {
             INSERT OR IGNORE INTO messages 
             (id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, sender_phone, 
              chat_type, content_type, content_json, original_text, translated_text, 
-             source_language, is_translated)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             source_language, is_translated, delivery_status)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             "#,
             params![
                 msg.id,
@@ -817,6 +840,7 @@ impl MessageStore {
                 msg.translated_text,
                 msg.source_language,
                 msg.is_translated,
+                msg.delivery_status,
             ],
         )?;
 
@@ -831,6 +855,29 @@ impl MessageStore {
         )?;
 
         Ok(())
+    }
+
+    pub fn update_delivery_status(&self, message_ids: &[String], status: &str) -> Result<usize> {
+        if message_ids.is_empty() || !matches!(status, "delivered" | "read") {
+            return Ok(0);
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut updated = 0;
+        for message_id in message_ids {
+            updated += conn.execute(
+                r#"
+                UPDATE messages
+                SET delivery_status = CASE
+                    WHEN delivery_status = 'read' THEN 'read'
+                    WHEN ?2 = 'read' THEN 'read'
+                    ELSE 'delivered'
+                END
+                WHERE id = ?1 AND is_from_me = 1
+                "#,
+                params![message_id, status],
+            )?;
+        }
+        Ok(updated)
     }
 
     /// Update the translation for an existing message
@@ -1358,7 +1405,7 @@ impl MessageStore {
             r#"
             SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
                    sender_phone, chat_type, content_type, content_json, original_text,
-                   translated_text, source_language, is_translated
+                   translated_text, source_language, is_translated, delivery_status
             FROM messages
             WHERE contact_id = ? {cursor_clause}
             {order_clause}
@@ -1402,6 +1449,7 @@ impl MessageStore {
                 translated_text: row.get(11)?,
                 source_language: row.get(12)?,
                 is_translated: row.get(13)?,
+                delivery_status: row.get(14)?,
             })
         };
 
@@ -2255,7 +2303,7 @@ impl MessageStore {
             r#"
             SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
                    sender_phone, chat_type, content_type, content_json, original_text,
-                   translated_text, source_language, is_translated
+                   translated_text, source_language, is_translated, delivery_status
             FROM messages
             WHERE is_from_me = 1 
               AND contact_id = ?
@@ -2268,7 +2316,7 @@ impl MessageStore {
             r#"
             SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
                    sender_phone, chat_type, content_type, content_json, original_text,
-                   translated_text, source_language, is_translated
+                   translated_text, source_language, is_translated, delivery_status
             FROM messages
             WHERE is_from_me = 1 
               AND content_type = 'Text'
@@ -2311,7 +2359,7 @@ impl MessageStore {
         let query = r#"
             SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
                    sender_phone, chat_type, content_type, content_json, original_text,
-                   translated_text, source_language, is_translated
+                   translated_text, source_language, is_translated, delivery_status
             FROM messages
             WHERE contact_id = ?
               AND content_type = 'Text'
@@ -2377,6 +2425,7 @@ impl MessageStore {
             translated_text: row.get(11)?,
             source_language: row.get(12)?,
             is_translated: row.get::<_, i32>(13).unwrap_or(0) != 0,
+            delivery_status: row.get(14)?,
         })
     }
 
@@ -2388,7 +2437,7 @@ impl MessageStore {
             r#"
             SELECT m.id, m.contact_id, m.timestamp, m.is_from_me, m.is_forwarded, m.sender_name,
                    m.sender_phone, m.chat_type, m.content_type, m.content_json, m.original_text,
-                   m.translated_text, m.source_language, m.is_translated,
+                   m.translated_text, m.source_language, m.is_translated, m.delivery_status,
                    c.name as contact_name, c.phone as contact_phone
             FROM messages m
             LEFT JOIN contacts c ON m.contact_id = c.id
@@ -2396,8 +2445,8 @@ impl MessageStore {
             "#,
             params![message_id],
             |row| {
-                let contact_name: Option<String> = row.get(14)?;
-                let contact_phone: Option<String> = row.get(15)?;
+                let contact_name: Option<String> = row.get(15)?;
+                let contact_phone: Option<String> = row.get(16)?;
                 Self::row_to_stored_message(row, contact_name, contact_phone)
             },
         );
@@ -2432,7 +2481,7 @@ impl MessageStore {
             r#"
             SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
                    sender_phone, chat_type, content_type, content_json, original_text,
-                   translated_text, source_language, is_translated
+                   translated_text, source_language, is_translated, delivery_status
             FROM messages
             WHERE contact_id = ?
             ORDER BY timestamp DESC, id DESC
@@ -2497,6 +2546,7 @@ mod tests {
             translated_text: None,
             source_language: None,
             is_translated: false,
+            delivery_status: None,
         }
     }
 
@@ -2642,6 +2692,42 @@ mod tests {
             .expect("contact");
         assert_eq!(contact.last_message_time, 1_700_000_005_000);
         assert_eq!(contact.last_message_preview.as_deref(), Some("pending_1"));
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn delivery_status_advances_without_regressing() {
+        let (store, data_dir) = test_store();
+        insert_test_contact(&store);
+        let mut message = test_message("outgoing_1", 1_700_000_000_000);
+        message.is_from_me = true;
+        message.delivery_status = Some("sent".to_string());
+        store
+            .add_message(&message)
+            .expect("insert outgoing message");
+
+        assert_eq!(
+            store
+                .update_delivery_status(&["outgoing_1".to_string()], "delivered")
+                .expect("mark delivered"),
+            1
+        );
+        assert_eq!(
+            store
+                .update_delivery_status(&["outgoing_1".to_string()], "read")
+                .expect("mark read"),
+            1
+        );
+        store
+            .update_delivery_status(&["outgoing_1".to_string()], "delivered")
+            .expect("ignore stale delivered receipt");
+
+        let stored = store
+            .get_message_by_id("outgoing_1")
+            .expect("query message")
+            .expect("stored message");
+        assert_eq!(stored.delivery_status.as_deref(), Some("read"));
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

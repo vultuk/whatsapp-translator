@@ -38,6 +38,7 @@ final class AppSession {
     private let api: APIClient
     private let credentials: CredentialStore
     private let cache: ChatCacheStore
+    private let mediaCache: MediaCacheStore
     private let demoMode: Bool
     private let demoConversationMode: Bool
     private var avatarRequests: Set<String> = []
@@ -49,6 +50,7 @@ final class AppSession {
         api: APIClient = APIClient(),
         credentials: CredentialStore = CredentialStore(),
         cache: ChatCacheStore = .shared,
+        mediaCache: MediaCacheStore = .shared,
         draftStore: DraftStore = DraftStore(),
         preferences: AppPreferencesStore = AppPreferencesStore(),
         demoMode: Bool = ProcessInfo.processInfo.arguments.contains("-demo")
@@ -56,6 +58,7 @@ final class AppSession {
         self.api = api
         self.credentials = credentials
         self.cache = cache
+        self.mediaCache = mediaCache
         self.draftStore = draftStore
         self.preferences = preferences
         self.demoMode = demoMode
@@ -64,12 +67,16 @@ final class AppSession {
 
     var filteredContacts: [Contact] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ordered = Self.orderedContacts(contacts)
+        let ordered = Self.orderedContacts(contacts.filter(\.showsInChatList))
         guard !query.isEmpty else { return ordered }
         return ordered.filter {
             displayName(for: $0).localizedCaseInsensitiveContains(query)
                 || ($0.lastMessagePreview?.localizedCaseInsensitiveContains(query) ?? false)
         }
+    }
+
+    var updatesContact: Contact? {
+        contacts.first(where: \.showsAsUpdatesToolbarItem)
     }
 
     static func orderedContacts(_ contacts: [Contact]) -> [Contact] {
@@ -92,7 +99,8 @@ final class AppSession {
     }
 
     func displayName(for contact: Contact) -> String {
-        preferences.nickname(for: contact.id) ?? contact.displayName
+        if contact.isUpdates { return contact.displayName }
+        return preferences.nickname(for: contact.id) ?? contact.displayName
     }
 
     func localTimeDescription(for contactID: String) -> String? {
@@ -173,6 +181,12 @@ final class AppSession {
                 contacts[index].unreadCount = 0
             }
             try? await api.markRead(contactID: contactID)
+            #if os(iOS)
+            await PushNotificationCoordinator.shared.markConversationRead(
+                contactID: contactID,
+                badgeCount: contacts.reduce(0) { $0 + max(0, $1.unreadCount) }
+            )
+            #endif
             await persistCache()
         } catch {
             guard !Self.isExpectedCancellation(error) else { return }
@@ -285,7 +299,7 @@ final class AppSession {
         if demoMode {
             let message = ChatMessage.demoImage(contactID: contactID)
             messages[contactID, default: []].append(message)
-            messageImages[message.id] = PlatformImage(data: data)
+            await storeMedia(data, mimeType: mimeType, for: message)
             return true
         }
 
@@ -361,8 +375,14 @@ final class AppSession {
               messageMediaURLs[message.id] == nil,
               !mediaRequests.contains(message.id) else { return }
         mediaErrorIDs.remove(message.id)
+        if let cachedURL = try? await mediaCache.cachedURL(for: message.id) {
+            if restoreCachedMedia(from: cachedURL, for: message) {
+                return
+            }
+            try? await mediaCache.remove(messageID: message.id)
+        }
         if let base64 = message.content?.mediaData, let data = Data(base64Encoded: base64) {
-            storeMedia(data, mimeType: message.content?.mimeType, for: message)
+            await storeMedia(data, mimeType: message.content?.mimeType, for: message)
             return
         }
         guard message.content?.hasMedia == true, !demoMode else { return }
@@ -377,7 +397,7 @@ final class AppSession {
             guard let data = Data(base64Encoded: response.mediaData) else {
                 throw APIError.decoding("The media payload was invalid.")
             }
-            storeMedia(data, mimeType: response.mimeType, for: message)
+            await storeMedia(data, mimeType: response.mimeType, for: message)
         } catch {
             mediaErrorIDs.insert(message.id)
         }
@@ -387,6 +407,7 @@ final class AppSession {
         messageImages.removeValue(forKey: message.id)
         messageMediaURLs.removeValue(forKey: message.id)
         mediaErrorIDs.remove(message.id)
+        try? await mediaCache.remove(messageID: message.id)
         await loadMedia(for: message)
     }
 
@@ -441,6 +462,7 @@ final class AppSession {
         Task {
             await api.disconnectLiveEvents()
             await cache.clear()
+            await mediaCache.clear()
         }
         credentials.clear()
         configuration = nil
@@ -551,14 +573,79 @@ final class AppSession {
         case "mark_as_read":
             if let id = event.chatId, let index = contacts.firstIndex(where: { $0.id == id }) {
                 contacts[index].unreadCount = 0
+                #if os(iOS)
+                let badgeCount = contacts.reduce(0) { $0 + max(0, $1.unreadCount) }
+                Task {
+                    await PushNotificationCoordinator.shared.markConversationRead(
+                        contactID: id,
+                        badgeCount: badgeCount
+                    )
+                }
+                #endif
                 persistCacheSoon()
             }
+        case "receipt":
+            guard let status = event.status?.lowercased(),
+                  matchesDeliveryStatus(status),
+                  let messageIDs = event.messageIds,
+                  !messageIDs.isEmpty else { return }
+            let receiptIDs = Set(messageIDs)
+            var didUpdate = false
+            for contactID in Array(messages.keys) {
+                guard var conversation = messages[contactID] else { continue }
+                var conversationUpdated = false
+                for index in conversation.indices where conversation[index].isFromMe && receiptIDs.contains(conversation[index].id) {
+                    let current = conversation[index].deliveryStatus?.lowercased()
+                    guard deliveryStatusRank(status) > deliveryStatusRank(current) else { continue }
+                    conversation[index].deliveryStatus = status
+                    conversationUpdated = true
+                }
+                if conversationUpdated {
+                    messages[contactID] = conversation
+                    didUpdate = true
+                }
+            }
+            if didUpdate { persistCacheSoon() }
         default:
             break
         }
     }
 
-    private func storeMedia(_ data: Data, mimeType: String?, for message: ChatMessage) {
+    private func matchesDeliveryStatus(_ status: String) -> Bool {
+        status == "delivered" || status == "read" || status == "played"
+    }
+
+    private func deliveryStatusRank(_ status: String?) -> Int {
+        switch status {
+        case "read", "played": 3
+        case "delivered": 2
+        case "sent": 1
+        default: 0
+        }
+    }
+
+    private func restoreCachedMedia(from url: URL, for message: ChatMessage) -> Bool {
+        switch message.mediaKind {
+        case .image, .sticker:
+            guard let data = try? Data(contentsOf: url), let image = PlatformImage(data: data) else {
+                return false
+            }
+            messageImages[message.id] = image
+            return true
+        case .video, .audio, .document:
+            messageMediaURLs[message.id] = url
+            return true
+        case nil:
+            return false
+        }
+    }
+
+    private func storeMedia(_ data: Data, mimeType: String?, for message: ChatMessage) async {
+        let preferredExtension = message.content?.fileName
+            .flatMap { URL(fileURLWithPath: $0).pathExtension.nilIfBlank }
+            ?? mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
+            ?? defaultMediaExtension(for: message.mediaKind)
+
         switch message.mediaKind {
         case .image, .sticker:
             guard let image = PlatformImage(data: data) else {
@@ -566,24 +653,40 @@ final class AppSession {
                 return
             }
             messageImages[message.id] = image
-        case .video, .audio, .document:
-            let fileManager = FileManager.default
-            let directory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                .appending(path: "MessageMedia", directoryHint: .isDirectory)
             do {
-                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-                let preferredExtension = message.content?.fileName
-                    .flatMap { URL(fileURLWithPath: $0).pathExtension.nilIfBlank }
-                    ?? mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
-                    ?? "bin"
-                let url = directory.appending(path: "\(message.id.filenameSafe).\(preferredExtension.filenameSafe)")
-                try data.write(to: url, options: .atomic)
+                _ = try await mediaCache.store(
+                    data,
+                    messageID: message.id,
+                    fileExtension: preferredExtension
+                )
+            } catch {
+                #if DEBUG
+                print("Media cache write failed: \(error.localizedDescription)")
+                #endif
+            }
+        case .video, .audio, .document:
+            do {
+                let url = try await mediaCache.store(
+                    data,
+                    messageID: message.id,
+                    fileExtension: preferredExtension
+                )
                 messageMediaURLs[message.id] = url
             } catch {
                 mediaErrorIDs.insert(message.id)
             }
         case nil:
             break
+        }
+    }
+
+    private func defaultMediaExtension(for kind: MessageMediaKind?) -> String {
+        switch kind {
+        case .image: "jpg"
+        case .sticker: "webp"
+        case .video: "mp4"
+        case .audio: "m4a"
+        case .document, nil: "bin"
         }
     }
 
@@ -697,7 +800,7 @@ final class AppSession {
             messageImages[imageMessage.id] = demoPhoto()
         }
         if demoConversationMode {
-            selectedContactID = contacts.first?.id
+            selectedContactID = contacts.first(where: \.showsInChatList)?.id
             if ProcessInfo.processInfo.arguments.contains("-demoSending"),
                let selectedContactID {
                 sendingContactIDs.insert(selectedContactID)
@@ -713,6 +816,7 @@ final class AppSession {
 
 private extension Contact {
     static let demoContacts = [
+        Contact(id: "status@broadcast", name: nil, phone: nil, type: "broadcast", lastMessageTime: 1_783_941_000_000, unreadCount: 7, pinnedAt: nil, lastMessagePreview: "A status update"),
         Contact(id: "virag@s.whatsapp.net", name: "Virág Skinner", phone: "+36 30 555 0142", type: "private", lastMessageTime: 1_783_940_400_000, unreadCount: 2, pinnedAt: 1, lastMessagePreview: "Perfect, I’ll be there just after six."),
         Contact(id: "family@g.us", name: "The Skinners", phone: nil, type: "group", lastMessageTime: 1_783_936_860_000, unreadCount: 0, pinnedAt: nil, lastMessagePreview: "Eileen: Photo"),
         Contact(id: "anyu@s.whatsapp.net", name: "Anyu", phone: "+36 20 555 0181", type: "private", lastMessageTime: 1_783_850_000_000, unreadCount: 1, pinnedAt: nil, lastMessagePreview: "Nagyon köszönöm ❤️"),
@@ -724,11 +828,11 @@ private extension ChatMessage {
     static let demoMessages: [String: [ChatMessage]] = [
         "virag@s.whatsapp.net": [
             demo(id: "1", contactID: "virag@s.whatsapp.net", timestamp: 1_783_939_620_000, fromMe: false, body: "Mikor érkezel?", translated: "What time will you arrive?", sender: "Virág"),
-            demo(id: "2", contactID: "virag@s.whatsapp.net", timestamp: 1_783_939_740_000, fromMe: true, body: "Probably just after six — I’ll message when I leave.", translated: "Valószínűleg nem sokkal hat után — írok, amikor elindulok.", sender: nil),
+            demo(id: "2", contactID: "virag@s.whatsapp.net", timestamp: 1_783_939_740_000, fromMe: true, body: "Probably just after six — I’ll message when I leave.", translated: "Valószínűleg nem sokkal hat után — írok, amikor elindulok.", sender: nil, deliveryStatus: "read"),
             demo(id: "link", contactID: "virag@s.whatsapp.net", timestamp: 1_783_939_900_000, fromMe: false, body: "This looks lovely: https://example.com/weekend", translated: nil, sender: "Virág"),
             demoImage(contactID: "virag@s.whatsapp.net", id: "image", timestamp: 1_783_940_100_000),
             demo(id: "3", contactID: "virag@s.whatsapp.net", timestamp: 1_783_940_400_000, fromMe: false, body: "Tökéletes, akkor hat után várlak.", translated: "Perfect, I’ll be there just after six.", sender: "Virág"),
-            demo(id: "4", contactID: "virag@s.whatsapp.net", timestamp: 1_783_940_520_000, fromMe: false, body: "Még tíz perc, és indulok.", translated: nil, sender: "Virág"),
+            demo(id: "4", contactID: "virag@s.whatsapp.net", timestamp: 1_783_940_520_000, fromMe: false, body: "😉", translated: nil, sender: "Virág", chatType: "group"),
         ]
     ]
 
@@ -791,7 +895,7 @@ private extension ChatMessage {
         )
     }
 
-    static func demo(id: String, contactID: String, timestamp: Int64, fromMe: Bool, body: String, translated: String?, sender: String?) -> ChatMessage {
+    static func demo(id: String, contactID: String, timestamp: Int64, fromMe: Bool, body: String, translated: String?, sender: String?, deliveryStatus: String? = nil, chatType: String = "private") -> ChatMessage {
         ChatMessage(
             id: id,
             contactId: contactID,
@@ -802,13 +906,14 @@ private extension ChatMessage {
             senderPhone: nil,
             contactName: nil,
             contactPhone: nil,
-            chatType: "private",
+            chatType: chatType,
             contentType: "Text",
             content: MessageContent(type: "text", body: body, showTranslatedPrimary: nil, replyContext: nil),
             originalText: translated == nil ? nil : body,
             translatedText: translated,
             sourceLanguage: translated == nil ? nil : "Hungarian",
-            isTranslated: translated != nil
+            isTranslated: translated != nil,
+            deliveryStatus: deliveryStatus
         )
     }
 }
@@ -818,9 +923,4 @@ private extension String {
         trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self
     }
 
-    var filenameSafe: String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        let value = unicodeScalars.map { allowed.contains($0) ? Character(String($0)) : "_" }
-        return String(value)
-    }
 }

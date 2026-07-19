@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 // Event types sent to Rust CLI (via stdout)
@@ -148,6 +150,13 @@ type ChatPresenceEvent struct {
 	State  string `json:"state"`   // "typing", "paused", or "recording"
 }
 
+// ReceiptEvent reports delivery/read progress for outgoing messages.
+type ReceiptEvent struct {
+	Type       string            `json:"type"`
+	MessageIDs []types.MessageID `json:"message_ids"`
+	Status     string            `json:"status"`
+}
+
 // Command types received from Rust CLI (via stdin)
 
 // Command represents a command from the Rust CLI
@@ -250,6 +259,14 @@ func NewChatPresenceEvent(chatID, userID, state string) ChatPresenceEvent {
 		UserID: userID,
 		State:  state,
 	}
+}
+
+func NewReceiptEvent(messageIDs []types.MessageID, receiptType types.ReceiptType) ReceiptEvent {
+	status := "delivered"
+	if receiptType == types.ReceiptTypeRead || receiptType == types.ReceiptTypePlayed {
+		status = "read"
+	}
+	return ReceiptEvent{Type: "receipt", MessageIDs: messageIDs, Status: status}
 }
 
 // MarkAsReadEvent is sent when a chat is marked as read from another device

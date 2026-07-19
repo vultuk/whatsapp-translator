@@ -50,6 +50,12 @@ pub enum BridgeEvent {
         state: ChatPresenceState,
     },
 
+    /// Delivery/read progress for outgoing messages.
+    Receipt {
+        message_ids: Vec<String>,
+        status: String,
+    },
+
     /// Chat marked as read from another device
     MarkAsRead { chat_id: String },
 
@@ -413,5 +419,20 @@ mod tests {
         }"#;
         let event: BridgeEvent = serde_json::from_str(json).unwrap();
         assert!(matches!(event, BridgeEvent::Message(_)));
+    }
+
+    #[test]
+    fn test_parse_delivery_receipt() {
+        let json = r#"{
+            "type": "receipt",
+            "message_ids": ["message-1", "message-2"],
+            "status": "read"
+        }"#;
+        let event: BridgeEvent = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            event,
+            BridgeEvent::Receipt { message_ids, status }
+                if message_ids == vec!["message-1", "message-2"] && status == "read"
+        ));
     }
 }

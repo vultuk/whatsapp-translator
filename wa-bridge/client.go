@@ -171,7 +171,9 @@ func (c *Client) handleEvent(evt interface{}) {
 		c.handleMessage(v)
 
 	case *events.Receipt:
-		// Delivery/read receipts - could be useful in future
+		if v.Type == types.ReceiptTypeDelivered || v.Type == types.ReceiptTypeRead || v.Type == types.ReceiptTypePlayed {
+			SendEvent(NewReceiptEvent(v.MessageIDs, v.Type))
+		}
 		if c.verbose {
 			SendEvent(NewLogEvent("debug", fmt.Sprintf("Receipt: %s from %s", v.Type, v.Sender)))
 		}

@@ -430,6 +430,14 @@ async fn handle_web_event(
             // Broadcast to WebSocket clients so UI updates
             state.broadcast_mark_as_read(chat_id);
         }
+
+        BridgeEvent::Receipt {
+            message_ids,
+            status,
+        } => {
+            store.update_delivery_status(&message_ids, &status)?;
+            state.broadcast_receipt(message_ids, status);
+        }
     }
 
     Ok(())
@@ -575,6 +583,7 @@ async fn process_message(
         translated_text,
         source_language,
         is_translated,
+        delivery_status: msg.is_from_me.then(|| "sent".to_string()),
     }
 }
 
@@ -827,6 +836,13 @@ async fn handle_terminal_event(
             // Mark-as-read events are only used in web mode
             debug!("Ignoring mark-as-read event in terminal mode");
         }
+
+        BridgeEvent::Receipt {
+            message_ids,
+            status,
+        } => {
+            debug!("Receipt {:?}: {}", message_ids, status);
+        }
     }
 
     Ok(())
@@ -939,6 +955,14 @@ impl serde::Serialize for BridgeEvent {
             BridgeEvent::MarkAsRead { chat_id } => {
                 map.serialize_entry("type", "mark_as_read")?;
                 map.serialize_entry("chat_id", chat_id)?;
+            }
+            BridgeEvent::Receipt {
+                message_ids,
+                status,
+            } => {
+                map.serialize_entry("type", "receipt")?;
+                map.serialize_entry("message_ids", message_ids)?;
+                map.serialize_entry("status", status)?;
             }
         }
 

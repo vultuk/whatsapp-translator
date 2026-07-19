@@ -5,6 +5,68 @@ import UserNotifications
 @testable import WhatsAppTranslator
 
 final class WhatsAppTranslatorTests: XCTestCase {
+    func testStandaloneEmojiPresentationAcceptsUpToThreeEmojiOnly() {
+        func message(_ body: String) -> ChatMessage {
+            ChatMessage(
+                id: UUID().uuidString,
+                contactId: "family@g.us",
+                timestamp: 1_700_000_000_000,
+                isFromMe: false,
+                isForwarded: false,
+                senderName: "Virág",
+                senderPhone: nil,
+                contactName: "Family",
+                contactPhone: nil,
+                chatType: "group",
+                contentType: "Text",
+                content: MessageContent(type: "text", body: body, showTranslatedPrimary: nil, replyContext: nil),
+                originalText: nil,
+                translatedText: nil,
+                sourceLanguage: nil,
+                isTranslated: false
+            )
+        }
+
+        XCTAssertEqual(message("😉").standaloneEmojiText, "😉")
+        XCTAssertEqual(message("👨‍👩‍👧‍👦👍🏽🥳").standaloneEmojiText, "👨‍👩‍👧‍👦👍🏽🥳")
+        XCTAssertNil(message("😀😃🥳❤️").standaloneEmojiText)
+        XCTAssertNil(message("Hello 👋").standaloneEmojiText)
+        XCTAssertNil(message("123").standaloneEmojiText)
+    }
+
+    func testMediaCachePersistsAcrossStoreInstancesAndEvictsOldestFiles() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "MediaCacheTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let firstStore = MediaCacheStore(directoryURL: root, maximumBytes: 7)
+        let firstURL = try await firstStore.store(
+            Data([1, 2, 3, 4]),
+            messageID: "message/one",
+            fileExtension: "jpg"
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1)],
+            ofItemAtPath: firstURL.path
+        )
+
+        let relaunchedStore = MediaCacheStore(directoryURL: root, maximumBytes: 7)
+        let cachedURL = try await relaunchedStore.cachedURL(for: "message/one")
+        let restoredURL = try XCTUnwrap(cachedURL)
+        XCTAssertEqual(try Data(contentsOf: restoredURL), Data([1, 2, 3, 4]))
+
+        _ = try await relaunchedStore.store(
+            Data([5, 6, 7, 8]),
+            messageID: "message/two",
+            fileExtension: "mp4"
+        )
+
+        let evictedURL = try await relaunchedStore.cachedURL(for: "message/one")
+        let retainedURL = try await relaunchedStore.cachedURL(for: "message/two")
+        XCTAssertNil(evictedURL)
+        XCTAssertNotNil(retainedURL)
+    }
+
     func testExpectedRequestCancellationsDoNotBecomeUserFacingErrors() {
         XCTAssertTrue(AppSession.isExpectedCancellation(CancellationError()))
         XCTAssertTrue(AppSession.isExpectedCancellation(URLError(.cancelled)))
@@ -64,6 +126,36 @@ final class WhatsAppTranslatorTests: XCTestCase {
         let message = try JSONDecoder().decode(ChatMessage.self, from: messageData)
         XCTAssertEqual(message.displayText, "Hello")
         XCTAssertEqual(message.alternateText, "Szia")
+    }
+
+    func testOutgoingMessageDecodesDeliveryAndReadStates() throws {
+        let delivered = try JSONDecoder().decode(
+            ChatMessage.self,
+            from: Data(#"{"id":"m1","contactId":"chat@g.us","timestamp":1700000000000,"isFromMe":true,"isForwarded":false,"senderName":null,"senderPhone":null,"contactName":"Family","contactPhone":null,"chatType":"group","contentType":"Text","content":{"type":"text","body":"Hello"},"originalText":null,"translatedText":null,"sourceLanguage":null,"isTranslated":false,"deliveryStatus":"delivered"}"#.utf8)
+        )
+        let read = try JSONDecoder().decode(
+            ChatMessage.self,
+            from: Data(#"{"id":"m2","contactId":"chat@g.us","timestamp":1700000000000,"isFromMe":true,"isForwarded":false,"senderName":null,"senderPhone":null,"contactName":"Family","contactPhone":null,"chatType":"group","contentType":"Text","content":{"type":"text","body":"Hello"},"originalText":null,"translatedText":null,"sourceLanguage":null,"isTranslated":false,"deliveryStatus":"read"}"#.utf8)
+        )
+
+        XCTAssertEqual(delivered.deliveryState, .delivered)
+        XCTAssertEqual(read.deliveryState, .read)
+        XCTAssertEqual(read.deliveryState.accessibilityLabel, "Read")
+    }
+
+    func testLiveReceiptAndReadEventsDecodeBackendFieldNames() throws {
+        let receipt = try JSONDecoder().decode(
+            LiveEvent.self,
+            from: Data(#"{"type":"receipt","message_ids":["m1","m2"],"status":"read"}"#.utf8)
+        )
+        let markRead = try JSONDecoder().decode(
+            LiveEvent.self,
+            from: Data(#"{"type":"mark_as_read","chat_id":"family@g.us"}"#.utf8)
+        )
+
+        XCTAssertEqual(receipt.messageIds, ["m1", "m2"])
+        XCTAssertEqual(receipt.status, "read")
+        XCTAssertEqual(markRead.chatId, "family@g.us")
     }
 
     func testDraftStorePersistsAndRemovesPerChatDrafts() throws {
@@ -155,6 +247,22 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(routing?.senderName, "Virág")
         XCTAssertEqual(routing?.conversationName, "The Skinners")
         XCTAssertTrue(routing?.isGroup == true)
+    }
+
+    func testReadingConversationRemovesOnlyItsDeliveredNotifications() {
+        let deliveries = [
+            DeliveredMessagingNotification(identifier: "family-message-1", contactID: "family@g.us"),
+            DeliveredMessagingNotification(identifier: "family-message-2", contactID: "family@g.us"),
+            DeliveredMessagingNotification(identifier: "virag-message-1", contactID: "virag@s.whatsapp.net"),
+        ]
+
+        XCTAssertEqual(
+            MessagingNotificationReadState.identifiersToRemove(
+                for: "family@g.us",
+                from: deliveries
+            ),
+            ["family-message-1", "family-message-2"]
+        )
     }
 
     func testChatCachePersistsMessagesForTheConfiguredServer() async throws {
@@ -411,6 +519,23 @@ final class WhatsAppTranslatorTests: XCTestCase {
             APIClient.pinPath(contactID: "family/parents@g.us"),
             "/api/contacts/family%2Fparents@g.us/pin"
         )
+    }
+
+    func testWhatsAppStatusFeedBecomesDedicatedUpdatesToolbarItem() {
+        let updates = Contact(
+            id: "status@broadcast",
+            name: nil,
+            phone: nil,
+            type: "broadcast",
+            lastMessageTime: 50,
+            unreadCount: 2,
+            pinnedAt: nil,
+            lastMessagePreview: "A status preview that must not be shown"
+        )
+        XCTAssertTrue(updates.isUpdates)
+        XCTAssertEqual(updates.displayName, "Updates")
+        XCTAssertTrue(updates.showsAsUpdatesToolbarItem)
+        XCTAssertFalse(updates.showsInChatList)
     }
 
     func testMessageExtractsEveryLinkForMultiplePreviewCards() throws {

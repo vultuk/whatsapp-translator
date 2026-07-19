@@ -46,6 +46,22 @@ struct MessagingNotificationRouting: Sendable {
     }
 }
 
+struct DeliveredMessagingNotification: Equatable, Sendable {
+    let identifier: String
+    let contactID: String
+}
+
+enum MessagingNotificationReadState {
+    static func identifiersToRemove(
+        for contactID: String,
+        from notifications: [DeliveredMessagingNotification]
+    ) -> [String] {
+        notifications.compactMap { notification in
+            notification.contactID == contactID ? notification.identifier : nil
+        }
+    }
+}
+
 private final class NotificationCompletion: @unchecked Sendable {
     private let handler: () -> Void
 
@@ -132,6 +148,28 @@ final class PushNotificationCoordinator {
 
     func backgroundCacheDidRefresh() async {
         _ = await session?.restoreCachedState()
+    }
+
+    func markConversationRead(contactID: String, badgeCount: Int) async {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications()
+        let messagingNotifications = delivered.compactMap { notification -> DeliveredMessagingNotification? in
+            guard let routing = MessagingNotificationRouting(
+                userInfo: notification.request.content.userInfo
+            ) else { return nil }
+            return DeliveredMessagingNotification(
+                identifier: notification.request.identifier,
+                contactID: routing.contactID
+            )
+        }
+        let identifiers = MessagingNotificationReadState.identifiersToRemove(
+            for: contactID,
+            from: messagingNotifications
+        )
+        if !identifiers.isEmpty {
+            center.removeDeliveredNotifications(withIdentifiers: identifiers)
+        }
+        try? await center.setBadgeCount(max(0, badgeCount))
     }
 
     func reply(text: String, to contactID: String) async -> Bool {
