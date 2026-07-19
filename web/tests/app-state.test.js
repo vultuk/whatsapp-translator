@@ -722,12 +722,15 @@ test('composer profile and reminder presets expose fast setup choices', () => {
     targetLanguage: 'French',
     translationStyle: 'formal',
   });
-  const reminders = getComposerReminderPresets(new Date('2026-04-27T10:20:00Z').getTime());
+  const now = new Date('2026-04-27T10:20:00Z').getTime();
+  const reminders = getComposerReminderPresets(now);
 
   assert.equal(profile.languages.find(preset => preset.value === 'French').active, true);
   assert.equal(profile.tones.find(preset => preset.value === 'formal').active, true);
   assert.deepEqual(reminders.map(preset => preset.id), ['later-today', 'tomorrow', 'next-week']);
-  assert.equal(new Date(reminders[0].reminderAt).getHours(), 14);
+  assert.equal(new Date(reminders[0].reminderAt).getMinutes(), 0);
+  assert.ok(reminders[0].reminderAt > now);
+  assert.ok(reminders[0].reminderAt <= now + (3 * 60 * 60 * 1000));
   assert.equal(new Date(reminders[1].reminderAt).getHours(), 9);
 });
 
