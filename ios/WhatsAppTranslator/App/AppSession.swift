@@ -308,7 +308,7 @@ final class AppSession {
             return false
         }
         guard images.allSatisfy({ !$0.data.isEmpty && $0.data.count <= 16 * 1_024 * 1_024 }) else {
-            presentError("Couldn’t send photos", "Each photo must be smaller than 16 MB.")
+            presentError("Couldn’t send photos", "One of the photos couldn’t be reduced enough for WhatsApp.")
             return false
         }
         guard images.reduce(0, { $0 + $1.data.count }) <= 64 * 1_024 * 1_024 else {

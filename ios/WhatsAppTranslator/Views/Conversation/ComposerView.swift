@@ -61,9 +61,10 @@ struct ComposerView: View {
             Task {
                 defer { selectedPhotos = [] }
                 var prepared: [PendingPhoto] = []
+                let maximumBytes = PhotoUploadPreparer.maximumBytes(forPhotoCount: items.count)
                 for item in items {
-                    guard let photo = await preparePhoto(item) else {
-                        pickerError = "One of the selected photos couldn’t be read. Please choose the photos again."
+                    guard let photo = await preparePhoto(item, maximumBytes: maximumBytes) else {
+                        pickerError = "One of the selected photos couldn’t be prepared for sending. Please choose the photos again."
                         return
                     }
                     prepared.append(photo)
@@ -81,12 +82,16 @@ struct ComposerView: View {
         }
         .task {
             let arguments = ProcessInfo.processInfo.arguments
-            guard arguments.contains("-demoImageComposer") || arguments.contains("-demoImageAlbumComposer"), pendingPhotos == nil else { return }
+            guard arguments.contains("-demoImageComposer")
+                    || arguments.contains("-demoImageAlbumComposer")
+                    || arguments.contains("-demoOptimizedPhotoComposer"),
+                  pendingPhotos == nil else { return }
             let count = arguments.contains("-demoImageAlbumComposer") ? 4 : 1
+            let showOptimized = arguments.contains("-demoOptimizedPhotoComposer")
             let photos = (0..<count).compactMap { index -> PendingPhoto? in
                 let image = DemoImageFactory.landscape(size: CGSize(width: 800 - index * 80, height: 600 + index * 40))
                 guard let data = image.platformJPEGData(compressionQuality: 0.9) else { return nil }
-                return PendingPhoto(data: data, mimeType: "image/jpeg", image: image)
+                return PendingPhoto(data: data, mimeType: "image/jpeg", image: image, wasOptimized: showOptimized)
             }
             pendingPhotos = PendingPhotoSelection(photos: photos)
         }
@@ -210,19 +215,24 @@ struct ComposerView: View {
         Binding(get: { pickerError != nil }, set: { if !$0 { pickerError = nil } })
     }
 
-    private func preparePhoto(_ item: PhotosPickerItem) async -> PendingPhoto? {
+    private func preparePhoto(_ item: PhotosPickerItem, maximumBytes: Int) async -> PendingPhoto? {
         guard let data = try? await item.loadTransferable(type: Data.self),
               let image = PlatformImage(data: data) else {
             return nil
         }
-        let allowed = ["image/jpeg", "image/png", "image/gif", "image/webp"]
-        if let mimeType = item.supportedContentTypes
-            .first(where: { type in type.preferredMIMEType.map(allowed.contains) ?? false })?
-            .preferredMIMEType {
-            return PendingPhoto(data: data, mimeType: mimeType, image: image)
-        }
-        guard let jpeg = image.platformJPEGData(compressionQuality: 0.9) else { return nil }
-        return PendingPhoto(data: jpeg, mimeType: "image/jpeg", image: image)
+        let mimeType = item.supportedContentTypes.compactMap(\.preferredMIMEType).first ?? "application/octet-stream"
+        guard let outgoing = PhotoUploadPreparer.prepare(
+            data: data,
+            mimeType: mimeType,
+            image: image,
+            maximumBytes: maximumBytes
+        ) else { return nil }
+        return PendingPhoto(
+            data: outgoing.data,
+            mimeType: outgoing.mimeType,
+            image: image,
+            wasOptimized: outgoing.data.count < data.count || outgoing.mimeType != mimeType
+        )
     }
 }
 
@@ -253,6 +263,7 @@ private struct PendingPhoto: Identifiable {
     let data: Data
     let mimeType: String
     let image: PlatformImage
+    let wasOptimized: Bool
 }
 
 private struct PendingPhotoSelection: Identifiable {
@@ -276,6 +287,12 @@ private struct ImageComposerSheet: View {
                 if photos.count > 1 {
                     Label("\(photos.count) photos selected", systemImage: "photo.stack.fill")
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                if photos.contains(where: \.wasOptimized) {
+                    Label("Large photos optimized for sending", systemImage: "wand.and.sparkles")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
 

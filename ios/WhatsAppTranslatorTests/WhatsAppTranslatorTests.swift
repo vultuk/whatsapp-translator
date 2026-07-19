@@ -5,6 +5,31 @@ import UserNotifications
 @testable import WhatsAppTranslator
 
 final class WhatsAppTranslatorTests: XCTestCase {
+    func testOversizedPhotoIsAutomaticallyReducedBelowUploadLimit() throws {
+        let image = DemoImageFactory.landscape(size: CGSize(width: 1_200, height: 900))
+        var oversizedData = try XCTUnwrap(image.platformJPEGData(compressionQuality: 0.95))
+        oversizedData.append(Data(repeating: 0, count: 17 * 1_024 * 1_024))
+
+        let prepared = try XCTUnwrap(
+            PhotoUploadPreparer.prepare(
+                data: oversizedData,
+                mimeType: "image/jpeg",
+                image: image,
+                maximumBytes: PhotoUploadPreparer.maximumBytes(forPhotoCount: 1)
+            )
+        )
+
+        XCTAssertLessThanOrEqual(prepared.data.count, 15 * 1_024 * 1_024)
+        XCTAssertEqual(prepared.mimeType, "image/jpeg")
+        XCTAssertLessThan(prepared.data.count, oversizedData.count)
+    }
+
+    func testAlbumPhotoBudgetKeepsCombinedUploadBelowSixtyMegabytes() {
+        XCTAssertEqual(PhotoUploadPreparer.maximumBytes(forPhotoCount: 1), 15 * 1_024 * 1_024)
+        XCTAssertEqual(PhotoUploadPreparer.maximumBytes(forPhotoCount: 4), 15 * 1_024 * 1_024)
+        XCTAssertEqual(PhotoUploadPreparer.maximumBytes(forPhotoCount: 30), 2 * 1_024 * 1_024)
+    }
+
     func testStandaloneEmojiPresentationAcceptsUpToThreeEmojiOnly() {
         func message(_ body: String) -> ChatMessage {
             ChatMessage(

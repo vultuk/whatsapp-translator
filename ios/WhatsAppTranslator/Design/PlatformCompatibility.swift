@@ -34,6 +34,82 @@ extension PlatformImage {
         )
         #endif
     }
+
+    func platformResizedForUpload(scale: CGFloat) -> PlatformImage? {
+        guard scale > 0, scale < 1 else { return self }
+        let targetSize = CGSize(
+            width: max(1, size.width * scale),
+            height: max(1, size.height * scale)
+        )
+
+        #if canImport(UIKit)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: targetSize, format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: targetSize))
+            draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+        #elseif canImport(AppKit)
+        let resized = NSImage(size: targetSize)
+        resized.lockFocus()
+        NSColor.white.setFill()
+        NSRect(origin: .zero, size: targetSize).fill()
+        draw(
+            in: NSRect(origin: .zero, size: targetSize),
+            from: NSRect(origin: .zero, size: size),
+            operation: .copy,
+            fraction: 1
+        )
+        resized.unlockFocus()
+        return resized
+        #endif
+    }
+}
+
+enum PhotoUploadPreparer {
+    private static let megabyte = 1_024 * 1_024
+    private static let singlePhotoMaximumBytes = 15 * megabyte
+    private static let albumMaximumBytes = 60 * megabyte
+    private static let passthroughMimeTypes = Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
+    private static let jpegQualities: [CGFloat] = [0.88, 0.72, 0.56, 0.4, 0.28]
+
+    static func maximumBytes(forPhotoCount count: Int) -> Int {
+        let safeCount = max(1, count)
+        return min(singlePhotoMaximumBytes, albumMaximumBytes / safeCount)
+    }
+
+    static func prepare(
+        data: Data,
+        mimeType: String,
+        image: PlatformImage,
+        maximumBytes: Int
+    ) -> OutgoingImage? {
+        guard !data.isEmpty, maximumBytes > 0 else { return nil }
+        if passthroughMimeTypes.contains(mimeType), data.count <= maximumBytes {
+            return OutgoingImage(data: data, mimeType: mimeType)
+        }
+
+        var candidate = image
+        for _ in 0..<6 {
+            var smallestData: Data?
+            for quality in jpegQualities {
+                guard let encoded = candidate.platformJPEGData(compressionQuality: quality) else { continue }
+                smallestData = encoded
+                if encoded.count <= maximumBytes {
+                    return OutgoingImage(data: encoded, mimeType: "image/jpeg")
+                }
+            }
+
+            guard let smallestData else { return nil }
+            let estimatedScale = sqrt(CGFloat(maximumBytes) / CGFloat(smallestData.count)) * 0.9
+            let scale = min(0.82, max(0.35, estimatedScale))
+            guard let resized = candidate.platformResizedForUpload(scale: scale) else { return nil }
+            candidate = resized
+        }
+        return nil
+    }
 }
 
 enum DemoImageFactory {
