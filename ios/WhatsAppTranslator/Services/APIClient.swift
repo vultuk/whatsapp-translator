@@ -189,7 +189,8 @@ actor APIClient {
             await transferProgress?(index + 1, images.count)
         }
         return try await durableAuthorizedUpload(
-            "/api/photo-albums/\(jobID)/send", method: "POST", body: Data("{}".utf8)
+            "/api/photo-albums/\(jobID)/send", method: "POST", body: Data("{}".utf8),
+            timeoutInterval: 15 * 60
         )
     }
 
@@ -345,12 +346,17 @@ actor APIClient {
     private func durableAuthorizedUpload<T: Decodable & Sendable>(
         _ path: String,
         method: String,
-        body: Data
+        body: Data,
+        timeoutInterval: TimeInterval = 300
     ) async throws -> T {
         #if os(iOS) && !APP_EXTENSION
-        return try await backgroundAuthorizedUpload(path, method: method, body: body)
+        return try await backgroundAuthorizedUpload(
+            path, method: method, body: body, timeoutInterval: timeoutInterval
+        )
         #else
-        return try await authorizedRequest(path, method: method, body: body, timeoutInterval: 300)
+        return try await authorizedRequest(
+            path, method: method, body: body, timeoutInterval: timeoutInterval
+        )
         #endif
     }
 
@@ -358,20 +364,26 @@ actor APIClient {
     private func backgroundAuthorizedUpload<T: Decodable & Sendable>(
         _ path: String,
         method: String,
-        body: Data
+        body: Data,
+        timeoutInterval: TimeInterval
     ) async throws -> T {
         do {
-            return try await performBackgroundUpload(path, method: method, body: body)
+            return try await performBackgroundUpload(
+                path, method: method, body: body, timeoutInterval: timeoutInterval
+            )
         } catch APIError.unauthorized {
             _ = try await authenticate()
-            return try await performBackgroundUpload(path, method: method, body: body)
+            return try await performBackgroundUpload(
+                path, method: method, body: body, timeoutInterval: timeoutInterval
+            )
         }
     }
 
     private func performBackgroundUpload<T: Decodable & Sendable>(
         _ path: String,
         method: String,
-        body: Data
+        body: Data,
+        timeoutInterval: TimeInterval
     ) async throws -> T {
         guard let configuration,
               let url = URL(string: path, relativeTo: configuration.baseURL)?.absoluteURL else {
@@ -379,7 +391,7 @@ actor APIClient {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.timeoutInterval = 300
+        request.timeoutInterval = timeoutInterval
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
@@ -465,7 +477,7 @@ final class BackgroundPhotoUploadSession: NSObject, URLSessionDataDelegate, URLS
         configuration.isDiscretionary = false
         configuration.waitsForConnectivity = true
         configuration.timeoutIntervalForRequest = 120
-        configuration.timeoutIntervalForResource = 600
+        configuration.timeoutIntervalForResource = 20 * 60
         configuration.allowsCellularAccess = true
         configuration.allowsExpensiveNetworkAccess = true
         configuration.allowsConstrainedNetworkAccess = true
@@ -478,6 +490,7 @@ final class BackgroundPhotoUploadSession: NSObject, URLSessionDataDelegate, URLS
         try body.write(to: file, options: .atomic)
         let task = session.uploadTask(with: request, fromFile: file)
         task.taskDescription = file.path
+        let watchdogInterval = max(60, request.timeoutInterval + 30)
         return try await withCheckedThrowingContinuation { continuation in
             lock.lock()
             continuations[task.taskIdentifier] = continuation
@@ -486,7 +499,7 @@ final class BackgroundPhotoUploadSession: NSObject, URLSessionDataDelegate, URLS
             lock.unlock()
             task.resume()
             Task.detached { [weak self] in
-                try? await Task.sleep(for: .seconds(300))
+                try? await Task.sleep(for: .seconds(watchdogInterval))
                 self?.timeOut(taskIdentifier: task.taskIdentifier)
             }
         }

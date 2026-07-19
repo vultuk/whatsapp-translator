@@ -14,6 +14,10 @@ import (
 	"syscall"
 )
 
+// Album commands carry base64-encoded media. A 64 MB decoded album expands to
+// roughly 85 MB before the surrounding JSON is added.
+const maxCommandBytes = 96 * 1024 * 1024
+
 func main() {
 	// Parse command line arguments
 	dataDir := flag.String("data-dir", "", "Directory for storing session data")
@@ -74,10 +78,8 @@ func main() {
 func readCommands(ctx context.Context, client *Client, cancel context.CancelFunc) {
 	scanner := bufio.NewScanner(os.Stdin)
 
-	// Increase buffer size to handle large payloads like base64-encoded images
-	// 32MB should be enough for 16MB images (base64 increases size by ~33%)
-	const maxScannerBuffer = 32 * 1024 * 1024
-	scanner.Buffer(make([]byte, 64*1024), maxScannerBuffer)
+	// Increase the buffer to hold the maximum supported base64 album command.
+	scanner.Buffer(make([]byte, 64*1024), maxCommandBytes)
 
 	// Read commands in a separate goroutine so we can also watch for context cancellation
 	lineChan := make(chan string)

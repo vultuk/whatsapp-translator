@@ -52,6 +52,10 @@ const SEND_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
 const ALBUM_SEND_RESULT_TIMEOUT: Duration = Duration::from_secs(180);
 const OAUTH_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
+fn album_send_result_timeout(photo_count: usize) -> Duration {
+    Duration::from_secs((photo_count as u64 * 60).clamp(180, 15 * 60))
+}
+
 #[derive(Debug, Clone)]
 struct ValidatedImagePayload {
     mime_type: String,
@@ -2467,7 +2471,11 @@ async fn send_images(
     }
 
     let send_result = match state
-        .wait_for_send_result_with_timeout(request_id, rx, ALBUM_SEND_RESULT_TIMEOUT)
+        .wait_for_send_result_with_timeout(
+            request_id,
+            rx,
+            album_send_result_timeout(req.images.len()),
+        )
         .await
     {
         Ok(result) => result,
@@ -5072,6 +5080,12 @@ mod tests {
         assert!(album.images.iter().all(Option::is_some));
         drop(albums);
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn large_album_confirmation_budget_exceeds_previous_three_minute_limit() {
+        assert!(album_send_result_timeout(10) >= Duration::from_secs(10 * 60));
+        assert!(album_send_result_timeout(2) >= ALBUM_SEND_RESULT_TIMEOUT);
     }
 
     #[test]

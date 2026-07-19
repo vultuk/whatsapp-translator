@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -24,6 +25,80 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+const albumUploadConcurrency = 3
+
+func mapAlbumUploads[Input any, Output any](
+	ctx context.Context,
+	inputs []Input,
+	concurrency int,
+	work func(context.Context, Input) (Output, error),
+	progress func(int),
+) ([]Output, error) {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	outputs := make([]Output, len(inputs))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	var state sync.Mutex
+	var firstError error
+	completed := 0
+
+	workerCount := min(concurrency, len(inputs))
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				output, err := work(ctx, inputs[index])
+				if err != nil {
+					state.Lock()
+					if firstError == nil {
+						firstError = err
+						cancel()
+					}
+					state.Unlock()
+					continue
+				}
+				outputs[index] = output
+				state.Lock()
+				completed++
+				done := completed
+				state.Unlock()
+				if progress != nil {
+					progress(done)
+				}
+			}
+		}()
+	}
+
+	for index := range inputs {
+		select {
+		case jobs <- index:
+		case <-ctx.Done():
+			close(jobs)
+			workers.Wait()
+			state.Lock()
+			defer state.Unlock()
+			if firstError == nil {
+				firstError = ctx.Err()
+			}
+			return nil, firstError
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	state.Lock()
+	defer state.Unlock()
+	if firstError == nil && ctx.Err() != nil {
+		firstError = ctx.Err()
+	}
+	return outputs, firstError
+}
 
 // Client wraps the whatsmeow client and handles events
 type Client struct {
@@ -1152,22 +1227,26 @@ func (c *Client) SendImageAlbum(ctx context.Context, jidStr string, images []Ima
 		return "", 0, nil, nil, fmt.Errorf("invalid JID: %w", err)
 	}
 
-	children := make([]*waE2E.ImageMessage, 0, len(images))
 	progress("uploading", 0, len(images))
-	for index, image := range images {
+	imageIndexes := make([]int, len(images))
+	for index := range images {
+		imageIndexes[index] = index
+	}
+	children, err := mapAlbumUploads(ctx, imageIndexes, albumUploadConcurrency, func(uploadCtx context.Context, index int) (*waE2E.ImageMessage, error) {
+		image := images[index]
 		data, err := base64.StdEncoding.DecodeString(image.MediaData)
 		if err != nil {
-			return "", 0, nil, nil, fmt.Errorf("failed to decode image %d: %w", index+1, err)
+			return nil, fmt.Errorf("failed to decode image %d: %w", index+1, err)
 		}
-		upload, err := c.client.Upload(ctx, data, whatsmeow.MediaImage)
+		upload, err := c.client.Upload(uploadCtx, data, whatsmeow.MediaImage)
 		if err != nil {
-			return "", 0, nil, nil, fmt.Errorf("failed to upload image %d: %w", index+1, err)
+			return nil, fmt.Errorf("failed to upload image %d: %w", index+1, err)
 		}
 		mimeType := image.MimeType
 		if mimeType == "" {
 			mimeType = "image/jpeg"
 		}
-		message := &waE2E.ImageMessage{
+		return &waE2E.ImageMessage{
 			Mimetype:      &mimeType,
 			URL:           &upload.URL,
 			DirectPath:    &upload.DirectPath,
@@ -1175,12 +1254,15 @@ func (c *Client) SendImageAlbum(ctx context.Context, jidStr string, images []Ima
 			FileEncSHA256: upload.FileEncSHA256,
 			FileSHA256:    upload.FileSHA256,
 			FileLength:    &upload.FileLength,
-		}
-		if index == 0 && caption != "" {
-			message.Caption = &caption
-		}
-		children = append(children, message)
-		progress("uploading", index+1, len(images))
+		}, nil
+	}, func(completed int) {
+		progress("uploading", completed, len(images))
+	})
+	if err != nil {
+		return "", 0, nil, nil, err
+	}
+	if caption != "" {
+		children[0].Caption = &caption
 	}
 
 	parent, parentKey, err := buildAlbumMessage(jidStr, len(children), replyToID, replyToSender, replyToText)
