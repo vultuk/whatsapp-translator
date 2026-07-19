@@ -49,6 +49,7 @@ struct PhotoSendActivityWidget: Widget {
         let count = "\(context.state.completed) of \(context.attributes.total)"
         switch context.state.stage {
         case "preparing": return "Preparing \(count)"
+        case "transferring": return "Transferring \(count)"
         case "uploading": return "Uploading \(count)"
         case "sending": return "Sending \(count)"
         case "complete": return "Photos sent"

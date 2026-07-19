@@ -233,7 +233,7 @@ final class NotificationAppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping () -> Void
     ) {
-        guard identifier == "com.vultuk.whatsapptranslator.photo-uploads" else {
+        guard identifier == "com.vultuk.whatsapptranslator.photo-uploads-v2" else {
             completionHandler()
             return
         }
@@ -245,6 +245,7 @@ final class NotificationAppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        BackgroundPhotoUploadSession.cancelLegacyMonolithicUploads()
         PushNotificationCoordinator.shared.registerMessagingCategory()
         return true
     }

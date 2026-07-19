@@ -427,6 +427,22 @@ struct SendImagesRequest: Encodable, Sendable {
     let replyToSenderName: String?
 }
 
+struct CreatePhotoAlbumRequest: Encodable, Sendable {
+    let jobId: String
+    let contactId: String
+    let photoCount: Int
+    let caption: String?
+    let replyTo: String?
+    let replyToSender: String?
+    let replyToText: String?
+    let replyToSenderName: String?
+}
+
+struct StagePhotoAlbumItemRequest: Encodable, Sendable {
+    let mediaData: String
+    let mimeType: String
+}
+
 struct PhotoSendProgress: Identifiable, Equatable, Sendable {
     enum Stage: String, Sendable { case preparing, transferring, uploading, sending, complete, failed }
     let id: String
@@ -439,7 +455,8 @@ struct PhotoSendProgress: Identifiable, Equatable, Sendable {
     var statusText: String {
         switch stage {
         case .preparing: "Preparing \(completed) of \(total)"
-        case .transferring: "Transferring \(total) photo\(total == 1 ? "" : "s")"
+        case .transferring:
+            completed == 0 ? "Starting photo transfer…" : "Transferring \(completed) of \(total)"
         case .uploading: "Uploading \(completed) of \(total)"
         case .sending: "Sending \(completed) of \(total)"
         case .complete: "Sent \(total) photo\(total == 1 ? "" : "s")"

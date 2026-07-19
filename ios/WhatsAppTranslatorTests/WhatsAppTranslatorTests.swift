@@ -667,6 +667,28 @@ final class WhatsAppTranslatorTests: XCTestCase {
         )
         XCTAssertEqual(progress.statusText, "Preparing 3 of 10")
         XCTAssertEqual(progress.fractionCompleted, 0.3, accuracy: 0.001)
+        var transferring = progress
+        transferring.stage = .transferring
+        XCTAssertEqual(transferring.statusText, "Transferring 3 of 10")
+    }
+
+    func testStagedAlbumRequestsKeepTransferCheckpointIdentity() throws {
+        let create = CreatePhotoAlbumRequest(
+            jobId: "job-12", contactId: "chat@g.us", photoCount: 12,
+            caption: "Walk", replyTo: nil, replyToSender: nil,
+            replyToText: nil, replyToSenderName: nil
+        )
+        let createPayload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(create)) as? [String: Any]
+        )
+        XCTAssertEqual(createPayload["jobId"] as? String, "job-12")
+        XCTAssertEqual(createPayload["photoCount"] as? Int, 12)
+
+        let item = StagePhotoAlbumItemRequest(mediaData: "photo-two", mimeType: "image/jpeg")
+        let itemPayload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any]
+        )
+        XCTAssertEqual(itemPayload["mediaData"] as? String, "photo-two")
     }
 
     func testAppPreferencesPersistStarsConversationPresentationAndTheme() throws {

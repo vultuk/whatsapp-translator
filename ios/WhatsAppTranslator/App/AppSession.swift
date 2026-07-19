@@ -408,7 +408,10 @@ final class AppSession {
         do {
             _ = try await api.sendImages(
                 contactID: contactID, images: prepared, progressID: id,
-                caption: caption, reply: reply
+                caption: caption, reply: reply,
+                transferProgress: { [weak self] completed, _ in
+                    await self?.updatePhotoSend(id: id, stage: .transferring, completed: completed)
+                }
             )
             completePhotoSend(id: id)
             await loadMessages(for: contactID)

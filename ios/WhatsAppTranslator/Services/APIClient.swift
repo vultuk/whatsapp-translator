@@ -141,7 +141,8 @@ actor APIClient {
         images: [OutgoingImage],
         progressID: String? = nil,
         caption: String? = nil,
-        reply: MessageReplyTarget? = nil
+        reply: MessageReplyTarget? = nil,
+        transferProgress: (@Sendable (Int, Int) async -> Void)? = nil
     ) async throws -> SendImageResponse {
         if images.count == 1, let image = images.first {
             return try await sendImage(
@@ -152,26 +153,44 @@ actor APIClient {
                 reply: reply
             )
         }
-        let payload = SendImagesRequest(
+        let jobID = progressID ?? UUID().uuidString
+        let createPayload = CreatePhotoAlbumRequest(
+            jobId: jobID,
             contactId: contactID,
-            progressId: progressID,
-            images: images.map {
-                SendImageItemRequest(mediaData: $0.data.base64EncodedString(), mimeType: $0.mimeType)
-            },
+            photoCount: images.count,
             caption: caption,
             replyTo: reply?.messageID,
             replyToSender: reply?.senderJID,
             replyToText: reply?.text,
             replyToSenderName: reply?.senderName
         )
-        let body = try JSONEncoder.backend.encode(payload)
-        #if os(iOS) && !APP_EXTENSION
-        return try await backgroundAuthorizedUpload("/api/send-images", body: body)
-        #else
-        return try await authorizedRequest(
-            "/api/send-images", method: "POST", body: body, timeoutInterval: 1_800
+        let _: SuccessResponse = try await authorizedRequest(
+            "/api/photo-albums", method: "POST", body: JSONEncoder.backend.encode(createPayload)
         )
-        #endif
+        for (index, image) in images.enumerated() {
+            let item = StagePhotoAlbumItemRequest(
+                mediaData: image.data.base64EncodedString(), mimeType: image.mimeType
+            )
+            let body = try JSONEncoder.backend.encode(item)
+            var lastError: Error?
+            for attempt in 0..<2 {
+                do {
+                    let _: SuccessResponse = try await durableAuthorizedUpload(
+                        "/api/photo-albums/\(jobID)/images/\(index)", method: "PUT", body: body
+                    )
+                    lastError = nil
+                    break
+                } catch {
+                    lastError = error
+                    if attempt == 0, (error as? URLError)?.code != .timedOut { continue }
+                }
+            }
+            if let lastError { throw lastError }
+            await transferProgress?(index + 1, images.count)
+        }
+        return try await durableAuthorizedUpload(
+            "/api/photo-albums/\(jobID)/send", method: "POST", body: Data("{}".utf8)
+        )
     }
 
     func react(to message: ChatMessage, emoji: String, senderJID: String?) async throws {
@@ -323,21 +342,35 @@ actor APIClient {
         }
     }
 
+    private func durableAuthorizedUpload<T: Decodable & Sendable>(
+        _ path: String,
+        method: String,
+        body: Data
+    ) async throws -> T {
+        #if os(iOS) && !APP_EXTENSION
+        return try await backgroundAuthorizedUpload(path, method: method, body: body)
+        #else
+        return try await authorizedRequest(path, method: method, body: body, timeoutInterval: 300)
+        #endif
+    }
+
     #if os(iOS) && !APP_EXTENSION
     private func backgroundAuthorizedUpload<T: Decodable & Sendable>(
         _ path: String,
+        method: String,
         body: Data
     ) async throws -> T {
         do {
-            return try await performBackgroundUpload(path, body: body)
+            return try await performBackgroundUpload(path, method: method, body: body)
         } catch APIError.unauthorized {
             _ = try await authenticate()
-            return try await performBackgroundUpload(path, body: body)
+            return try await performBackgroundUpload(path, method: method, body: body)
         }
     }
 
     private func performBackgroundUpload<T: Decodable & Sendable>(
         _ path: String,
+        method: String,
         body: Data
     ) async throws -> T {
         guard let configuration,
@@ -345,8 +378,8 @@ actor APIClient {
             throw APIError.notConfigured
         }
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 1_800
+        request.httpMethod = method
+        request.timeoutInterval = 300
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
@@ -405,16 +438,37 @@ final class BackgroundPhotoUploadSession: NSObject, URLSessionDataDelegate, URLS
     struct Result: Sendable { let data: Data; let response: URLResponse }
     static let shared = BackgroundPhotoUploadSession()
 
+    static func cancelLegacyMonolithicUploads() {
+        let configuration = URLSessionConfiguration.background(
+            withIdentifier: "com.vultuk.whatsapptranslator.photo-uploads"
+        )
+        let legacySession = URLSession(configuration: configuration)
+        legacySession.getAllTasks { tasks in
+            for task in tasks {
+                task.cancel()
+                if let path = task.taskDescription {
+                    try? FileManager.default.removeItem(atPath: path)
+                }
+            }
+            legacySession.invalidateAndCancel()
+        }
+    }
+
     private let lock = NSLock()
     private var dataByTask: [Int: Data] = [:]
     private var continuations: [Int: CheckedContinuation<Result, Error>] = [:]
+    private var tasks: [Int: URLSessionTask] = [:]
     private var completionHandler: (() -> Void)?
     private lazy var session: URLSession = {
-        let configuration = URLSessionConfiguration.background(withIdentifier: "com.vultuk.whatsapptranslator.photo-uploads")
+        let configuration = URLSessionConfiguration.background(withIdentifier: "com.vultuk.whatsapptranslator.photo-uploads-v2")
         configuration.sessionSendsLaunchEvents = true
         configuration.isDiscretionary = false
         configuration.waitsForConnectivity = true
-        configuration.timeoutIntervalForResource = 1_800
+        configuration.timeoutIntervalForRequest = 120
+        configuration.timeoutIntervalForResource = 600
+        configuration.allowsCellularAccess = true
+        configuration.allowsExpensiveNetworkAccess = true
+        configuration.allowsConstrainedNetworkAccess = true
         return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
     }()
 
@@ -428,9 +482,26 @@ final class BackgroundPhotoUploadSession: NSObject, URLSessionDataDelegate, URLS
             lock.lock()
             continuations[task.taskIdentifier] = continuation
             dataByTask[task.taskIdentifier] = Data()
+            tasks[task.taskIdentifier] = task
             lock.unlock()
             task.resume()
+            Task.detached { [weak self] in
+                try? await Task.sleep(for: .seconds(300))
+                self?.timeOut(taskIdentifier: task.taskIdentifier)
+            }
         }
+    }
+
+    private func timeOut(taskIdentifier: Int) {
+        lock.lock()
+        let continuation = continuations.removeValue(forKey: taskIdentifier)
+        let task = tasks.removeValue(forKey: taskIdentifier)
+        dataByTask[taskIdentifier] = nil
+        lock.unlock()
+        guard let continuation else { return }
+        task?.cancel()
+        if let path = task?.taskDescription { try? FileManager.default.removeItem(atPath: path) }
+        continuation.resume(throwing: URLError(.timedOut))
     }
 
     func reconnect(completionHandler: @escaping () -> Void) {
@@ -445,6 +516,7 @@ final class BackgroundPhotoUploadSession: NSObject, URLSessionDataDelegate, URLS
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         lock.lock()
         let continuation = continuations.removeValue(forKey: task.taskIdentifier)
+        tasks[task.taskIdentifier] = nil
         let data = dataByTask.removeValue(forKey: task.taskIdentifier) ?? Data()
         lock.unlock()
         if let path = task.taskDescription { try? FileManager.default.removeItem(atPath: path) }

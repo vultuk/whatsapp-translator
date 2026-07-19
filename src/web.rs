@@ -45,6 +45,7 @@ const MAX_IMAGE_BASE64_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4;
 const MAX_IMAGE_REQUEST_BYTES: usize = MAX_IMAGE_BASE64_BYTES + 1024 * 1024;
 const MAX_ALBUM_IMAGES: usize = 30;
 const MAX_ALBUM_BYTES: usize = 64 * 1024 * 1024;
+const MAX_PENDING_ALBUM_BYTES: usize = 128 * 1024 * 1024;
 const MAX_ALBUM_BASE64_BYTES: usize = MAX_ALBUM_BYTES.div_ceil(3) * 4;
 const MAX_ALBUM_REQUEST_BYTES: usize = MAX_ALBUM_BASE64_BYTES + 2 * 1024 * 1024;
 const SEND_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -55,6 +56,19 @@ const OAUTH_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 struct ValidatedImagePayload {
     mime_type: String,
     decoded_size: usize,
+}
+
+#[derive(Debug)]
+pub struct PendingPhotoAlbum {
+    contact_id: String,
+    caption: Option<String>,
+    reply_to: Option<String>,
+    reply_to_sender: Option<String>,
+    reply_to_text: Option<String>,
+    reply_to_sender_name: Option<String>,
+    images: Vec<Option<SendImageItemRequest>>,
+    decoded_bytes: usize,
+    created_at: i64,
 }
 
 /// Profile picture cache entry
@@ -82,6 +96,7 @@ pub struct AppState {
     pub pending_avatar_requests: RwLock<HashMap<i32, oneshot::Sender<Option<String>>>>,
     /// Pending send requests (request_id -> pending reconciliation metadata)
     pub pending_send_requests: RwLock<HashMap<i32, PendingSendRequest>>,
+    pub pending_photo_albums: RwLock<HashMap<String, PendingPhotoAlbum>>,
     /// Request ID counter
     pub request_id_counter: AtomicI32,
     /// Password for web interface (None = no password required)
@@ -261,11 +276,24 @@ pub struct SendImageRequest {
     pub reply_to_sender_name: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendImageItemRequest {
     pub media_data: String,
     pub mime_type: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePhotoAlbumRequest {
+    pub job_id: String,
+    pub contact_id: String,
+    pub photo_count: usize,
+    pub caption: Option<String>,
+    pub reply_to: Option<String>,
+    pub reply_to_sender: Option<String>,
+    pub reply_to_text: Option<String>,
+    pub reply_to_sender_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -534,6 +562,7 @@ impl AppState {
             avatar_cache: RwLock::new(HashMap::new()),
             pending_avatar_requests: RwLock::new(HashMap::new()),
             pending_send_requests: RwLock::new(HashMap::new()),
+            pending_photo_albums: RwLock::new(HashMap::new()),
             request_id_counter: AtomicI32::new(1),
             password,
             auth_tokens: RwLock::new(HashMap::new()),
@@ -1023,6 +1052,15 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/send-images",
             post(send_images).layer(DefaultBodyLimit::max(MAX_ALBUM_REQUEST_BYTES)),
+        )
+        .route("/api/photo-albums", post(create_photo_album))
+        .route(
+            "/api/photo-albums/:job_id/images/:index",
+            put(stage_photo_album_image).layer(DefaultBodyLimit::max(MAX_IMAGE_REQUEST_BYTES)),
+        )
+        .route(
+            "/api/photo-albums/:job_id/send",
+            post(send_staged_photo_album),
         )
         .route("/api/react", post(send_reaction))
         .route("/api/ai-compose", post(ai_compose))
@@ -2575,6 +2613,142 @@ async fn send_images(
         timestamp: send_result.timestamp.unwrap_or(now),
     })
     .into_response()
+}
+
+async fn create_photo_album(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreatePhotoAlbumRequest>,
+) -> Response {
+    let valid_job_id = (8..=128).contains(&req.job_id.len())
+        && req
+            .job_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+    if !valid_job_id
+        || req.contact_id.is_empty()
+        || !(2..=MAX_ALBUM_IMAGES).contains(&req.photo_count)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid album job details" })),
+        )
+            .into_response();
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let mut albums = state.pending_photo_albums.write().await;
+    albums.retain(|_, album| now - album.created_at < 60 * 60);
+    if albums.len() >= 4 && !albums.contains_key(&req.job_id) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": "Too many photo albums are waiting to send" })),
+        )
+            .into_response();
+    }
+    albums.insert(
+        req.job_id,
+        PendingPhotoAlbum {
+            contact_id: req.contact_id,
+            caption: req.caption,
+            reply_to: req.reply_to,
+            reply_to_sender: req.reply_to_sender,
+            reply_to_text: req.reply_to_text,
+            reply_to_sender_name: req.reply_to_sender_name,
+            images: vec![None; req.photo_count],
+            decoded_bytes: 0,
+            created_at: now,
+        },
+    );
+    Json(serde_json::json!({ "success": true })).into_response()
+}
+
+async fn stage_photo_album_image(
+    State(state): State<Arc<AppState>>,
+    Path((job_id, index)): Path<(String, usize)>,
+    Json(image): Json<SendImageItemRequest>,
+) -> Response {
+    let validated = match validate_image_payload(&image.media_data, &image.mime_type) {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+    let mut albums = state.pending_photo_albums.write().await;
+    let all_pending_bytes: usize = albums.values().map(|album| album.decoded_bytes).sum();
+    let Some(album) = albums.get_mut(&job_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Photo album job expired" })),
+        )
+            .into_response();
+    };
+    if index >= album.images.len() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Photo index is outside this album" })),
+        )
+            .into_response();
+    }
+    let previous_size = album.images[index]
+        .as_ref()
+        .and_then(|previous| validate_image_payload(&previous.media_data, &previous.mime_type).ok())
+        .map_or(0, |value| value.decoded_size);
+    let next_total = album.decoded_bytes - previous_size + validated.decoded_size;
+    let next_pending_total = all_pending_bytes - previous_size + validated.decoded_size;
+    if next_total > MAX_ALBUM_BYTES || next_pending_total > MAX_PENDING_ALBUM_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(
+                serde_json::json!({ "error": "The album exceeds WhatsApp's combined photo limit" }),
+            ),
+        )
+            .into_response();
+    }
+    album.decoded_bytes = next_total;
+    album.images[index] = Some(SendImageItemRequest {
+        media_data: image.media_data,
+        mime_type: validated.mime_type,
+    });
+    Json(
+        serde_json::json!({ "success": true, "completed": index + 1, "total": album.images.len() }),
+    )
+    .into_response()
+}
+
+async fn send_staged_photo_album(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+) -> Response {
+    let album = state.pending_photo_albums.write().await.remove(&job_id);
+    let Some(album) = album else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Photo album job expired" })),
+        )
+            .into_response();
+    };
+    if album.images.iter().any(Option::is_none) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "Not all photos have transferred" })),
+        )
+            .into_response();
+    }
+    let req = SendImagesRequest {
+        contact_id: album.contact_id,
+        progress_id: Some(job_id),
+        images: album.images.into_iter().flatten().collect(),
+        caption: album.caption,
+        reply_to: album.reply_to,
+        reply_to_sender: album.reply_to_sender,
+        reply_to_text: album.reply_to_text,
+        reply_to_sender_name: album.reply_to_sender_name,
+    };
+    send_images(State(state), Json(req)).await.into_response()
 }
 
 async fn send_reaction(
@@ -4852,6 +5026,51 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn staged_album_route_checkpoints_each_photo_before_send() {
+        let (state, data_dir) = test_state(None);
+        let router = create_router(state.clone());
+        let create = HttpRequest::builder()
+            .method("POST")
+            .uri("/api/photo-albums")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                "jobId": "job-0012", "contactId": "chat@example.test", "photoCount": 2
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            router.clone().oneshot(create).await.unwrap().status(),
+            StatusCode::OK
+        );
+
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+        for index in 0..2 {
+            let stage = HttpRequest::builder()
+                .method("PUT")
+                .uri(format!("/api/photo-albums/job-0012/images/{index}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "mediaData": png, "mimeType": "image/png"
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+            assert_eq!(
+                router.clone().oneshot(stage).await.unwrap().status(),
+                StatusCode::OK
+            );
+        }
+        let albums = state.pending_photo_albums.read().await;
+        let album = albums.get("job-0012").expect("staged album");
+        assert!(album.images.iter().all(Option::is_some));
+        drop(albums);
         let _ = std::fs::remove_dir_all(data_dir);
     }
 

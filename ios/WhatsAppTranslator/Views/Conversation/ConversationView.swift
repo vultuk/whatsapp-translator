@@ -104,9 +104,11 @@ struct ConversationView: View {
         }
         .navigationTitle(platformNavigationTitle)
         .task {
-            guard ProcessInfo.processInfo.arguments.contains("-demoPhotoSendProgress") else { return }
+            let arguments = ProcessInfo.processInfo.arguments
+            guard arguments.contains("-demoPhotoSendProgress") || arguments.contains("-demoPhotoTransferProgress") else { return }
             session.photoSendProgress["demo-photo-send"] = PhotoSendProgress(
-                id: "demo-photo-send", contactID: contact.id, stage: .sending,
+                id: "demo-photo-send", contactID: contact.id,
+                stage: arguments.contains("-demoPhotoTransferProgress") ? .transferring : .sending,
                 completed: 4, total: 10, error: nil
             )
         }
