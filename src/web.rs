@@ -5,6 +5,7 @@
 use axum::{
     extract::Request,
     extract::{
+        DefaultBodyLimit,
         ws::{Message, WebSocket, WebSocketUpgrade},
         Host, Path, Query, State,
     },
@@ -42,6 +43,7 @@ use tokio::sync::mpsc;
 const WEB_AUTH_TOKEN_TTL_SECONDS: i64 = 12 * 60 * 60;
 const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_IMAGE_BASE64_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4;
+const MAX_IMAGE_REQUEST_BYTES: usize = MAX_IMAGE_BASE64_BYTES + 1024 * 1024;
 const SEND_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
 const OAUTH_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
@@ -929,7 +931,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/avatar/:jid", get(get_avatar))
         .route("/api/qr", get(get_qr))
         .route("/api/send", post(send_message))
-        .route("/api/send-image", post(send_image))
+        .route(
+            "/api/send-image",
+            post(send_image).layer(DefaultBodyLimit::max(MAX_IMAGE_REQUEST_BYTES)),
+        )
         .route("/api/react", post(send_reaction))
         .route("/api/ai-compose", post(ai_compose))
         .route("/api/ai-reply", post(ai_reply))
@@ -4465,6 +4470,34 @@ mod tests {
 
         assert_eq!(payload.mime_type, "image/png");
         assert!(payload.decoded_size > 0);
+    }
+
+    #[tokio::test]
+    async fn send_image_route_accepts_payloads_larger_than_axum_default_body_limit() {
+        let (state, data_dir) = test_state(None);
+        let mut jpeg = vec![0_u8; 2 * 1024 * 1024];
+        jpeg[..3].copy_from_slice(&[0xff, 0xd8, 0xff]);
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri("/api/send-image")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "contactId": "chat@example.test",
+                    "mediaData": BASE64_STANDARD.encode(jpeg),
+                    "mimeType": "image/jpeg"
+                })
+                .to_string(),
+            ))
+            .expect("request");
+
+        let response = create_router(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 
     #[test]
