@@ -5,9 +5,8 @@
 use axum::{
     extract::Request,
     extract::{
-        DefaultBodyLimit,
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Host, Path, Query, State,
+        DefaultBodyLimit, Host, Path, Query, State,
     },
     http::{header, StatusCode},
     middleware::{self, Next},
