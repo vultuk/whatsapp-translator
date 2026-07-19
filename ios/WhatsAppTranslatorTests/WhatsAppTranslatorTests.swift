@@ -369,6 +369,34 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(reaction.targetMessageId, "m1")
     }
 
+    func testPhotoAlbumMetadataDecodesAndGroupsInWhatsAppOrder() throws {
+        let later = try decodeMessage(
+            id: "photo-2",
+            contentType: "Image",
+            content: #"{"type":"image","mime_type":"image/jpeg","album_id":"album-1","album_index":2}"#
+        )
+        let first = try decodeMessage(
+            id: "photo-0",
+            contentType: "Image",
+            content: #"{"type":"image","mime_type":"image/jpeg","album_id":"album-1","album_index":0}"#
+        )
+        let middle = try decodeMessage(
+            id: "photo-1",
+            contentType: "Image",
+            content: #"{"type":"image","mime_type":"image/jpeg","album_id":"album-1","album_index":1}"#
+        )
+
+        let items = ConversationTimelineBuilder.items(from: [later, first, middle])
+
+        XCTAssertEqual(items.count, 1)
+        guard case let .photoAlbum(album) = items[0] else {
+            return XCTFail("Expected one grouped photo album")
+        }
+        XCTAssertEqual(album.id, "album-1")
+        XCTAssertEqual(album.messages.map(\.id), ["photo-0", "photo-1", "photo-2"])
+        XCTAssertEqual(album.messages.map(\.content?.albumIndex), [0, 1, 2])
+    }
+
     func testEveryWebVisibleRichMessageTypeHasANativePresentationContract() throws {
         let video = try decodeMessage(
             id: "video",

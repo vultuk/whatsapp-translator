@@ -820,7 +820,23 @@ final class AppSession {
         backendStatus = BackendStatus(connected: true, phone: "447853803055", name: "Simon Skinner")
         contacts = Contact.demoContacts
         messages = ChatMessage.demoMessages
-        if let imageMessage = messages["virag@s.whatsapp.net"]?.first(where: \.isImage) {
+        if ProcessInfo.processInfo.arguments.contains("-demoPhotoAlbum"),
+           var conversation = messages["virag@s.whatsapp.net"],
+           let imageIndex = conversation.firstIndex(where: \.isImage) {
+            let album = (0..<4).map { index in
+                ChatMessage.demoImage(
+                    contactID: "virag@s.whatsapp.net",
+                    id: "album-photo-\(index)",
+                    timestamp: 1_783_940_100_000 + Int64(index),
+                    albumID: "demo-album",
+                    albumIndex: index,
+                    caption: index == 0 ? "A few photos from this afternoon." : nil
+                )
+            }
+            conversation.replaceSubrange(imageIndex...imageIndex, with: album)
+            messages["virag@s.whatsapp.net"] = conversation
+        }
+        for imageMessage in messages["virag@s.whatsapp.net"]?.filter(\.isImage) ?? [] {
             messageImages[imageMessage.id] = demoPhoto()
         }
         if demoConversationMode {
@@ -867,7 +883,10 @@ private extension ChatMessage {
     static func demoImage(
         contactID: String,
         id: String = UUID().uuidString,
-        timestamp: Int64 = Int64(Date().timeIntervalSince1970 * 1_000)
+        timestamp: Int64 = Int64(Date().timeIntervalSince1970 * 1_000),
+        albumID: String? = nil,
+        albumIndex: Int? = nil,
+        caption: String? = "The light is gorgeous here today."
     ) -> ChatMessage {
         ChatMessage(
             id: id,
@@ -884,9 +903,11 @@ private extension ChatMessage {
             content: MessageContent(
                 type: "image",
                 body: nil,
-                caption: "The light is gorgeous here today.",
+                caption: caption,
                 mimeType: "image/jpeg",
                 hasMedia: true,
+                albumId: albumID,
+                albumIndex: albumIndex,
                 showTranslatedPrimary: nil,
                 replyContext: nil
             ),

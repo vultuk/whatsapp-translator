@@ -208,12 +208,30 @@ struct ConversationView: View {
             .padding(.top, 80)
         }
 
-        ForEach(Array(visibleMessages.enumerated()), id: \.element.id) { index, message in
+        ForEach(Array(timelineItems.enumerated()), id: \.element.id) { index, item in
             if shouldShowDate(before: index) {
-                DatePill(date: message.date)
+                DatePill(date: item.date)
                     .padding(.vertical, 10)
             }
-            MessageBubble(
+            switch item {
+            case let .message(message):
+                messageBubble(message: message)
+                    .id(message.id)
+                    .task { await loadTimelineMedia(for: [message]) }
+            case let .photoAlbum(album):
+                messageBubble(message: album.primaryMessage, albumMessages: album.messages)
+                    .id(item.id)
+                    .task { await loadTimelineMedia(for: album.messages) }
+            }
+        }
+    }
+
+    private var timelineItems: [ConversationTimelineItem] {
+        ConversationTimelineBuilder.items(from: visibleMessages)
+    }
+
+    private func messageBubble(message: ChatMessage, albumMessages: [ChatMessage] = []) -> some View {
+        MessageBubble(
                 message: message,
                 isStarred: session.preferences.isStarred(messageID: message.id, contactID: contact.id),
                 isBusy: session.activeMessageActionIDs.contains(message.id),
@@ -227,19 +245,25 @@ struct ConversationView: View {
                 aiReply: { generateAIReply(to: message) },
                 toggleStar: { session.preferences.toggleStar(messageID: message.id, contactID: contact.id) },
                 react: { emoji in Task { await session.react(to: message, emoji: emoji) } },
-                retryMedia: { Task { await session.retryMedia(for: message) } }
+                retryMedia: { Task { await session.retryMedia(for: message) } },
+                albumMessages: albumMessages,
+                albumImages: session.messageImages,
+                albumLoadingIDs: session.mediaLoadingIDs,
+                albumFailedIDs: session.mediaErrorIDs,
+                retryAlbumMedia: { albumMessage in Task { await session.retryMedia(for: albumMessage) } }
             )
-            .id(message.id)
-            .task {
-                await session.loadMedia(for: message)
-                for url in message.extractedURLs { await session.loadLinkPreview(for: url) }
-            }
+    }
+
+    private func loadTimelineMedia(for messages: [ChatMessage]) async {
+        for message in messages {
+            await session.loadMedia(for: message)
+            for url in message.extractedURLs { await session.loadLinkPreview(for: url) }
         }
     }
 
     private func shouldShowDate(before index: Int) -> Bool {
         guard index > 0 else { return true }
-        return !Calendar.current.isDate(visibleMessages[index - 1].date, inSameDayAs: visibleMessages[index].date)
+        return !Calendar.current.isDate(timelineItems[index - 1].date, inSameDayAs: timelineItems[index].date)
     }
 
     private func send() {

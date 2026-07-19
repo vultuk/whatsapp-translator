@@ -74,7 +74,7 @@ final class BabelBridgeMacTests: XCTestCase {
             reply: nil,
             isSending: false,
             cancelReply: {},
-            sendImage: { _, _, _ in true },
+            sendImages: { _, _ in true },
             send: {}
         )
         let hostingView = NSHostingView(rootView: view)

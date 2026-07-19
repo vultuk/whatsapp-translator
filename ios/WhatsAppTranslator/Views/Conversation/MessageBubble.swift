@@ -121,6 +121,11 @@ struct MessageBubble: View {
     let toggleStar: () -> Void
     let react: (String) -> Void
     let retryMedia: () -> Void
+    let albumMessages: [ChatMessage]
+    let albumImages: [String: PlatformImage]
+    let albumLoadingIDs: Set<String>
+    let albumFailedIDs: Set<String>
+    let retryAlbumMedia: (ChatMessage) -> Void
     @State private var showAlternate = false
     @State private var showActions = false
     @State private var demoSwipeOffset: CGFloat = 0
@@ -179,6 +184,14 @@ struct MessageBubble: View {
                             .fixedSize(horizontal: true, vertical: true)
                             .textSelection(.enabled)
                             .accessibilityLabel("Emoji: \(emoji)")
+                    } else if albumMessages.count > 1 {
+                        PhotoAlbumGrid(
+                            messages: albumMessages,
+                            images: albumImages,
+                            loadingIDs: albumLoadingIDs,
+                            failedIDs: albumFailedIDs,
+                            retry: retryAlbumMedia
+                        )
                     } else {
                         RichMessageContentView(
                             message: message,
@@ -524,6 +537,88 @@ struct MessageBubble: View {
                 showAlternate.toggle()
             }
         }
+    }
+}
+
+private struct PhotoAlbumGrid: View {
+    let messages: [ChatMessage]
+    let images: [String: PlatformImage]
+    let loadingIDs: Set<String>
+    let failedIDs: Set<String>
+    let retry: (ChatMessage) -> Void
+    private let columns = [
+        GridItem(.flexible(), spacing: 3),
+        GridItem(.flexible(), spacing: 3),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            LazyVGrid(columns: columns, spacing: 3) {
+                ForEach(messages) { message in
+                    AlbumPhotoTile(
+                        message: message,
+                        image: images[message.id],
+                        isLoading: loadingIDs.contains(message.id),
+                        failed: failedIDs.contains(message.id),
+                        retry: { retry(message) }
+                    )
+                    .id(message.id)
+                }
+            }
+            .frame(width: 280)
+
+            if let caption = messages.compactMap({ message -> String? in
+                guard let caption = message.content?.caption?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !caption.isEmpty else { return nil }
+                return caption
+            }).first {
+                Text(MessageTextLinkifier.attributedString(from: caption))
+                    .font(.body)
+                    .textSelection(.enabled)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Photo album, \(messages.count) photos")
+    }
+}
+
+private struct AlbumPhotoTile: View {
+    let message: ChatMessage
+    let image: PlatformImage?
+    let isLoading: Bool
+    let failed: Bool
+    let retry: () -> Void
+    @State private var showPhotoViewer = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(platformImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .contentShape(Rectangle())
+                    .onTapGesture { showPhotoViewer = true }
+                    .photoViewer(isPresented: $showPhotoViewer, image: image)
+            } else if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.primary.opacity(0.05))
+            } else {
+                Button(action: retry) {
+                    VStack(spacing: 5) {
+                        Image(systemName: failed ? "arrow.clockwise" : "photo.fill")
+                        Text(failed ? "Retry" : "Load")
+                            .font(.caption2)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.primary.opacity(0.05))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(height: 136)
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .accessibilityLabel("Photo \((message.albumIndex ?? 0) + 1) of album")
     }
 }
 

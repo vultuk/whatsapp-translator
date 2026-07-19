@@ -121,6 +121,8 @@ type MessageContent struct {
 	Options         []string  `json:"options,omitempty"`
 	RawType         string    `json:"raw_type,omitempty"`
 	Mentions        []Mention `json:"mentions,omitempty"`
+	AlbumID         string    `json:"album_id,omitempty"`
+	AlbumIndex      *int32    `json:"album_index,omitempty"`
 }
 
 // Mention identifies a WhatsApp user referenced by an @ token in message text.

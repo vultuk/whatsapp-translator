@@ -122,6 +122,8 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     }
     var mediaKind: MessageMediaKind? { MessageMediaKind(rawValue: normalizedContentType) }
     var isImage: Bool { mediaKind == .image }
+    var albumID: String? { content?.albumId?.nilIfBlank }
+    var albumIndex: Int? { content?.albumIndex }
     var standaloneEmojiText: String? {
         guard normalizedContentType == "text", content?.replyContext == nil else { return nil }
         let value = displayText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -171,6 +173,60 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
             let cleaned = value.trimmingCharacters(in: CharacterSet(charactersIn: "()[]{}<>,.!?;:\"'"))
             guard cleaned.hasPrefix("https://") || cleaned.hasPrefix("http://") else { return nil }
             return URL(string: cleaned)
+        }
+    }
+}
+
+struct PhotoAlbumTimeline: Identifiable {
+    let id: String
+    let messages: [ChatMessage]
+
+    var primaryMessage: ChatMessage { messages[0] }
+    var date: Date { messages.map(\.date).min() ?? primaryMessage.date }
+}
+
+enum ConversationTimelineItem: Identifiable {
+    case message(ChatMessage)
+    case photoAlbum(PhotoAlbumTimeline)
+
+    var id: String {
+        switch self {
+        case let .message(message): message.id
+        case let .photoAlbum(album): "album:\(album.id)"
+        }
+    }
+
+    var date: Date {
+        switch self {
+        case let .message(message): message.date
+        case let .photoAlbum(album): album.date
+        }
+    }
+}
+
+enum ConversationTimelineBuilder {
+    static func items(from messages: [ChatMessage]) -> [ConversationTimelineItem] {
+        let grouped = Dictionary(grouping: messages.compactMap { message -> (String, ChatMessage)? in
+            guard message.isImage, let albumID = message.albumID else { return nil }
+            return (albumID, message)
+        }, by: \.0).mapValues { $0.map(\.1) }
+        var emittedAlbumIDs = Set<String>()
+
+        return messages.compactMap { message in
+            guard let albumID = message.albumID,
+                  let albumMessages = grouped[albumID],
+                  albumMessages.count > 1 else {
+                return .message(message)
+            }
+            guard emittedAlbumIDs.insert(albumID).inserted else { return nil }
+            let ordered = albumMessages.sorted {
+                let leftIndex = $0.albumIndex ?? Int.max
+                let rightIndex = $1.albumIndex ?? Int.max
+                if leftIndex != rightIndex { return leftIndex < rightIndex }
+                if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
+                return $0.id < $1.id
+            }
+            return .photoAlbum(PhotoAlbumTimeline(id: albumID, messages: ordered))
         }
     }
 }
@@ -225,6 +281,8 @@ struct MessageContent: Codable, Hashable, Sendable {
     let rawType: String?
     let emoji: String?
     let targetMessageId: String?
+    let albumId: String?
+    let albumIndex: Int?
     let showTranslatedPrimary: Bool?
     let replyContext: ReplyContext?
 
@@ -241,6 +299,8 @@ struct MessageContent: Codable, Hashable, Sendable {
         case rawType = "raw_type"
         case displayName = "display_name"
         case targetMessageId = "target_message_id"
+        case albumId = "album_id"
+        case albumIndex = "album_index"
         case replyContext = "reply_context"
     }
 
@@ -267,6 +327,8 @@ struct MessageContent: Codable, Hashable, Sendable {
         rawType: String? = nil,
         emoji: String? = nil,
         targetMessageId: String? = nil,
+        albumId: String? = nil,
+        albumIndex: Int? = nil,
         showTranslatedPrimary: Bool?,
         replyContext: ReplyContext?
     ) {
@@ -292,6 +354,8 @@ struct MessageContent: Codable, Hashable, Sendable {
         self.rawType = rawType
         self.emoji = emoji
         self.targetMessageId = targetMessageId
+        self.albumId = albumId
+        self.albumIndex = albumIndex
         self.showTranslatedPrimary = showTranslatedPrimary
         self.replyContext = replyContext
     }

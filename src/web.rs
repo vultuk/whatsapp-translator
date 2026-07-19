@@ -2458,6 +2458,10 @@ async fn send_images(
     let sender_name = state.name.read().await.clone();
     let sender_phone = state.phone.read().await.clone();
     let mut stored_ids: Vec<String> = Vec::new();
+    let album_id = send_result
+        .message_id
+        .clone()
+        .unwrap_or_else(|| send_result.message_ids[0].clone());
 
     for (index, ((image, validated), message_id)) in req
         .images
@@ -2495,7 +2499,9 @@ async fn send_images(
             "caption": caption,
             "media_data": image.media_data,
             "file_size": validated.decoded_size,
-            "reply_context": reply_context
+            "reply_context": reply_context,
+            "album_id": album_id,
+            "album_index": index
         });
         let stored_message = StoredMessage {
             id: message_id.clone(),
@@ -2542,9 +2548,7 @@ async fn send_images(
     }
 
     Json(SendImageResponse {
-        message_id: send_result
-            .message_id
-            .unwrap_or_else(|| send_result.message_ids[0].clone()),
+        message_id: album_id,
         timestamp: send_result.timestamp.unwrap_or(now),
     })
     .into_response()

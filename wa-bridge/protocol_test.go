@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
@@ -74,5 +75,30 @@ func TestBuildAlbumMessagesAssociatesChildrenWithParent(t *testing.T) {
 	}
 	if len(proto.Clone(child).(*waE2E.Message).GetMessageContextInfo().GetMessageSecret()) != 32 {
 		t.Fatal("expected a 32-byte child message secret")
+	}
+}
+
+func TestBuildMessageContentPreservesAlbumAssociation(t *testing.T) {
+	parentID := "album-parent-1"
+	index := int32(2)
+	message := &waE2E.Message{
+		ImageMessage: &waE2E.ImageMessage{
+			Mimetype: proto.String("image/jpeg"),
+		},
+		MessageContextInfo: &waE2E.MessageContextInfo{
+			MessageAssociation: &waE2E.MessageAssociation{
+				AssociationType:  waE2E.MessageAssociation_MEDIA_ALBUM.Enum(),
+				ParentMessageKey: &waCommon.MessageKey{ID: &parentID},
+				MessageIndex:     &index,
+			},
+		},
+	}
+
+	content := (&Client{}).buildMessageContent(message)
+	if content.AlbumID != parentID {
+		t.Fatalf("expected album ID %q, got %q", parentID, content.AlbumID)
+	}
+	if content.AlbumIndex == nil || *content.AlbumIndex != index {
+		t.Fatalf("expected album index %d, got %#v", index, content.AlbumIndex)
 	}
 }

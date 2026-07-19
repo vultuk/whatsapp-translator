@@ -1087,6 +1087,8 @@ impl serde::Serialize for bridge::MessageContent {
                 file_size,
                 file_hash,
                 media_data,
+                album_id,
+                album_index,
             } => {
                 map.serialize_entry("type", "image")?;
                 map.serialize_entry("mime_type", mime_type)?;
@@ -1099,6 +1101,12 @@ impl serde::Serialize for bridge::MessageContent {
                 }
                 if let Some(data) = media_data {
                     map.serialize_entry("media_data", data)?;
+                }
+                if let Some(id) = album_id {
+                    map.serialize_entry("album_id", id)?;
+                }
+                if let Some(index) = album_index {
+                    map.serialize_entry("album_index", index)?;
                 }
             }
             bridge::MessageContent::Video {

@@ -743,6 +743,7 @@ func (c *Client) buildMessageContent(msg *waE2E.Message) MessageContent {
 		if msg.ImageMessage.FileSHA256 != nil {
 			content.FileHash = hex.EncodeToString(msg.ImageMessage.FileSHA256)
 		}
+		applyAlbumAssociation(msg, &content)
 		return content
 	}
 
@@ -893,6 +894,20 @@ func (c *Client) buildMessageContent(msg *waE2E.Message) MessageContent {
 		Type:    "unknown",
 		RawType: fmt.Sprintf("%T", msg),
 	}
+}
+
+func applyAlbumAssociation(msg *waE2E.Message, content *MessageContent) {
+	association := msg.GetMessageContextInfo().GetMessageAssociation()
+	if association.GetAssociationType() != waE2E.MessageAssociation_MEDIA_ALBUM {
+		return
+	}
+	parentID := association.GetParentMessageKey().GetID()
+	if parentID == "" {
+		return
+	}
+	content.AlbumID = parentID
+	index := association.GetMessageIndex()
+	content.AlbumIndex = &index
 }
 
 // Helper functions

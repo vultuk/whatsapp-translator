@@ -183,6 +183,10 @@ pub enum MessageContent {
         file_hash: Option<String>,
         /// Base64 encoded image data
         media_data: Option<String>,
+        /// WhatsApp album parent message ID
+        album_id: Option<String>,
+        /// Zero-based position within the WhatsApp album
+        album_index: Option<i32>,
     },
 
     /// Video message
@@ -445,6 +449,38 @@ mod tests {
         }"#;
         let event: BridgeEvent = serde_json::from_str(json).unwrap();
         assert!(matches!(event, BridgeEvent::Message(_)));
+    }
+
+    #[test]
+    fn test_parse_image_album_association() {
+        let json = r#"{
+            "type": "message",
+            "id": "photo-2",
+            "timestamp": 1705689600,
+            "from": {"jid": "1234567890@s.whatsapp.net", "phone": "1234567890"},
+            "chat": {"type": "private", "jid": "1234567890@s.whatsapp.net"},
+            "content": {
+                "type": "image",
+                "mime_type": "image/jpeg",
+                "file_size": 2048,
+                "album_id": "album-parent-1",
+                "album_index": 2
+            },
+            "is_from_me": false,
+            "is_forwarded": false
+        }"#;
+        let event: BridgeEvent = serde_json::from_str(json).unwrap();
+        let BridgeEvent::Message(message) = event else {
+            panic!("expected message event");
+        };
+        assert!(matches!(
+            message.content,
+            MessageContent::Image {
+                album_id: Some(ref id),
+                album_index: Some(2),
+                ..
+            } if id == "album-parent-1"
+        ));
     }
 
     #[test]
