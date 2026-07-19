@@ -185,7 +185,9 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			return
 		}
 
-		messageID, timestamp, messageIDs, timestamps, err := client.SendImageAlbum(ctx, cmd.To, cmd.Images, cmd.Caption, cmd.ReplyTo, cmd.ReplyToSender, cmd.ReplyToText)
+		messageID, timestamp, messageIDs, timestamps, err := client.SendImageAlbum(ctx, cmd.To, cmd.Images, cmd.Caption, cmd.ReplyTo, cmd.ReplyToSender, cmd.ReplyToText, func(stage string, completed, total int) {
+			SendEvent(NewSendProgressEvent(cmd.RequestID, cmd.ProgressID, stage, completed, total))
+		})
 		if err != nil {
 			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, err.Error()))
 		} else {

@@ -8,7 +8,7 @@ struct ComposerView: View {
     let reply: MessageReplyTarget?
     let isSending: Bool
     let cancelReply: () -> Void
-    let sendImages: ([OutgoingImage], String?) async -> Bool
+    let sendImages: ([OutgoingImage], String?) -> Bool
     let send: () -> Void
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var pendingPhotos: PendingPhotoSelection?
@@ -61,10 +61,9 @@ struct ComposerView: View {
             Task {
                 defer { selectedPhotos = [] }
                 var prepared: [PendingPhoto] = []
-                let maximumBytes = PhotoUploadPreparer.maximumBytes(forPhotoCount: items.count)
                 for item in items {
-                    guard let photo = await preparePhoto(item, maximumBytes: maximumBytes) else {
-                        pickerError = "One of the selected photos couldn’t be prepared for sending. Please choose the photos again."
+                    guard let photo = await loadPhoto(item) else {
+                        pickerError = "One of the selected photos couldn’t be opened. Please choose the photos again."
                         return
                     }
                     prepared.append(photo)
@@ -87,11 +86,10 @@ struct ComposerView: View {
                     || arguments.contains("-demoOptimizedPhotoComposer"),
                   pendingPhotos == nil else { return }
             let count = arguments.contains("-demoImageAlbumComposer") ? 4 : 1
-            let showOptimized = arguments.contains("-demoOptimizedPhotoComposer")
             let photos = (0..<count).compactMap { index -> PendingPhoto? in
                 let image = DemoImageFactory.landscape(size: CGSize(width: 800 - index * 80, height: 600 + index * 40))
                 guard let data = image.platformJPEGData(compressionQuality: 0.9) else { return nil }
-                return PendingPhoto(data: data, mimeType: "image/jpeg", image: image, wasOptimized: showOptimized)
+                return PendingPhoto(data: data, mimeType: "image/jpeg", image: image)
             }
             pendingPhotos = PendingPhotoSelection(photos: photos)
         }
@@ -215,24 +213,13 @@ struct ComposerView: View {
         Binding(get: { pickerError != nil }, set: { if !$0 { pickerError = nil } })
     }
 
-    private func preparePhoto(_ item: PhotosPickerItem, maximumBytes: Int) async -> PendingPhoto? {
+    private func loadPhoto(_ item: PhotosPickerItem) async -> PendingPhoto? {
         guard let data = try? await item.loadTransferable(type: Data.self),
               let image = PlatformImage(data: data) else {
             return nil
         }
         let mimeType = item.supportedContentTypes.compactMap(\.preferredMIMEType).first ?? "application/octet-stream"
-        guard let outgoing = PhotoUploadPreparer.prepare(
-            data: data,
-            mimeType: mimeType,
-            image: image,
-            maximumBytes: maximumBytes
-        ) else { return nil }
-        return PendingPhoto(
-            data: outgoing.data,
-            mimeType: outgoing.mimeType,
-            image: image,
-            wasOptimized: outgoing.data.count < data.count || outgoing.mimeType != mimeType
-        )
+        return PendingPhoto(data: data, mimeType: mimeType, image: image)
     }
 }
 
@@ -263,7 +250,6 @@ private struct PendingPhoto: Identifiable {
     let data: Data
     let mimeType: String
     let image: PlatformImage
-    let wasOptimized: Bool
 }
 
 private struct PendingPhotoSelection: Identifiable {
@@ -275,9 +261,8 @@ private struct ImageComposerSheet: View {
     @Environment(\.dismiss) private var dismiss
     let photos: [PendingPhoto]
     let reply: MessageReplyTarget?
-    let send: ([OutgoingImage], String?) async -> Bool
+    let send: ([OutgoingImage], String?) -> Bool
     @State private var caption = ""
-    @State private var isSending = false
 
     var body: some View {
         NavigationStack {
@@ -290,8 +275,8 @@ private struct ImageComposerSheet: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if photos.contains(where: \.wasOptimized) {
-                    Label("Large photos optimized for sending", systemImage: "wand.and.sparkles")
+                if photos.count > 0 {
+                    Label("Photos are optimized when you send", systemImage: "wand.and.sparkles")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -314,29 +299,21 @@ private struct ImageComposerSheet: View {
             .padding(.top)
             .navigationTitle(photos.count == 1 ? "Send photo" : "Send \(photos.count) photos")
             .platformInlineNavigationTitle()
-            .platformInteractiveDismissDisabled(isSending)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                        .disabled(isSending)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
-                        isSending = true
-                        Task {
-                            let cleanCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-                            let images = photos.map { OutgoingImage(data: $0.data, mimeType: $0.mimeType) }
-                            if await send(images, cleanCaption.isEmpty ? nil : cleanCaption) {
-                                dismiss()
-                            } else {
-                                isSending = false
-                            }
+                        let cleanCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let images = photos.map { OutgoingImage(data: $0.data, mimeType: $0.mimeType) }
+                        if send(images, cleanCaption.isEmpty ? nil : cleanCaption) {
+                            dismiss()
                         }
                     } label: {
-                        if isSending { ProgressView() } else { Label("Send", systemImage: "paperplane.fill") }
+                        Label("Send", systemImage: "paperplane.fill")
                     }
                     .fontWeight(.semibold)
-                    .disabled(isSending)
                 }
             }
         }

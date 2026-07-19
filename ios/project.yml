@@ -10,7 +10,7 @@ settings:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: SUR6QUSSV6
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 24
+    CURRENT_PROJECT_VERSION: 25
     MARKETING_VERSION: 1.0.0
 targets:
   WhatsAppTranslator:
@@ -19,10 +19,13 @@ targets:
     sources:
       - path: WhatsAppTranslator
       - path: Shared/NotificationPersonIdentity.swift
+      - path: Shared/PhotoSendActivityAttributes.swift
     dependencies:
       - target: WhatsAppTranslatorNotificationService
         embed: true
       - target: WhatsAppTranslatorIntents
+        embed: true
+      - target: WhatsAppTranslatorSendActivity
         embed: true
     entitlements:
       path: WhatsAppTranslator/WhatsAppTranslator.entitlements
@@ -66,6 +69,7 @@ targets:
           NSAllowsLocalNetworking: true
         UIBackgroundModes:
           - remote-notification
+        NSSupportsLiveActivities: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -91,6 +95,26 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+  WhatsAppTranslatorSendActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: WhatsAppTranslatorSendActivity
+      - path: Shared/PhotoSendActivityAttributes.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.send-activity
+        PRODUCT_NAME: PhotoSendActivity
+        SKIP_INSTALL: true
+        APPLICATION_EXTENSION_API_ONLY: true
+    info:
+      path: WhatsAppTranslatorSendActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Babel Bridge Photo Send
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
   WhatsAppTranslatorIntents:
     type: app-extension
     platform: iOS
@@ -105,6 +129,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.intents
         PRODUCT_NAME: WhatsAppTranslatorIntents
         SKIP_INSTALL: true
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) APP_EXTENSION
     entitlements:
       path: WhatsAppTranslatorIntents/WhatsAppTranslatorIntents.entitlements
       properties:

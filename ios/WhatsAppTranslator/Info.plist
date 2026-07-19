@@ -33,6 +33,8 @@
 	<string>Connect to your self-hosted Babel Bridge backend.</string>
 	<key>NSSiriUsageDescription</key>
 	<string>Send and read translated messages with Siri, Apple Watch, and CarPlay.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>INSendMessageIntent</string>

@@ -1143,7 +1143,7 @@ func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB
 }
 
 // SendImageAlbum sends multiple images as one grouped WhatsApp album.
-func (c *Client) SendImageAlbum(ctx context.Context, jidStr string, images []ImagePayload, caption string, replyToID string, replyToSender string, replyToText string) (string, int64, []string, []int64, error) {
+func (c *Client) SendImageAlbum(ctx context.Context, jidStr string, images []ImagePayload, caption string, replyToID string, replyToSender string, replyToText string, progress func(string, int, int)) (string, int64, []string, []int64, error) {
 	if len(images) < 2 {
 		return "", 0, nil, nil, fmt.Errorf("an album requires at least two images")
 	}
@@ -1153,6 +1153,7 @@ func (c *Client) SendImageAlbum(ctx context.Context, jidStr string, images []Ima
 	}
 
 	children := make([]*waE2E.ImageMessage, 0, len(images))
+	progress("uploading", 0, len(images))
 	for index, image := range images {
 		data, err := base64.StdEncoding.DecodeString(image.MediaData)
 		if err != nil {
@@ -1179,6 +1180,7 @@ func (c *Client) SendImageAlbum(ctx context.Context, jidStr string, images []Ima
 			message.Caption = &caption
 		}
 		children = append(children, message)
+		progress("uploading", index+1, len(images))
 	}
 
 	parent, parentKey, err := buildAlbumMessage(jidStr, len(children), replyToID, replyToSender, replyToText)
@@ -1192,6 +1194,7 @@ func (c *Client) SendImageAlbum(ctx context.Context, jidStr string, images []Ima
 
 	messageIDs := make([]string, 0, len(children))
 	timestamps := make([]int64, 0, len(children))
+	progress("sending", 0, len(children))
 	for index, child := range children {
 		response, err := c.client.SendMessage(ctx, jID, buildAlbumChildMessage(child, parentKey, index))
 		if err != nil {
@@ -1199,6 +1202,7 @@ func (c *Client) SendImageAlbum(ctx context.Context, jidStr string, images []Ima
 		}
 		messageIDs = append(messageIDs, response.ID)
 		timestamps = append(timestamps, response.Timestamp.Unix())
+		progress("sending", index+1, len(children))
 	}
 
 	return parentResponse.ID, parentResponse.Timestamp.Unix(), messageIDs, timestamps, nil

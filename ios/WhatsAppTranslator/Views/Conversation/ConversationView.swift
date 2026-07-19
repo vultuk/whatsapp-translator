@@ -14,6 +14,12 @@ struct ConversationView: View {
     @State private var usage: UsageSummary?
 
     private var messages: [ChatMessage] { session.messages[contact.id] ?? [] }
+    private var activePhotoSend: PhotoSendProgress? {
+        session.photoSendProgress.values
+            .filter { $0.contactID == contact.id }
+            .sorted { $0.id > $1.id }
+            .first
+    }
     private var visibleMessages: [ChatMessage] {
         let query = messageSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         return messages.filter { message in
@@ -81,6 +87,11 @@ struct ConversationView: View {
                     .padding(.top, 8)
                 }
                 messageTimeline
+                if let progress = activePhotoSend {
+                    PhotoSendProgressView(progress: progress)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                }
                 ComposerView(
                     text: $draft,
                     reply: replyTarget,
@@ -92,6 +103,13 @@ struct ConversationView: View {
             }
         }
         .navigationTitle(platformNavigationTitle)
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("-demoPhotoSendProgress") else { return }
+            session.photoSendProgress["demo-photo-send"] = PhotoSendProgress(
+                id: "demo-photo-send", contactID: contact.id, stage: .sending,
+                completed: 4, total: 10, error: nil
+            )
+        }
         .platformInlineNavigationTitle()
         .toolbar {
             #if os(iOS)
@@ -277,9 +295,9 @@ struct ConversationView: View {
         }
     }
 
-    private func sendImages(_ images: [OutgoingImage], _ caption: String?) async -> Bool {
+    private func sendImages(_ images: [OutgoingImage], _ caption: String?) -> Bool {
         let reply = replyTarget
-        if await session.sendImages(images, caption: caption, to: contact.id, reply: reply) {
+        if session.startPhotoSend(images, caption: caption, to: contact.id, reply: reply) {
             replyTarget = nil
             return true
         }
@@ -306,6 +324,30 @@ struct ConversationView: View {
         }
         await session.loadAllMessages(for: contact.id)
         starredOnly = true
+    }
+}
+
+private struct PhotoSendProgressView: View {
+    @Environment(\.translatorPalette) private var palette
+    let progress: PhotoSendProgress
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: progress.stage == .complete ? "checkmark.circle.fill" : "photo.stack.fill")
+                .font(.title3)
+                .foregroundStyle(progress.stage == .failed ? .red : palette.accent)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(progress.statusText)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                ProgressView(value: progress.fractionCompleted)
+                    .tint(progress.stage == .failed ? .red : palette.accent)
+            }
+        }
+        .padding(12)
+        .translatorGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(progress.statusText)
     }
 }
 

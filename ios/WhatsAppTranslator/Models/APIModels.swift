@@ -418,12 +418,38 @@ struct SendImageItemRequest: Encodable, Sendable {
 
 struct SendImagesRequest: Encodable, Sendable {
     let contactId: String
+    let progressId: String?
     let images: [SendImageItemRequest]
     let caption: String?
     let replyTo: String?
     let replyToSender: String?
     let replyToText: String?
     let replyToSenderName: String?
+}
+
+struct PhotoSendProgress: Identifiable, Equatable, Sendable {
+    enum Stage: String, Sendable { case preparing, transferring, uploading, sending, complete, failed }
+    let id: String
+    let contactID: String
+    var stage: Stage
+    var completed: Int
+    let total: Int
+    var error: String?
+
+    var statusText: String {
+        switch stage {
+        case .preparing: "Preparing \(completed) of \(total)"
+        case .transferring: "Transferring \(total) photo\(total == 1 ? "" : "s")"
+        case .uploading: "Uploading \(completed) of \(total)"
+        case .sending: "Sending \(completed) of \(total)"
+        case .complete: "Sent \(total) photo\(total == 1 ? "" : "s")"
+        case .failed: error ?? "Couldn’t send photos"
+        }
+    }
+
+    var fractionCompleted: Double {
+        stage == .complete ? 1 : min(1, max(0, Double(completed) / Double(max(total, 1))))
+    }
 }
 
 struct SendImageResponse: Decodable, Sendable {
@@ -519,12 +545,18 @@ struct LiveEvent: Decodable, Sendable {
     let message: ChatMessage?
     let messageIds: [String]?
     let status: String?
+    let progressId: String?
+    let stage: String?
+    let completed: Int?
+    let total: Int?
 
     private enum CodingKeys: String, CodingKey {
         case type
         case connected
         case message
         case status
+        case stage, completed, total
+        case progressId = "progress_id"
         case chatId = "chat_id"
         case messageIds = "message_ids"
     }

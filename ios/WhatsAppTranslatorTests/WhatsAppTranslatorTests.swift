@@ -637,6 +637,7 @@ final class WhatsAppTranslatorTests: XCTestCase {
     func testSendImagesRequestEncodesOrderedAlbumAndReplyContext() throws {
         let request = SendImagesRequest(
             contactId: "chat@g.us",
+            progressId: "job-7",
             images: [
                 SendImageItemRequest(mediaData: "first", mimeType: "image/jpeg"),
                 SendImageItemRequest(mediaData: "second", mimeType: "image/png"),
@@ -656,6 +657,16 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(images[1]["mimeType"] as? String, "image/png")
         XCTAssertEqual(payload["caption"] as? String, "Holiday")
         XCTAssertEqual(payload["replyTo"] as? String, "message-1")
+        XCTAssertEqual(payload["progressId"] as? String, "job-7")
+    }
+
+    func testPhotoSendProgressUsesNamedStagesAndCounts() {
+        let progress = PhotoSendProgress(
+            id: "job-7", contactID: "chat@g.us", stage: .preparing,
+            completed: 3, total: 10, error: nil
+        )
+        XCTAssertEqual(progress.statusText, "Preparing 3 of 10")
+        XCTAssertEqual(progress.fractionCompleted, 0.3, accuracy: 0.001)
     }
 
     func testAppPreferencesPersistStarsConversationPresentationAndTheme() throws {

@@ -146,6 +146,15 @@ type SendResultEvent struct {
 	Error      string   `json:"error,omitempty"`
 }
 
+type SendProgressEvent struct {
+	Type       string `json:"type"`
+	RequestID  int    `json:"request_id"`
+	ProgressID string `json:"progress_id"`
+	Stage      string `json:"stage"`
+	Completed  int    `json:"completed"`
+	Total      int    `json:"total"`
+}
+
 type ImagePayload struct {
 	MediaData string `json:"media_data"`
 	MimeType  string `json:"mime_type"`
@@ -180,10 +189,11 @@ type ReceiptEvent struct {
 
 // Command represents a command from the Rust CLI
 type Command struct {
-	Type      string `json:"type"`
-	RequestID int    `json:"request_id,omitempty"`
-	To        string `json:"to,omitempty"`
-	Text      string `json:"text,omitempty"`
+	Type       string `json:"type"`
+	RequestID  int    `json:"request_id,omitempty"`
+	ProgressID string `json:"progress_id,omitempty"`
+	To         string `json:"to,omitempty"`
+	Text       string `json:"text,omitempty"`
 	// For send_image command
 	MediaData string         `json:"media_data,omitempty"` // Base64 encoded image
 	MimeType  string         `json:"mime_type,omitempty"`
@@ -259,6 +269,10 @@ func NewSendResultEvent(requestID int, success bool, messageID string, timestamp
 		Timestamp: timestamp,
 		Error:     errMsg,
 	}
+}
+
+func NewSendProgressEvent(requestID int, progressID, stage string, completed, total int) SendProgressEvent {
+	return SendProgressEvent{Type: "send_progress", RequestID: requestID, ProgressID: progressID, Stage: stage, Completed: completed, Total: total}
 }
 
 func NewAlbumSendResultEvent(requestID int, messageID string, timestamp int64, messageIDs []string, timestamps []int64) SendResultEvent {

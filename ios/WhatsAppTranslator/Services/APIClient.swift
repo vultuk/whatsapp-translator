@@ -139,6 +139,7 @@ actor APIClient {
     func sendImages(
         contactID: String,
         images: [OutgoingImage],
+        progressID: String? = nil,
         caption: String? = nil,
         reply: MessageReplyTarget? = nil
     ) async throws -> SendImageResponse {
@@ -153,6 +154,7 @@ actor APIClient {
         }
         let payload = SendImagesRequest(
             contactId: contactID,
+            progressId: progressID,
             images: images.map {
                 SendImageItemRequest(mediaData: $0.data.base64EncodedString(), mimeType: $0.mimeType)
             },
@@ -162,12 +164,14 @@ actor APIClient {
             replyToText: reply?.text,
             replyToSenderName: reply?.senderName
         )
+        let body = try JSONEncoder.backend.encode(payload)
+        #if os(iOS) && !APP_EXTENSION
+        return try await backgroundAuthorizedUpload("/api/send-images", body: body)
+        #else
         return try await authorizedRequest(
-            "/api/send-images",
-            method: "POST",
-            body: JSONEncoder.backend.encode(payload),
-            timeoutInterval: 180
+            "/api/send-images", method: "POST", body: body, timeoutInterval: 1_800
         )
+        #endif
     }
 
     func react(to message: ChatMessage, emoji: String, senderJID: String?) async throws {
@@ -319,6 +323,45 @@ actor APIClient {
         }
     }
 
+    #if os(iOS) && !APP_EXTENSION
+    private func backgroundAuthorizedUpload<T: Decodable & Sendable>(
+        _ path: String,
+        body: Data
+    ) async throws -> T {
+        do {
+            return try await performBackgroundUpload(path, body: body)
+        } catch APIError.unauthorized {
+            _ = try await authenticate()
+            return try await performBackgroundUpload(path, body: body)
+        }
+    }
+
+    private func performBackgroundUpload<T: Decodable & Sendable>(
+        _ path: String,
+        body: Data
+    ) async throws -> T {
+        guard let configuration,
+              let url = URL(string: path, relativeTo: configuration.baseURL)?.absoluteURL else {
+            throw APIError.notConfigured
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 1_800
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let result = try await BackgroundPhotoUploadSession.shared.upload(request: request, body: body)
+        guard let response = result.response as? HTTPURLResponse else { throw APIError.invalidServer }
+        if response.statusCode == 401 { throw APIError.unauthorized }
+        guard (200..<300).contains(response.statusCode) else {
+            let message = (try? JSONDecoder.backend.decode(ErrorResponse.self, from: result.data).error)
+                ?? String(data: result.data, encoding: .utf8) ?? "Request failed"
+            throw APIError.server(message)
+        }
+        return try JSONDecoder.backend.decode(T.self, from: result.data)
+    }
+    #endif
+
     private func request<T: Decodable & Sendable>(
         _ path: String,
         method: String = "GET",
@@ -356,6 +399,67 @@ actor APIClient {
         }
     }
 }
+
+#if os(iOS) && !APP_EXTENSION
+final class BackgroundPhotoUploadSession: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate, @unchecked Sendable {
+    struct Result: Sendable { let data: Data; let response: URLResponse }
+    static let shared = BackgroundPhotoUploadSession()
+
+    private let lock = NSLock()
+    private var dataByTask: [Int: Data] = [:]
+    private var continuations: [Int: CheckedContinuation<Result, Error>] = [:]
+    private var completionHandler: (() -> Void)?
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.background(withIdentifier: "com.vultuk.whatsapptranslator.photo-uploads")
+        configuration.sessionSendsLaunchEvents = true
+        configuration.isDiscretionary = false
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForResource = 1_800
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+
+    func upload(request: URLRequest, body: Data) async throws -> Result {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("babel-photo-upload-\(UUID().uuidString).json")
+        try body.write(to: file, options: .atomic)
+        let task = session.uploadTask(with: request, fromFile: file)
+        task.taskDescription = file.path
+        return try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            continuations[task.taskIdentifier] = continuation
+            dataByTask[task.taskIdentifier] = Data()
+            lock.unlock()
+            task.resume()
+        }
+    }
+
+    func reconnect(completionHandler: @escaping () -> Void) {
+        lock.lock(); self.completionHandler = completionHandler; lock.unlock()
+        _ = session
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock(); dataByTask[dataTask.taskIdentifier, default: Data()].append(data); lock.unlock()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        let continuation = continuations.removeValue(forKey: task.taskIdentifier)
+        let data = dataByTask.removeValue(forKey: task.taskIdentifier) ?? Data()
+        lock.unlock()
+        if let path = task.taskDescription { try? FileManager.default.removeItem(atPath: path) }
+        guard let continuation else { return }
+        if let error { continuation.resume(throwing: error) }
+        else if let response = task.response { continuation.resume(returning: Result(data: data, response: response)) }
+        else { continuation.resume(throwing: APIError.invalidServer) }
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        lock.lock(); let handler = completionHandler; completionHandler = nil; lock.unlock()
+        DispatchQueue.main.async { handler?() }
+    }
+}
+#endif
 
 enum APIError: LocalizedError, Equatable {
     case notConfigured

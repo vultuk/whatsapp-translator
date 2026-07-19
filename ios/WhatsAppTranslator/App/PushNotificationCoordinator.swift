@@ -228,6 +228,17 @@ final class PushNotificationCoordinator {
 }
 
 final class NotificationAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        guard identifier == "com.vultuk.whatsapptranslator.photo-uploads" else {
+            completionHandler()
+            return
+        }
+        BackgroundPhotoUploadSession.shared.reconnect(completionHandler: completionHandler)
+    }
     @MainActor
     func application(
         _ application: UIApplication,

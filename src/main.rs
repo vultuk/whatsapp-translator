@@ -397,6 +397,16 @@ async fn handle_web_event(
             // TODO: Could broadcast send result to WebSocket clients for UI updates
         }
 
+        BridgeEvent::SendProgress {
+            request_id: _,
+            progress_id,
+            stage,
+            completed,
+            total,
+        } => {
+            state.handle_send_progress(progress_id, stage, completed, total);
+        }
+
         BridgeEvent::ProfilePicture {
             request_id,
             jid: _,
@@ -827,6 +837,16 @@ async fn handle_terminal_event(
             }
         }
 
+        BridgeEvent::SendProgress {
+            progress_id,
+            stage,
+            completed,
+            total,
+            ..
+        } => {
+            debug!("Album {} {}: {}/{}", progress_id, stage, completed, total);
+        }
+
         BridgeEvent::ProfilePicture { .. } => {
             // Profile pictures are only used in web mode
             debug!("Ignoring profile picture event in terminal mode");
@@ -929,6 +949,20 @@ impl serde::Serialize for BridgeEvent {
                 if let Some(err) = error {
                     map.serialize_entry("error", err)?;
                 }
+            }
+            BridgeEvent::SendProgress {
+                request_id,
+                progress_id,
+                stage,
+                completed,
+                total,
+            } => {
+                map.serialize_entry("type", "send_progress")?;
+                map.serialize_entry("request_id", request_id)?;
+                map.serialize_entry("progress_id", progress_id)?;
+                map.serialize_entry("stage", stage)?;
+                map.serialize_entry("completed", completed)?;
+                map.serialize_entry("total", total)?;
             }
             BridgeEvent::ProfilePicture {
                 request_id,

@@ -38,6 +38,15 @@ pub enum BridgeEvent {
         error: Option<String>,
     },
 
+    /// Progress while a grouped photo send is uploaded and committed.
+    SendProgress {
+        request_id: i32,
+        progress_id: String,
+        stage: String,
+        completed: usize,
+        total: usize,
+    },
+
     /// Profile picture response
     ProfilePicture {
         request_id: i32,
@@ -304,6 +313,8 @@ pub enum BridgeCommand {
     SendImages {
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        progress_id: Option<String>,
         to: String,
         images: Vec<BridgeImage>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -502,6 +513,7 @@ mod tests {
     fn test_send_images_command_serializes_album_payload() {
         let command = BridgeCommand::SendImages {
             request_id: Some(7),
+            progress_id: Some("job-7".to_string()),
             to: "chat@example.test".to_string(),
             images: vec![BridgeImage {
                 media_data: "aW1hZ2U=".to_string(),
@@ -517,5 +529,17 @@ mod tests {
         assert_eq!(json["type"], "send_images");
         assert_eq!(json["images"][0]["mime_type"], "image/jpeg");
         assert_eq!(json["caption"], "Summer");
+        assert_eq!(json["progress_id"], "job-7");
+    }
+
+    #[test]
+    fn test_parse_album_send_progress() {
+        let event: BridgeEvent = serde_json::from_str(
+            r#"{"type":"send_progress","request_id":7,"progress_id":"job-7","stage":"sending","completed":2,"total":4}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(event, BridgeEvent::SendProgress { request_id: 7, progress_id, stage, completed: 2, total: 4 } if progress_id == "job-7" && stage == "sending")
+        );
     }
 }

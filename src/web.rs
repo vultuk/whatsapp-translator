@@ -152,6 +152,12 @@ pub enum WebSocketEvent {
         message_ids: Vec<String>,
         status: String,
     },
+    SendProgress {
+        progress_id: String,
+        stage: String,
+        completed: usize,
+        total: usize,
+    },
     SendResult {
         request_id: i32,
         success: bool,
@@ -266,6 +272,7 @@ pub struct SendImageItemRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SendImagesRequest {
     pub contact_id: String,
+    pub progress_id: Option<String>,
     pub images: Vec<SendImageItemRequest>,
     pub caption: Option<String>,
     pub reply_to: Option<String>,
@@ -929,6 +936,21 @@ impl AppState {
                 result.request_id
             );
         }
+    }
+
+    pub fn handle_send_progress(
+        &self,
+        progress_id: String,
+        stage: String,
+        completed: usize,
+        total: usize,
+    ) {
+        let _ = self.broadcast_tx.send(WebSocketEvent::SendProgress {
+            progress_id,
+            stage,
+            completed,
+            total,
+        });
     }
 }
 
@@ -2380,6 +2402,7 @@ async fn send_images(
     let rx = state.register_pending_send(request_id, None).await;
     let command = BridgeCommand::SendImages {
         request_id: Some(request_id),
+        progress_id: req.progress_id.clone(),
         to: req.contact_id.clone(),
         images: req
             .images
