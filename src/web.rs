@@ -28,7 +28,7 @@ use tower_http::services::ServeDir;
 use tracing::{error, info, warn};
 
 use crate::bridge::{BridgeCommand, BridgeImage};
-use crate::mcp::WhatsAppMcpServer;
+use crate::mcp::{McpPermissions, WhatsAppMcpServer};
 use crate::oauth::{
     generate_token, AccessToken, AuthorizationCode, AuthorizeRequest, OAuthClientRegistration,
     OAuthError, OAuthErrorResponse, PendingAuthorization, RefreshToken, RevokeRequest,
@@ -101,6 +101,10 @@ pub struct AppState {
     /// Pending send requests (request_id -> pending reconciliation metadata)
     pub pending_send_requests: RwLock<HashMap<i32, PendingSendRequest>>,
     pub pending_photo_albums: RwLock<HashMap<String, PendingPhotoAlbum>>,
+    /// Short-lived MCP message preparations keyed by opaque preparation token.
+    pub mcp_prepared_messages: RwLock<HashMap<String, serde_json::Value>>,
+    /// MCP write outcomes keyed by caller-provided idempotency key.
+    pub mcp_idempotency_results: RwLock<HashMap<String, serde_json::Value>>,
     /// Request ID counter
     pub request_id_counter: AtomicI32,
     /// Password for web interface (None = no password required)
@@ -567,6 +571,8 @@ impl AppState {
             pending_avatar_requests: RwLock::new(HashMap::new()),
             pending_send_requests: RwLock::new(HashMap::new()),
             pending_photo_albums: RwLock::new(HashMap::new()),
+            mcp_prepared_messages: RwLock::new(HashMap::new()),
+            mcp_idempotency_results: RwLock::new(HashMap::new()),
             request_id_counter: AtomicI32::new(1),
             password,
             auth_tokens: RwLock::new(HashMap::new()),
@@ -1456,6 +1462,8 @@ async fn logout(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     // 4. Clear auth tokens
     state.auth_tokens.write().await.clear();
+    state.mcp_prepared_messages.write().await.clear();
+    state.mcp_idempotency_results.write().await.clear();
 
     // 5. Reset connection state
     *state.connected.write().await = false;
@@ -1839,66 +1847,94 @@ async fn send_message(
         .get_conversation_settings(&req.contact_id)
         .unwrap_or_default();
 
-    // Determine the text to send - translate if needed based on conversation settings or language
-    let (text_to_send, _original_text, was_translated, target_language) =
-        if let Some(translator) = &state.translator {
-            // Determine target language: settings override > auto-detected > none
-            let target_lang = if let Some(ref lang_override) = settings.language_override {
-                // User explicitly set a language override - ALWAYS use it
-                Some(lang_override.clone())
-            } else {
-                // Fall back to auto-detected conversation language
-                state
-                    .store
-                    .get_conversation_language(&req.contact_id, 10)
-                    .ok()
-                    .flatten()
-            };
+    // Determine the target before checking translator availability. If a target exists,
+    // translation is necessary and every failure must stop before WhatsApp is touched.
+    let target_lang = settings.language_override.clone().or_else(|| {
+        state
+            .store
+            .get_conversation_language(&req.contact_id, 10)
+            .ok()
+            .flatten()
+    });
+    let (text_to_send, _original_text, was_translated, target_language) = if let Some(conv_lang) =
+        target_lang
+    {
+        let Some(translator) = &state.translator else {
+            error!(
+                "Translation to {} is needed for {}, but no translator is configured",
+                conv_lang, req.contact_id
+            );
+            return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "Translation to {} is required, but translation is unavailable. The English message was not sent.",
+                            conv_lang
+                        )
+                    })),
+                )
+                    .into_response();
+        };
+        info!(
+            "Target language for {} is {} (override: {})",
+            req.contact_id,
+            conv_lang,
+            settings.language_override.is_some()
+        );
 
-            if let Some(conv_lang) = target_lang {
-                info!(
-                    "Target language for {} is {} (override: {})",
-                    req.contact_id,
-                    conv_lang,
-                    settings.language_override.is_some()
-                );
-
-                match translator.translate_outgoing(&req.text, &conv_lang).await {
-                    Ok((translated, usage)) => {
-                        // Record usage if there was actual API usage
-                        if usage.input_tokens > 0 {
-                            if let Err(e) = state.store.record_usage(
-                                Some(&req.contact_id),
-                                None, // No message ID for outgoing yet
-                                &usage,
-                                "translate_outgoing",
-                            ) {
-                                warn!("Failed to record usage: {}", e);
-                            }
-                        }
-
-                        if translated != req.text {
-                            info!(
-                                "Translated outgoing message to {} (cost: ${:.6})",
-                                conv_lang, usage.cost_usd
-                            );
-                            (translated, Some(req.text.clone()), true, Some(conv_lang))
-                        } else {
-                            (req.text.clone(), None, false, None)
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to translate outgoing message: {}", e);
-                        (req.text.clone(), None, false, None)
+        match translator.translate_outgoing(&req.text, &conv_lang).await {
+            Ok((translated, usage)) if !translated.trim().is_empty() => {
+                if usage.input_tokens > 0 {
+                    if let Err(e) = state.store.record_usage(
+                        Some(&req.contact_id),
+                        None,
+                        &usage,
+                        "translate_outgoing",
+                    ) {
+                        warn!("Failed to record usage: {}", e);
                     }
                 }
-            } else {
-                // No target language set or detected
-                (req.text.clone(), None, false, None)
+
+                if translated != req.text {
+                    info!(
+                        "Translated outgoing message to {} (cost: ${:.6})",
+                        conv_lang, usage.cost_usd
+                    );
+                    (translated, Some(req.text.clone()), true, Some(conv_lang))
+                } else {
+                    (req.text.clone(), None, false, None)
+                }
             }
-        } else {
-            (req.text.clone(), None, false, None)
-        };
+            Ok((_translated, _usage)) => {
+                error!("Translation to {} returned empty text", conv_lang);
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "Translation to {} returned no text. The English message was not sent.",
+                            conv_lang
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                error!("Failed to translate outgoing message: {}", e);
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "Translation to {} failed. The English message was not sent.",
+                            conv_lang
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        (req.text.clone(), None, false, None)
+    };
 
     let send_plan = build_outgoing_send_plan(
         text_to_send,
@@ -3363,16 +3399,58 @@ fn now_unix_seconds() -> i64 {
 }
 
 fn normalize_oauth_scope(scope: Option<&str>) -> Result<String, String> {
-    let scope = scope.unwrap_or("mcp").trim();
+    let scope = scope.unwrap_or("whatsapp.read").trim();
     if scope.is_empty() {
-        return Ok("mcp".to_string());
+        return Ok("whatsapp.read".to_string());
     }
 
     let scopes: Vec<&str> = scope.split_whitespace().collect();
-    if scopes.iter().all(|entry| *entry == "mcp") {
-        Ok("mcp".to_string())
+    if scopes == ["mcp"] {
+        // Backwards compatibility for clients registered before split scopes existed.
+        return Ok("mcp".to_string());
+    }
+    if scopes
+        .iter()
+        .any(|entry| !matches!(*entry, "whatsapp.read" | "whatsapp.send"))
+    {
+        return Err("Only whatsapp.read and whatsapp.send OAuth scopes are supported".to_string());
+    }
+    if scopes.contains(&"whatsapp.send") && !scopes.contains(&"whatsapp.read") {
+        return Err("whatsapp.send requires whatsapp.read so recipients can be resolved and messages can be prepared safely".to_string());
+    }
+    let mut canonical = Vec::new();
+    if scopes.contains(&"whatsapp.read") {
+        canonical.push("whatsapp.read");
+    }
+    if scopes.contains(&"whatsapp.send") {
+        canonical.push("whatsapp.send");
+    }
+    Ok(canonical.join(" "))
+}
+
+fn resolve_oauth_authorization_scope(
+    requested_scope: Option<&str>,
+    registered_scope: &str,
+) -> Result<String, String> {
+    let requested_scope = match requested_scope.map(str::trim) {
+        None | Some("") => registered_scope.to_string(),
+        Some(scope) => normalize_oauth_scope(Some(scope))?,
+    };
+    if registered_scope == "mcp" {
+        // Legacy registrations represented full read/send access.
+        return Ok(requested_scope);
+    }
+    if requested_scope == "mcp" {
+        return Err("The legacy mcp scope is only available to legacy registrations".to_string());
+    }
+    let registered: Vec<&str> = registered_scope.split_whitespace().collect();
+    if requested_scope
+        .split_whitespace()
+        .all(|scope| registered.contains(&scope))
+    {
+        Ok(requested_scope)
     } else {
-        Err("Only the mcp OAuth scope is supported".to_string())
+        Err("Requested scope is not registered for this OAuth client".to_string())
     }
 }
 
@@ -3459,7 +3537,7 @@ async fn oauth_metadata(Host(host): Host) -> impl IntoResponse {
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
-        "scopes_supported": ["mcp"],
+        "scopes_supported": ["whatsapp.read", "whatsapp.send"],
         // MCP-specific fields
         "service_documentation": format!("{}/docs", base_url),
     }))
@@ -3474,7 +3552,7 @@ async fn oauth_protected_resource_metadata(Host(host): Host) -> impl IntoRespons
     Json(serde_json::json!({
         "resource": format!("{}/mcp", base_url),
         "authorization_servers": [base_url],
-        "scopes_supported": ["mcp"],
+        "scopes_supported": ["whatsapp.read", "whatsapp.send"],
         "bearer_methods_supported": ["header"]
     }))
 }
@@ -3629,27 +3707,20 @@ async fn oauth_authorize(
             .into_response();
     }
 
-    let requested_scope = match normalize_oauth_scope(params.scope.as_deref()) {
-        Ok(scope) => scope,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Html(format!(
-                    "<html><body><h1>Error</h1><p>{}</p></body></html>",
-                    html_escape(&error)
-                )),
-            )
-                .into_response();
-        }
-    };
-
-    if requested_scope != client.scope {
-        return (
-            StatusCode::BAD_REQUEST,
-            Html("<html><body><h1>Error</h1><p>Requested scope is not registered for this OAuth client.</p></body></html>".to_string()),
-        )
-            .into_response();
-    }
+    let requested_scope =
+        match resolve_oauth_authorization_scope(params.scope.as_deref(), &client.scope) {
+            Ok(scope) => scope,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Html(format!(
+                        "<html><body><h1>Error</h1><p>{}</p></body></html>",
+                        html_escape(&error)
+                    )),
+                )
+                    .into_response();
+            }
+        };
 
     // Generate a session key for this authorization request
     let session_key = generate_token();
@@ -3723,7 +3794,7 @@ async fn oauth_authorize(
         
         <div class="scope">
             <strong>Requested permissions:</strong> {scope}<br>
-            This will allow the application to read your contacts, messages, and send messages on your behalf.
+            {scope_description}
         </div>
         
         <p class="warning">⚠️ Only authorize applications you trust!</p>
@@ -3748,6 +3819,13 @@ async fn oauth_authorize(
         client_id = html_escape(&params.client_id),
         redirect_uri = html_escape(&params.redirect_uri),
         scope = html_escape(&requested_scope),
+        scope_description = if requested_scope == "whatsapp.read" {
+            "This allows the application to read your contacts and stored messages, but not send or modify WhatsApp state."
+        } else if requested_scope == "whatsapp.send" {
+            "This allows the application to send messages, replies, reactions, and read receipts on your behalf."
+        } else {
+            "This allows the application to read your contacts and messages and to send messages, replies, reactions, and read receipts on your behalf."
+        },
         base_url = base_url,
         session_key = session_key,
         password_field = if requires_password {
@@ -4254,6 +4332,7 @@ use rmcp::transport::streamable_http_server::{
 
 fn create_mcp_service(
     state: Arc<AppState>,
+    permissions: McpPermissions,
 ) -> StreamableHttpService<WhatsAppMcpServer, LocalSessionManager> {
     let session_manager = Arc::new(LocalSessionManager::default());
     let config = StreamableHttpServerConfig {
@@ -4264,7 +4343,7 @@ fn create_mcp_service(
     StreamableHttpService::new(
         move || {
             // Create a new MCP server instance for each request
-            Ok(WhatsAppMcpServer::new(state.clone()))
+            Ok(WhatsAppMcpServer::new(state.clone(), permissions))
         },
         session_manager,
         config,
@@ -4282,31 +4361,31 @@ async fn mcp_handler(
         .get(header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok());
 
-    let is_authenticated = if let Some(header) = auth_header {
+    let access_token = if let Some(header) = auth_header {
         if let Some(token) = header.strip_prefix("Bearer ") {
             // Validate the OAuth access token
             match state.store.oauth_validate_access_token(token) {
-                Ok(Some(_)) => {
+                Ok(Some(access_token)) => {
                     info!("MCP authenticated via OAuth token");
-                    true
+                    Some(access_token)
                 }
                 Ok(None) => {
                     info!("MCP request with invalid/expired OAuth token");
-                    false
+                    None
                 }
                 Err(e) => {
                     error!("Failed to validate OAuth token: {}", e);
-                    false
+                    None
                 }
             }
         } else {
-            false
+            None
         }
     } else {
-        false
+        None
     };
 
-    if !is_authenticated {
+    let Some(access_token) = access_token else {
         // Build the resource_metadata URL for the WWW-Authenticate header
         let is_https = !host.contains("localhost") && !host.contains("127.0.0.1");
         let base_url = get_base_url(&host, is_https);
@@ -4328,9 +4407,10 @@ async fn mcp_handler(
             })),
         )
             .into_response();
-    }
+    };
 
-    let service = create_mcp_service(state);
+    let permissions = McpPermissions::from_scope(&access_token.scope);
+    let service = create_mcp_service(state, permissions);
     // StreamableHttpService has an async handle method we can call directly
     service.handle(request).await.into_response()
 }
@@ -4338,6 +4418,7 @@ async fn mcp_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::ConversationSettings;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
     use std::path::PathBuf;
@@ -4370,6 +4451,44 @@ mod tests {
             .expect("request")
     }
 
+    #[test]
+    fn oauth_scopes_default_to_read_only_and_are_canonicalized() {
+        assert_eq!(
+            normalize_oauth_scope(None).expect("default scope"),
+            "whatsapp.read"
+        );
+        assert_eq!(
+            normalize_oauth_scope(Some("whatsapp.send whatsapp.read")).expect("valid scopes"),
+            "whatsapp.read whatsapp.send"
+        );
+        assert!(normalize_oauth_scope(Some("whatsapp.send")).is_err());
+        assert!(normalize_oauth_scope(Some("contacts.admin")).is_err());
+    }
+
+    #[test]
+    fn oauth_authorization_can_narrow_registered_permissions() {
+        assert_eq!(
+            resolve_oauth_authorization_scope(None, "whatsapp.read whatsapp.send")
+                .expect("registered default"),
+            "whatsapp.read whatsapp.send"
+        );
+        assert_eq!(
+            resolve_oauth_authorization_scope(Some("whatsapp.read"), "whatsapp.read whatsapp.send")
+                .expect("narrow scope"),
+            "whatsapp.read"
+        );
+        assert!(resolve_oauth_authorization_scope(
+            Some("whatsapp.read whatsapp.send"),
+            "whatsapp.read"
+        )
+        .is_err());
+        assert_eq!(
+            resolve_oauth_authorization_scope(Some("whatsapp.read whatsapp.send"), "mcp")
+                .expect("legacy full access"),
+            "whatsapp.read whatsapp.send"
+        );
+    }
+
     #[tokio::test]
     async fn global_openai_settings_are_validated_and_persisted() {
         let (state, data_dir) = test_state(None);
@@ -4394,6 +4513,64 @@ mod tests {
             }
         );
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn required_translation_without_a_translator_never_sends_english() {
+        let (state, data_dir) = test_state(None);
+        let contact_id = "33612345678@s.whatsapp.net";
+        state
+            .store
+            .upsert_contact(
+                contact_id,
+                Some("French Contact"),
+                Some("33612345678"),
+                Some("private"),
+                1_700_000_000_000,
+            )
+            .expect("insert contact");
+        state
+            .store
+            .update_conversation_settings(
+                contact_id,
+                &ConversationSettings {
+                    language_override: Some("French".to_string()),
+                    translation_style: None,
+                    send_original_follow_up: false,
+                },
+            )
+            .expect("settings");
+        state.set_connected(true, None, None).await;
+
+        let response = send_message(
+            State(state.clone()),
+            Json(SendMessageRequest {
+                contact_id: contact_id.to_string(),
+                text: "Hello".to_string(),
+                reply_to: None,
+                reply_to_sender: None,
+                reply_to_text: None,
+                reply_to_sender_name: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(state
+            .store
+            .get_messages(contact_id)
+            .expect("messages")
+            .is_empty());
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert!(payload["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("English message was not sent")));
+
+        std::fs::remove_dir_all(data_dir).expect("remove test data");
     }
 
     fn test_outgoing_message(id: &str, timestamp: i64) -> StoredMessage {
@@ -4697,6 +4874,14 @@ mod tests {
             .write()
             .await
             .insert(ui_token.clone(), chrono::Utc::now().timestamp() + 60);
+        state.mcp_prepared_messages.write().await.insert(
+            "prepared".to_string(),
+            serde_json::json!({"expiresAt":i64::MAX}),
+        );
+        state.mcp_idempotency_results.write().await.insert(
+            "idempotent".to_string(),
+            serde_json::json!({"expiresAt":i64::MAX}),
+        );
 
         let request = HttpRequest::builder()
             .method("POST")
@@ -4733,6 +4918,8 @@ mod tests {
             .expect("refresh token")
             .is_none());
         assert!(state.auth_tokens.read().await.is_empty());
+        assert!(state.mcp_prepared_messages.read().await.is_empty());
+        assert!(state.mcp_idempotency_results.read().await.is_empty());
         for filename in ["session.db", "session.db-wal", "session.db-shm"] {
             assert!(
                 !data_dir.join(filename).exists(),

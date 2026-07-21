@@ -109,6 +109,36 @@ The supported backend is the Rust app (`cargo run --release`). The `web/`
 package is only for frontend tests and Storybook previews; it does not run a
 separate Node API server.
 
+## MCP access
+
+The Streamable HTTP endpoint is `/mcp`. OAuth permissions are split into:
+
+- `whatsapp.read` — status, conversation discovery, message history/search,
+  and message preparation
+- `whatsapp.send` — sending prepared messages and replies, reactions, and read
+  receipts; this scope requires `whatsapp.read`
+
+If a client does not request a scope, it receives read-only access. The legacy
+`mcp` scope remains accepted for previously registered clients and grants both
+read and send access.
+
+The read workflow exposes `get_status`, `list_contacts`, `search_contacts`,
+`read_messages`, `search_messages`, and `prepare_message`. External writes are
+separate: `send_message`, `reply_to_message`, `react_to_message`, and
+`mark_conversation_read`.
+
+Text sends are deliberately two-step:
+
+1. Call `prepare_message` to resolve the exact recipient, translation mode,
+   target language, final text, and optional reply target.
+2. Show that result to the user, then pass its short-lived preparation token
+   and a unique idempotency key to `send_message` or `reply_to_message`.
+
+When a conversation requires translation, preparation fails closed if the
+translator is unavailable, errors, or returns empty text. The English source is
+never sent as a fallback. Use `translation_mode: "never"` only when sending the
+provided text unchanged is intentional.
+
 ## Deploy on Railway
 
 1. Click the Railway button above.

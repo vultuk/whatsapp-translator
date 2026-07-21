@@ -36,7 +36,7 @@ impl OAuthMetadata {
             ],
             code_challenge_methods_supported: vec!["S256".to_string()],
             token_endpoint_auth_methods_supported: vec!["none".to_string()], // Public clients
-            scopes_supported: vec!["mcp".to_string()],
+            scopes_supported: vec!["whatsapp.read".to_string(), "whatsapp.send".to_string()],
         }
     }
 }
