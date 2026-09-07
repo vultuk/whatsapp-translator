@@ -25,6 +25,12 @@ struct MacSettingsView: View {
                 settingsHeader
                 connectionSection
                 openAISection
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        VoicePreferenceSection(scope: "outgoing")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 appearanceSection
                 serverSection
             }

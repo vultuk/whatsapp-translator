@@ -289,6 +289,17 @@ pub enum BridgeCommand {
     },
 
     /// Send an image message
+    SendAudio {
+        request_id: Option<i32>,
+        to: String,
+        media_data: String,
+        duration_seconds: u32,
+        reply_to: Option<String>,
+        reply_to_sender: Option<String>,
+        reply_to_text: Option<String>,
+    },
+
+    /// Send an image message
     SendImage {
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<i32>,

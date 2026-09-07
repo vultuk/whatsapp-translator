@@ -4,12 +4,14 @@ import UniformTypeIdentifiers
 
 struct ComposerView: View {
     @Environment(\.translatorPalette) private var palette
+    let contactID: String
     @Binding var text: String
     let reply: MessageReplyTarget?
     let isSending: Bool
     let cancelReply: () -> Void
     let sendImages: ([OutgoingImage], String?) -> Bool
     let send: () -> Void
+    @State private var showVoiceComposer = false
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var pendingPhotos: PendingPhotoSelection?
     @State private var pickerError: String?
@@ -47,6 +49,11 @@ struct ComposerView: View {
                 .disabled(isSending)
                 .accessibilityLabel("Send photos")
 
+                Button("Record voice note", systemImage: "mic.fill") { showVoiceComposer = true }
+                    .labelStyle(.iconOnly)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .disabled(isSending)
+
                 composerInput
 
                 sendButton
@@ -70,6 +77,9 @@ struct ComposerView: View {
                 }
                 pendingPhotos = PendingPhotoSelection(photos: prepared)
             }
+        }
+        .sheet(isPresented: $showVoiceComposer) {
+            VoiceComposerView(contactID: contactID, reply: reply, onSent: cancelReply)
         }
         .sheet(item: $pendingPhotos) { selection in
             ImageComposerSheet(photos: selection.photos, reply: reply, send: sendImages)

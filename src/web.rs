@@ -94,6 +94,9 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub command_tx: RwLock<Option<mpsc::Sender<BridgeCommand>>>,
     pub translator: Option<Arc<TranslationService>>,
+    pub voice_lock: tokio::sync::Mutex<()>,
+    pub voice_queue: Arc<tokio::sync::Semaphore>,
+    pub voice_epoch: std::sync::atomic::AtomicU64,
     /// Cache of profile pictures (JID -> ProfilePicture)
     pub avatar_cache: RwLock<HashMap<String, ProfilePicture>>,
     /// Pending profile picture requests (request_id -> sender)
@@ -162,6 +165,9 @@ pub enum WebSocketEvent {
     },
     Reaction {
         message: StoredMessage,
+    },
+    VoiceReady {
+        message_id: String,
     },
     Typing {
         chat_id: String,
@@ -573,6 +579,9 @@ impl AppState {
             pending_photo_albums: RwLock::new(HashMap::new()),
             mcp_prepared_messages: RwLock::new(HashMap::new()),
             mcp_idempotency_results: RwLock::new(HashMap::new()),
+            voice_lock: tokio::sync::Mutex::new(()),
+            voice_queue: Arc::new(tokio::sync::Semaphore::new(4)),
+            voice_epoch: std::sync::atomic::AtomicU64::new(0),
             request_id_counter: AtomicI32::new(1),
             password,
             auth_tokens: RwLock::new(HashMap::new()),
@@ -1056,6 +1065,20 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/qr", get(get_qr))
         .route("/api/send", post(send_message))
         .route(
+            "/api/voice/settings/:scope",
+            get(crate::voice::get_settings).put(crate::voice::put_settings),
+        )
+        .route(
+            "/api/voice/translate/:message_id",
+            post(crate::voice::translate_received),
+        )
+        .route(
+            "/api/voice/prepare",
+            post(crate::voice::prepare).layer(DefaultBodyLimit::max(22 * 1024 * 1024)),
+        )
+        .route("/api/voice/send", post(crate::voice::send))
+        .route("/api/voice/sample/:voice", post(crate::voice::sample))
+        .route(
             "/api/send-image",
             post(send_image).layer(DefaultBodyLimit::max(MAX_IMAGE_REQUEST_BYTES)),
         )
@@ -1415,6 +1438,7 @@ async fn verify_auth_token(state: &Arc<AppState>, token: &str) -> bool {
 /// Logout - clear all data and session
 async fn logout(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     info!("Logout requested - clearing all data");
+    state.voice_epoch.fetch_add(1, Ordering::SeqCst);
 
     // 1. Clear the message store (contacts, messages, usage)
     if let Err(e) = state.store.clear_all() {

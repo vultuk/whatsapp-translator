@@ -195,10 +195,11 @@ type Command struct {
 	To         string `json:"to,omitempty"`
 	Text       string `json:"text,omitempty"`
 	// For send_image command
-	MediaData string         `json:"media_data,omitempty"` // Base64 encoded image
-	MimeType  string         `json:"mime_type,omitempty"`
-	Caption   string         `json:"caption,omitempty"`
-	Images    []ImagePayload `json:"images,omitempty"`
+	MediaData       string         `json:"media_data,omitempty"` // Base64 encoded image
+	MimeType        string         `json:"mime_type,omitempty"`
+	Caption         string         `json:"caption,omitempty"`
+	DurationSeconds uint32         `json:"duration_seconds,omitempty"`
+	Images          []ImagePayload `json:"images,omitempty"`
 	// For send_reaction command
 	MessageID string `json:"message_id,omitempty"` // Target message ID to react to
 	Emoji     string `json:"emoji,omitempty"`      // Reaction emoji (empty to remove)

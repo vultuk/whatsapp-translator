@@ -32,6 +32,7 @@ FROM debian:bookworm-slim
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

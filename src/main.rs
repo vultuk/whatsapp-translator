@@ -13,6 +13,7 @@ mod push;
 mod storage;
 mod style_analyzer;
 mod translation;
+mod voice;
 mod web;
 
 use anyhow::{Context, Result};
@@ -326,6 +327,10 @@ async fn handle_web_event(
 
             // Store message
             store.add_message(&stored_msg)?;
+
+            if !stored_msg.is_from_me && !is_history && stored_msg.content_type == "audio" {
+                voice::queue_incoming(state.clone(), stored_msg.id.clone());
+            }
 
             if !stored_msg.is_from_me && !is_history {
                 let push_state = Arc::clone(state);

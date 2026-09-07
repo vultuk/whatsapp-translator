@@ -1140,6 +1140,33 @@ func (c *Client) SendTextMessage(ctx context.Context, jidStr string, text string
 	return resp.ID, resp.Timestamp.Unix(), nil
 }
 
+// SendAudioMessage sends a normalized Ogg/Opus recording as a WhatsApp voice note.
+func (c *Client) SendAudioMessage(ctx context.Context, to, encoded string, seconds uint32, replyID, replySender, replyText string) (string, int64, error) {
+	jid, err := types.ParseJID(to)
+	if err != nil || to == "" {
+		return "", 0, fmt.Errorf("invalid recipient")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(data) < 32 || len(data) > 16*1024*1024 || string(data[:4]) != "OggS" || seconds == 0 || seconds > 240 {
+		return "", 0, fmt.Errorf("invalid voice note")
+	}
+	upload, err := c.client.Upload(ctx, data, whatsmeow.MediaAudio)
+	if err != nil {
+		return "", 0, fmt.Errorf("voice upload failed: %w", err)
+	}
+	msg := &waE2E.AudioMessage{
+		Mimetype: proto.String("audio/ogg; codecs=opus"), PTT: proto.Bool(true), Seconds: &seconds,
+		URL: &upload.URL, DirectPath: &upload.DirectPath, MediaKey: upload.MediaKey,
+		FileEncSHA256: upload.FileEncSHA256, FileSHA256: upload.FileSHA256, FileLength: &upload.FileLength,
+		ContextInfo: buildReplyContext(jid, replyID, replySender, replyText),
+	}
+	resp, err := c.client.SendMessage(ctx, jid, &waE2E.Message{AudioMessage: msg})
+	if err != nil {
+		return "", 0, err
+	}
+	return resp.ID, resp.Timestamp.Unix(), nil
+}
+
 // SendImageMessage sends an image message to the specified JID.
 // If replyToID is provided, the message will be a reply to that message.
 func (c *Client) SendImageMessage(ctx context.Context, jidStr string, mediaDataB64 string, mimeType string, caption string, replyToID string, replyToSender string, replyToText string) (string, int64, error) {

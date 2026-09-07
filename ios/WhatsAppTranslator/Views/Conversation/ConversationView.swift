@@ -93,6 +93,7 @@ struct ConversationView: View {
                         .padding(.vertical, 8)
                 }
                 ComposerView(
+                    contactID: contact.id,
                     text: $draft,
                     reply: replyTarget,
                     isSending: session.sendingContactIDs.contains(contact.id),

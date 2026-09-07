@@ -45,6 +45,36 @@ actor APIClient {
         }
     }
 
+    func voiceSample(preference: String) async throws -> VoiceSample {
+        try await authorizedRequest("/api/voice/sample/\(preference.urlPathEncoded)", method: "POST", timeoutInterval: 90)
+    }
+
+    func voicePreferences(scope: String) async throws -> VoicePreferences {
+        try await authorizedRequest("/api/voice/settings/\(scope.urlPathEncoded)")
+    }
+
+    func saveVoicePreferences(_ preferences: VoicePreferences, scope: String) async throws {
+        let _: VoicePreferences = try await authorizedRequest("/api/voice/settings/\(scope.urlPathEncoded)", method: "PUT", body: JSONEncoder.backend.encode(preferences))
+    }
+
+    func translateVoice(messageID: String) async throws -> TranslatedVoiceNote {
+        try await authorizedRequest("/api/voice/translate/\(messageID.urlPathEncoded)", method: "POST", timeoutInterval: 300)
+    }
+
+    func prepareVoice(data: Data, contactID: String, reply: MessageReplyTarget?) async throws -> TranslatedVoiceNote {
+        var payload = ["contactId": contactID, "mediaData": data.base64EncodedString()]
+        if let reply {
+            payload["replyTo"] = reply.messageID
+            payload["replyToSender"] = reply.senderJID
+            payload["replyToText"] = reply.text
+        }
+        return try await authorizedRequest("/api/voice/prepare", method: "POST", body: JSONEncoder.backend.encode(payload), timeoutInterval: 300)
+    }
+
+    func sendVoice(preparationID: String) async throws -> VoiceSendResult {
+        try await authorizedRequest("/api/voice/send", method: "POST", body: JSONEncoder.backend.encode(["preparationId": preparationID]), timeoutInterval: 120)
+    }
+
     func status() async throws -> BackendStatus {
         try await authorizedRequest("/api/status")
     }

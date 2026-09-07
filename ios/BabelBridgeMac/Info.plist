@@ -35,6 +35,8 @@
 	<string>Copyright © 2026 Simon Skinner. Open source under the repository license.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your self-hosted Babel Bridge backend.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record voice notes to translate and send in the conversation language.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>INSendMessageIntent</string>

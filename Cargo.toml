@@ -43,7 +43,7 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs"] }
 
 # HTTP client for OpenAI Responses API and link previews
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 
 # SQLite database
 rusqlite = { version = "0.31", features = ["bundled"] }

@@ -26,6 +26,8 @@ final class AppSession {
     var isRefreshing = false
     var sendingContactIDs: Set<String> = []
     var photoSendProgress: [String: PhotoSendProgress] = [:]
+    var voicePreferenceRevision = 0
+    var voiceReadyIDs: Set<String> = []
     var activeMessageActionIDs: Set<String> = []
     var messageImages: [String: PlatformImage] = [:]
     var messageMediaURLs: [String: URL] = [:]
@@ -97,6 +99,35 @@ final class AppSession {
             }
             return first.id < second.id
         }
+    }
+
+    func voiceSample(preference: String) async throws -> VoiceSample {
+        try await api.voiceSample(preference: preference)
+    }
+
+    func voicePreferences(scope: String) async throws -> VoicePreferences {
+        if demoMode { return VoicePreferences() }
+        return try await api.voicePreferences(scope: scope)
+    }
+
+    func saveVoicePreferences(_ preferences: VoicePreferences, scope: String) async throws {
+        if !demoMode { try await api.saveVoicePreferences(preferences, scope: scope) }
+        voicePreferenceRevision += 1
+    }
+
+    func translateVoice(messageID: String) async throws -> TranslatedVoiceNote {
+        try await api.translateVoice(messageID: messageID)
+    }
+
+    func prepareVoice(data: Data, contactID: String, reply: MessageReplyTarget?) async throws -> TranslatedVoiceNote {
+        try await api.prepareVoice(data: data, contactID: contactID, reply: reply)
+    }
+
+    func sendVoice(_ note: TranslatedVoiceNote) async throws -> VoiceSendResult {
+        let result = try await api.sendVoice(preparationID: note.id)
+        await loadMessages(for: note.contactId)
+        await refresh()
+        return result
     }
 
     func displayName(for contact: Contact) -> String {
@@ -708,6 +739,8 @@ final class AppSession {
                 )
             }
             persistCacheSoon()
+        case "voice_ready":
+            if let id = event.messageId { voiceReadyIDs.insert(id) }
         case "status":
             if let connected = event.connected {
                 backendStatus = BackendStatus(connected: connected, phone: backendStatus.phone, name: backendStatus.name)

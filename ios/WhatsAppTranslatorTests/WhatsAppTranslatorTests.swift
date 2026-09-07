@@ -768,3 +768,27 @@ final class WhatsAppTranslatorTests: XCTestCase {
         return try JSONDecoder().decode(ChatMessage.self, from: data)
     }
 }
+
+
+extension WhatsAppTranslatorTests {
+    func testTranslatedVoiceContractPreservesOriginalAndTranslatedPlayback() throws {
+        let json = #"{"id":"prepared-note","contactId":"contact","transcript":"Good morning","translation":"Jó reggelt","targetLanguage":"Hungarian","voice":"shimmer","audioData":"dHJhbnNsYXRlZA==","originalData":"b3JpZ2luYWw=","mimeType":"audio/mpeg","durationSeconds":2,"originalFollowUp":true}"#
+        let note = try JSONDecoder.backend.decode(TranslatedVoiceNote.self, from: Data(json.utf8))
+        XCTAssertEqual(note.voice, "shimmer")
+        XCTAssertEqual(Data(base64Encoded: note.originalData), Data("original".utf8))
+        XCTAssertEqual(Data(base64Encoded: note.audioData), Data("translated".utf8))
+        XCTAssertTrue(note.originalFollowUp)
+    }
+
+    func testVoiceReadinessEventDecodesWithoutTreatingItAsANewMessage() throws {
+        let json = #"{"type":"voice_ready","message_id":"voice-message"}"#
+        let event = try JSONDecoder.backend.decode(LiveEvent.self, from: Data(json.utf8))
+        XCTAssertEqual(event.messageId, "voice-message")
+        XCTAssertNil(event.message)
+    }
+
+    func testMicrophonePurposeIsDeclared() throws {
+        let purpose = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") as? String)
+        XCTAssertTrue(purpose.contains("voice"))
+    }
+}

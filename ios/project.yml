@@ -10,7 +10,7 @@ settings:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: SUR6QUSSV6
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 28
+    CURRENT_PROJECT_VERSION: 29
     MARKETING_VERSION: 1.0.0
 targets:
   WhatsAppTranslator:
@@ -58,6 +58,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
+        NSMicrophoneUsageDescription: Record voice notes to translate and send in the conversation language.
         NSLocalNetworkUsageDescription: Connect to your self-hosted Babel Bridge backend.
         NSSiriUsageDescription: Send and read translated messages with Siri, Apple Watch, and CarPlay.
         KeychainAccessGroup: $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
@@ -171,6 +172,7 @@ targets:
         com.apple.developer.usernotifications.communication: true
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
+        com.apple.security.device.audio-input: true
         keychain-access-groups:
           - $(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)
           - $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
@@ -197,6 +199,7 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         KeychainAccessGroup: $(AppIdentifierPrefix)com.vultuk.whatsapptranslator.shared
         LSApplicationCategoryType: public.app-category.social-networking
+        NSMicrophoneUsageDescription: Record voice notes to translate and send in the conversation language.
         NSLocalNetworkUsageDescription: Connect to your self-hosted Babel Bridge backend.
         NSUserActivityTypes:
           - INSendMessageIntent

@@ -14,6 +14,7 @@ Railway is the easiest hosted option for this app because it supports long-runni
 - View chats and messages in a local web UI
 - Send text, images, replies, and reactions
 - Translate incoming and outgoing messages with OpenAI
+- Listen to translated voice notes and record, preview, and send translated WhatsApp audio
 - Generate AI-composed messages and AI replies in your writing style
 - Per-chat translation settings, including an option to send the translation followed by the original text
 - Local SQLite storage for messages, usage, and session data
@@ -72,6 +73,7 @@ Prerequisites:
 
 - Rust
 - Go
+- FFmpeg (required for voice-note conversion and audio integration tests; included in Docker)
 
 Run:
 
@@ -108,6 +110,32 @@ http://localhost:3000
 The supported backend is the Rust app (`cargo run --release`). The `web/`
 package is only for frontend tests and Storybook previews; it does not run a
 separate Node API server.
+
+## Translated voice notes
+
+Incoming voice notes are transcribed, translated into your default language, and
+spoken by an AI-generated voice. The original remains available beside the
+translation. Older recordings can be translated on demand.
+
+Use the microphone button in a conversation to record up to three minutes,
+listen to the translated preview, then send it as a WhatsApp voice note. Set the
+conversation language first if it has not yet been detected. The existing
+original-follow-up setting also applies to recordings. Translation failures do
+not send the original as a fallback. Prepared recordings expire after 15 minutes;
+if a send reports an uncertain delivery, check the conversation before recording
+and sending again.
+
+Choose Automatic, Masculine, Feminine, or Neutral in app settings for your
+outgoing voice, or conversation settings for a contact's translated voice.
+Automatic approximately matches acoustic pitch and falls back to Neutral when
+uncertain; it does not clone the speaker or identify their gender. Each choice
+has an audible sample. Changing a setting applies to the next prepared recording.
+
+Voice processing requires microphone permission, FFmpeg, and an OpenAI key with
+access to `gpt-4o-mini-transcribe` and `gpt-4o-mini-tts`. Browser recording requires
+HTTPS or localhost. Audio and transcripts are sent to OpenAI for processing;
+cached recordings are stored in the private application database. Audio-service
+charges are not currently included in the app's text-model usage totals.
 
 ## MCP access
 

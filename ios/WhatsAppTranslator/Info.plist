@@ -31,6 +31,8 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your self-hosted Babel Bridge backend.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record voice notes to translate and send in the conversation language.</string>
 	<key>NSSiriUsageDescription</key>
 	<string>Send and read translated messages with Siri, Apple Watch, and CarPlay.</string>
 	<key>NSSupportsLiveActivities</key>

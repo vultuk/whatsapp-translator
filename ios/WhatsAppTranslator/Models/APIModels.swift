@@ -561,6 +561,7 @@ struct LiveEvent: Decodable, Sendable {
     let chatId: String?
     let message: ChatMessage?
     let messageIds: [String]?
+    let messageId: String?
     let status: String?
     let progressId: String?
     let stage: String?
@@ -576,9 +577,36 @@ struct LiveEvent: Decodable, Sendable {
         case progressId = "progress_id"
         case chatId = "chat_id"
         case messageIds = "message_ids"
+        case messageId = "message_id"
     }
 }
 
 private extension String {
     var nilIfBlank: String? { trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self }
 }
+
+struct VoicePreferences: Codable, Sendable {
+    var voice: String = "auto"
+}
+
+struct TranslatedVoiceNote: Decodable, Sendable, Identifiable {
+    let id: String
+    let contactId: String
+    let transcript: String
+    let translation: String
+    let targetLanguage: String
+    let voice: String
+    let audioData: String
+    let originalData: String
+    let mimeType: String
+    let durationSeconds: Int
+    let originalFollowUp: Bool
+}
+
+struct VoiceSendResult: Decodable, Sendable {
+    let success: Bool
+    let messageId: String
+    let warning: String?
+}
+
+struct VoiceSample: Decodable, Sendable { let audioData: String; let mimeType: String }

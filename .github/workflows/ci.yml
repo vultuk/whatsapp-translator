@@ -39,6 +39,9 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --check
 
+      - name: Install audio conversion dependency
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Test Rust backend
         run: cargo test
 

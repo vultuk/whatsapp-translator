@@ -22,6 +22,8 @@ struct AppSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                VoicePreferenceSection(scope: "outgoing")
+
                 Section("Connection") {
                     LabeledContent("Server", value: session.configuration?.baseURL.host() ?? "Not configured")
                     LabeledContent("WhatsApp", value: session.backendStatus.connected ? "Connected" : "Disconnected")

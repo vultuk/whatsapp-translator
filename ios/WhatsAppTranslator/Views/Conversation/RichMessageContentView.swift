@@ -52,15 +52,7 @@ struct RichMessageContentView: View {
                 }
                 caption
             case .audio:
-                if let mediaURL {
-                    AudioMessagePlayer(
-                        url: mediaURL,
-                        title: message.content?.isVoiceNote == true ? "Voice note" : "Audio",
-                        duration: message.content?.durationSeconds
-                    )
-                } else {
-                    mediaPlaceholder(systemImage: "waveform", title: message.displayText)
-                }
+                VoiceTranslationPlayer(message: message, originalURL: mediaURL)
             case .document:
                 if let mediaURL {
                     DocumentMessageView(
@@ -249,7 +241,7 @@ private struct MacInlineVideoPlayer: NSViewRepresentable {
 }
 #endif
 
-private struct AudioMessagePlayer: View {
+struct AudioMessagePlayer: View {
     let url: URL
     let title: String
     let duration: Double?

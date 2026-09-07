@@ -1,3 +1,4 @@
+import { setupVoiceNotes } from './voice-notes.js';
 // WhatsApp Translator Web Client
 
 import {
@@ -1800,6 +1801,9 @@ class WhatsAppClient {
         void this.handleDisconnected();
         break;
       
+      case 'voice_ready':
+        window.dispatchEvent(new CustomEvent('voice-ready', {detail:data.message_id}));
+        break;
       case 'message':
         this.handleNewMessage(data.message);
         break;
@@ -6367,3 +6371,4 @@ class WhatsAppClient {
 
 /* Initialize app */
 window.app = new WhatsAppClient();
+setupVoiceNotes(window.app);

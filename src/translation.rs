@@ -155,6 +155,43 @@ fn openai_retry_delay(attempt: usize) -> Duration {
 }
 
 impl TranslationService {
+    pub fn default_language(&self) -> &str {
+        &self.default_language
+    }
+
+    pub fn audio_api_url(&self, endpoint: &str) -> String {
+        format!(
+            "{}/audio/{endpoint}",
+            self.api_url.trim_end_matches("/responses")
+        )
+    }
+
+    /// Audio transcripts may be in any language, including when the target is the app default.
+    pub async fn translate_voice(
+        &self,
+        text: &str,
+        target: &str,
+        style: Option<&str>,
+    ) -> Result<TranslationResult> {
+        let (already_target, source, detection_usage) = self.detect_language(text, target).await?;
+        let (translated, usage) = if already_target || source.eq_ignore_ascii_case(target) {
+            (text.to_string(), detection_usage)
+        } else {
+            let (translated, usage) = self.translate(text, &source, target, style).await?;
+            (translated, Self::combine_usage(&detection_usage, &usage))
+        };
+        if translated.trim().is_empty() {
+            anyhow::bail!("Voice translation returned no text");
+        }
+        Ok(TranslationResult {
+            original_text: text.to_string(),
+            needs_translation: translated != text,
+            translated_text: Some(translated),
+            source_language: source,
+            usage,
+        })
+    }
+
     pub fn new(
         api_key: String,
         detection_model: String,
@@ -179,7 +216,7 @@ impl TranslationService {
     }
 
     #[cfg(test)]
-    fn new_with_api_url(api_url: String) -> Self {
+    pub(crate) fn new_with_api_url(api_url: String) -> Self {
         Self {
             client: Self::build_http_client(),
             api_url,

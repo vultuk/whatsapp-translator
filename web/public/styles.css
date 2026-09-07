@@ -4754,3 +4754,18 @@ select {
     radial-gradient(circle at top right, rgba(var(--accent-rgb), 0.05), transparent 28%),
     var(--surface-canvas);
 }
+
+/* Voice-note preparation and playback */
+.voice-dialog { margin: auto; padding: 22px; width: min(520px, calc(100% - 24px)); max-height: calc(100dvh - 24px); overflow: auto; border: 1px solid var(--border-color); border-radius: 16px; color: var(--text-primary); background: var(--bg-secondary); }
+.voice-dialog::backdrop { background: rgba(0,0,0,.6); }
+.voice-dialog h3, .voice-dialog h4, .voice-dialog p, .voice-preview details { margin-bottom: 12px; }
+.voice-button { padding: 10px 12px; min-height: 44px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-tertiary); color: var(--text-primary); cursor: pointer; }
+.voice-button:disabled { opacity: .6; cursor: wait; }
+.voice-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.voice-hint { font-size: 12px; color: var(--text-secondary); margin: 6px 0; overflow-wrap: anywhere; }
+.voice-preference { padding: 12px 0; }
+.voice-preference label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.voice-preference select { font: inherit; font-size: 16px; max-width: 100%; padding: 8px; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; }
+.voice-inline { max-width: 100%; padding: 8px 0; overflow-wrap: anywhere; }
+.voice-inline audio, .voice-dialog audio { display: block; width: 100%; max-width: 100%; margin: 8px 0; }
+.voice-inline details p, .voice-preview details p { white-space: pre-wrap; }

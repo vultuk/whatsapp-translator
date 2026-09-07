@@ -14,6 +14,8 @@ struct ConversationSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                VoicePreferenceSection(scope: contact.id)
+
                 Section {
                     LabeledContent("Nickname") {
                         TextField(

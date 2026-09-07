@@ -139,6 +139,75 @@ pub struct MessageStore {
 }
 
 impl MessageStore {
+    pub fn update_voice_transcript(
+        &self,
+        id: &str,
+        original: &str,
+        translated: &str,
+        source: &str,
+    ) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE messages SET original_text=? WHERE id=?",
+            params![original, id],
+        )?;
+        self.update_message_translation(id, Some(translated), Some(source))
+    }
+
+    pub fn voice_setting(&self, scope: &str) -> Result<String> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?",
+                params![format!("voice:{scope}")],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| "auto".into()))
+    }
+
+    pub fn set_voice_setting(&self, scope: &str, voice: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute("INSERT INTO app_settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("voice:{scope}"), voice])?;
+        Ok(())
+    }
+
+    pub fn voice_note(&self, id: &str) -> Result<Option<(String, String, Option<String>, i64)>> {
+        Ok(self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT payload, status, result, created_at FROM voice_notes WHERE id = ?",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn save_voice_note(&self, id: &str, payload: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM voice_notes WHERE status = 'prepared' AND created_at < ?",
+            params![chrono::Utc::now().timestamp() - 86400 * 7],
+        )?;
+        conn.execute("INSERT INTO voice_notes(id, payload, created_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING", params![id, payload, chrono::Utc::now().timestamp()])?;
+        Ok(())
+    }
+
+    pub fn claim_voice_send(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.lock().unwrap().execute(
+            "UPDATE voice_notes SET status='sending' WHERE id=? AND status='prepared'",
+            params![id],
+        )? == 1)
+    }
+
+    pub fn finish_voice_send(&self, id: &str, result: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE voice_notes SET status='sent', result=?, payload='{}' WHERE id=?",
+            params![result, id],
+        )?;
+        Ok(())
+    }
+
     /// Create a new message store
     pub fn new(data_dir: &Path) -> Result<Self> {
         // Ensure data directory exists with proper permissions
@@ -165,6 +234,13 @@ impl MessageStore {
             PRAGMA synchronous=NORMAL;
             PRAGMA temp_store=MEMORY;
             PRAGMA cache_size=-20000;
+            CREATE TABLE IF NOT EXISTS voice_notes (
+                id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'prepared',
+                result TEXT,
+                created_at INTEGER NOT NULL
+            );
             "#,
         )?;
 
@@ -1720,6 +1796,8 @@ impl MessageStore {
             DELETE FROM contacts;
             DELETE FROM translation_usage;
             DELETE FROM link_previews;
+            DELETE FROM voice_notes;
+            DELETE FROM app_settings WHERE key LIKE 'voice:%';
             "#,
         )?;
 
