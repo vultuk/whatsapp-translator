@@ -68,9 +68,13 @@ pub struct Args {
     #[arg(long, default_value = "English", env = "WA_DEFAULT_LANGUAGE")]
     pub default_language: String,
 
-    /// Password to protect the web interface (if not set, no password required)
+    /// Password to protect the web interface (required for hosted access)
     #[arg(long, env = "WA_PASSWORD")]
     pub password: Option<String>,
+
+    /// Explicitly allow passwordless local development on a loopback bind address
+    #[arg(long, env = "WA_ALLOW_LOCAL_NO_AUTH")]
+    pub allow_local_no_auth: bool,
 }
 
 impl Args {

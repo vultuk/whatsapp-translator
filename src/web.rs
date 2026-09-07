@@ -97,6 +97,7 @@ pub struct AppState {
     pub voice_lock: tokio::sync::Mutex<()>,
     pub voice_queue: Arc<tokio::sync::Semaphore>,
     pub voice_epoch: std::sync::atomic::AtomicU64,
+    pub login_budget: tokio::sync::Mutex<crate::access::LoginBudget>,
     /// Cache of profile pictures (JID -> ProfilePicture)
     pub avatar_cache: RwLock<HashMap<String, ProfilePicture>>,
     /// Pending profile picture requests (request_id -> sender)
@@ -106,8 +107,6 @@ pub struct AppState {
     pub pending_photo_albums: RwLock<HashMap<String, PendingPhotoAlbum>>,
     /// Short-lived MCP message preparations keyed by opaque preparation token.
     pub mcp_prepared_messages: RwLock<HashMap<String, serde_json::Value>>,
-    /// MCP write outcomes keyed by caller-provided idempotency key.
-    pub mcp_idempotency_results: RwLock<HashMap<String, serde_json::Value>>,
     /// Request ID counter
     pub request_id_counter: AtomicI32,
     /// Password for web interface (None = no password required)
@@ -120,7 +119,7 @@ pub struct AppState {
 }
 
 /// Bridge send result normalized for Rust/web consumers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BridgeSendResult {
     pub request_id: i32,
     pub success: bool,
@@ -169,6 +168,11 @@ pub enum WebSocketEvent {
     VoiceReady {
         message_id: String,
     },
+    MessageUpdated {
+        message: StoredMessage,
+    },
+    Resync,
+    Heartbeat,
     Typing {
         chat_id: String,
         user_id: String,
@@ -561,8 +565,11 @@ impl AppState {
         push_notifications: Option<Arc<ApnsClient>>,
     ) -> Arc<Self> {
         let (broadcast_tx, _) = broadcast::channel(100);
+        let next_request_id = store
+            .recover_outbox()
+            .expect("Cannot recover the durable outbox");
 
-        Arc::new(Self {
+        let state = Arc::new(Self {
             store,
             connected: RwLock::new(false),
             phone: RwLock::new(None),
@@ -578,16 +585,18 @@ impl AppState {
             pending_send_requests: RwLock::new(HashMap::new()),
             pending_photo_albums: RwLock::new(HashMap::new()),
             mcp_prepared_messages: RwLock::new(HashMap::new()),
-            mcp_idempotency_results: RwLock::new(HashMap::new()),
             voice_lock: tokio::sync::Mutex::new(()),
             voice_queue: Arc::new(tokio::sync::Semaphore::new(4)),
             voice_epoch: std::sync::atomic::AtomicU64::new(0),
-            request_id_counter: AtomicI32::new(1),
+            login_budget: tokio::sync::Mutex::new(crate::access::LoginBudget::default()),
+            request_id_counter: AtomicI32::new(next_request_id),
             password,
             auth_tokens: RwLock::new(HashMap::new()),
             session_reset_requested: AtomicBool::new(false),
             push_notifications,
-        })
+        });
+        crate::outbox::recover_receipts(&state).expect("Cannot reconcile durable send receipts");
+        state
     }
 
     pub fn request_session_reset_before_bridge_restart(&self) {
@@ -635,6 +644,28 @@ impl AppState {
 
     /// Send a command to the bridge
     pub async fn send_bridge_command(&self, cmd: BridgeCommand) -> Result<(), String> {
+        let send_id = match &cmd {
+            BridgeCommand::Send { request_id, .. }
+            | BridgeCommand::SendImage { request_id, .. }
+            | BridgeCommand::SendImages { request_id, .. }
+            | BridgeCommand::SendAudio { request_id, .. }
+            | BridgeCommand::SendReaction { request_id, .. } => *request_id,
+            _ => None,
+        };
+        if let Some(id) = send_id {
+            if !self
+                .store
+                .has_outbox_attempt(id)
+                .map_err(|error| error.to_string())?
+            {
+                return Err("Unable to persist the send; nothing was sent.".into());
+            }
+            if let BridgeCommand::SendImages { images, .. } = &cmd {
+                self.store
+                    .set_expected_send_count(id, images.len())
+                    .map_err(|error| error.to_string())?;
+            }
+        }
         let tx = self.command_tx.read().await;
         if let Some(tx) = tx.as_ref() {
             tx.send(cmd).await.map_err(|e| e.to_string())
@@ -872,6 +903,15 @@ impl AppState {
         temp_message_id: Option<String>,
     ) -> oneshot::Receiver<BridgeSendResult> {
         let (tx, rx) = oneshot::channel();
+        let operation_id = crate::outbox::OPERATION_ID.try_with(Clone::clone).ok();
+        if let Err(error) = self.store.register_outbox_attempt(
+            request_id,
+            operation_id.as_deref(),
+            temp_message_id.as_deref(),
+        ) {
+            error!("Cannot persist send attempt: {error}");
+            return rx;
+        }
         let mut pending = self.pending_send_requests.write().await;
         pending.insert(
             request_id,
@@ -885,6 +925,7 @@ impl AppState {
 
     /// Cancel a pending send and remove any temporary optimistic row.
     pub async fn cancel_pending_send(&self, request_id: i32) {
+        let _ = self.store.cancel_outbox_attempt(request_id);
         let pending = self.pending_send_requests.write().await.remove(&request_id);
         if let Some(pending) = pending {
             if let Some(temp_message_id) = pending.temp_message_id {
@@ -917,18 +958,43 @@ impl AppState {
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(_)) => {
-                self.cancel_pending_send(request_id).await;
+                self.mark_send_uncertain(request_id).await;
                 Err(SendConfirmationError::ChannelClosed)
             }
             Err(_) => {
-                self.cancel_pending_send(request_id).await;
+                self.mark_send_uncertain(request_id).await;
                 Err(SendConfirmationError::Timeout)
+            }
+        }
+    }
+
+    async fn mark_send_uncertain(&self, request_id: i32) {
+        // Release the in-memory waiter, retaining durable metadata for late acknowledgements.
+        self.pending_send_requests.write().await.remove(&request_id);
+        if let Ok(Some(id)) = self.store.uncertain_attempt(request_id) {
+            if let Ok(Some(message)) = self.store.get_message_by_id(&id) {
+                let _ = self
+                    .broadcast_tx
+                    .send(WebSocketEvent::MessageUpdated { message });
             }
         }
     }
 
     /// Reconcile a bridge send_result with a temporary stored row and release waiters.
     pub async fn handle_send_result(&self, mut result: BridgeSendResult) {
+        if result.success && result.message_id.as_deref().is_none_or(str::is_empty) {
+            result.success = false;
+            result.error =
+                Some("WhatsApp confirmation did not include a message identifier.".into());
+        }
+        let expected = self
+            .store
+            .expected_send_count(result.request_id)
+            .unwrap_or(usize::MAX);
+        if result.success && expected > 1 && result.message_ids.len() != expected {
+            result.success = false;
+            result.error=Some("WhatsApp returned an incomplete album confirmation. Check the conversation before sending again.".into());
+        }
         result.timestamp = normalize_bridge_timestamp_millis(result.timestamp);
         result.timestamps = result
             .timestamps
@@ -937,15 +1003,31 @@ impl AppState {
                 normalize_bridge_timestamp_millis(Some(timestamp)).unwrap_or(timestamp)
             })
             .collect();
+        let metadata = self
+            .store
+            .complete_attempt(
+                result.request_id,
+                result.success,
+                &serde_json::to_string(&result).unwrap_or_default(),
+            )
+            .ok()
+            .flatten();
         let pending = self
             .pending_send_requests
             .write()
             .await
             .remove(&result.request_id);
 
-        if let Some(pending) = pending {
+        let late = pending
+            .as_ref()
+            .is_none_or(|pending| pending.tx.is_closed());
+        let temp_id = pending
+            .as_ref()
+            .and_then(|pending| pending.temp_message_id.clone())
+            .or_else(|| metadata.as_ref().and_then(|(_, temp)| temp.clone()));
+        if pending.is_some() || metadata.is_some() {
             if result.success {
-                if let Some(temp_message_id) = pending.temp_message_id.as_deref() {
+                if let Some(temp_message_id) = temp_id.as_deref() {
                     let confirmed_message_id =
                         result.message_id.as_deref().unwrap_or(temp_message_id);
                     if let Err(e) = self.store.replace_message_id(
@@ -958,26 +1040,34 @@ impl AppState {
                             temp_message_id, confirmed_message_id, e
                         );
                     }
+                    let _ = self.store.set_delivery_status(confirmed_message_id, "sent");
                 }
-            } else if let Some(temp_message_id) = pending.temp_message_id.as_deref() {
-                if let Err(e) = self.store.delete_message(temp_message_id) {
-                    warn!(
-                        "Failed to delete pending message {} after send failure: {}",
-                        temp_message_id, e
-                    );
-                }
+            } else if let Some(temp_message_id) = temp_id.as_deref() {
+                let _ = self.store.set_delivery_status(temp_message_id, "uncertain");
             }
 
             let _ = self.broadcast_tx.send(WebSocketEvent::SendResult {
                 request_id: result.request_id,
                 success: result.success,
-                temp_message_id: pending.temp_message_id.clone(),
+                temp_message_id: temp_id,
                 message_id: result.message_id.clone(),
                 timestamp: result.timestamp,
                 error: result.error.clone(),
             });
 
-            let _ = pending.tx.send(result);
+            if late && result.success {
+                if let Err(error) = crate::voice::recover_confirmation(self, result.clone()) {
+                    warn!("Late voice confirmation failed: {error}");
+                }
+                if let Some((Some(operation), _)) = metadata {
+                    if let Err(error) = crate::outbox::confirm_late(self, &operation) {
+                        warn!("Late delivery reconciliation failed: {error}");
+                    }
+                }
+            }
+            if let Some(pending) = pending {
+                let _ = pending.tx.send(result);
+            }
         } else if result.request_id != 0 {
             warn!(
                 "Received send_result for unknown request_id {}",
@@ -1042,6 +1132,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let protected_api = Router::new()
         .route("/api/logout", post(logout))
         .route("/api/status", get(get_status))
+        .route("/api/outbox/:id", get(crate::outbox::status))
         .route(
             "/api/settings/openai",
             get(get_openai_settings).put(update_openai_settings),
@@ -1142,8 +1233,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 }
 
 /// Start the web server
-pub async fn start_server(state: Arc<AppState>, host: &str, port: u16) -> anyhow::Result<()> {
-    let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
+pub async fn start_server(
+    state: Arc<AppState>,
+    host: &str,
+    port: u16,
+    allow_local_no_auth: bool,
+) -> anyhow::Result<()> {
+    crate::access::validate(host, state.password.as_deref(), allow_local_no_auth)?;
+    let addr = SocketAddr::new(host.parse()?, port);
     cleanup_expired_oauth(&state, "startup");
     spawn_oauth_cleanup_task(state.clone());
     let router = create_router(state);
@@ -1199,15 +1296,25 @@ async fn auth_login(
     };
 
     // Check password
+    if !state.login_budget.lock().await.take() {
+        return (StatusCode::TOO_MANY_REQUESTS, [("Retry-After", "60")], Json(serde_json::json!({"success":false,"error":"Too many sign-in attempts. Try again in one minute."}))).into_response();
+    }
     if req.password == *expected_password {
         let token = generate_token();
         let expires_at = chrono::Utc::now().timestamp() + WEB_AUTH_TOKEN_TTL_SECONDS;
 
-        state
-            .auth_tokens
-            .write()
-            .await
-            .insert(token.clone(), expires_at);
+        let mut tokens = state.auth_tokens.write().await;
+        tokens.retain(|_, expiry| *expiry > chrono::Utc::now().timestamp());
+        if tokens.len() >= 128 {
+            if let Some(oldest) = tokens
+                .iter()
+                .min_by_key(|(_, expiry)| *expiry)
+                .map(|(key, _)| key.clone())
+            {
+                tokens.remove(&oldest);
+            }
+        }
+        tokens.insert(token.clone(), expires_at);
 
         info!("User authenticated successfully");
         Json(AuthResponse {
@@ -1370,7 +1477,7 @@ async fn require_web_auth(state: Arc<AppState>, req: Request, next: Next) -> Res
     };
 
     if verify_auth_values(&state, auth_header.as_deref(), websocket_token.as_deref()).await {
-        next.run(req).await
+        crate::outbox::dispatch(state, req, next).await
     } else {
         StatusCode::UNAUTHORIZED.into_response()
     }
@@ -1487,7 +1594,6 @@ async fn logout(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // 4. Clear auth tokens
     state.auth_tokens.write().await.clear();
     state.mcp_prepared_messages.write().await.clear();
-    state.mcp_idempotency_results.write().await.clear();
 
     // 5. Reset connection state
     *state.connected.write().await = false;
@@ -2038,7 +2144,7 @@ async fn send_message(
         },
         source_language: target_language.clone(), // The language we translated TO
         is_translated: was_translated,
-        delivery_status: Some("sent".to_string()),
+        delivery_status: Some("sending".to_string()),
     };
 
     if let Err(e) = state.store.add_message(&stored_msg) {
@@ -2202,7 +2308,7 @@ async fn send_original_follow_up(
         translated_text: None,
         source_language: None,
         is_translated: false,
-        delivery_status: Some("sent".to_string()),
+        delivery_status: Some("sending".to_string()),
     };
 
     state
@@ -2366,7 +2472,7 @@ async fn send_image(
         translated_text: None,
         source_language: None,
         is_translated: false,
-        delivery_status: Some("sent".to_string()),
+        delivery_status: Some("sending".to_string()),
     };
 
     // Store the message
@@ -3920,6 +4026,14 @@ async fn oauth_approve(
 
     // Verify password if required
     if let Some(expected_password) = &state.password {
+        if !state.login_budget.lock().await.take() {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [("Retry-After", "60")],
+                "Too many sign-in attempts. Try again in one minute.",
+            )
+                .into_response();
+        }
         match &form.password {
             Some(password) if password == expected_password => {}
             _ => {
@@ -4322,10 +4436,19 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
     }
 
     // Handle incoming messages and broadcast events
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
     loop {
         tokio::select! {
+            _ = heartbeat.tick() => {
+                if sender.send(Message::Text("{\"type\":\"heartbeat\"}".into())).await.is_err() { break; }
+            }
             // Broadcast events to client
-            Ok(event) = rx.recv() => {
+            received = rx.recv() => {
+                let event = match received {
+                    Ok(event) => event,
+                    Err(broadcast::error::RecvError::Lagged(_)) => WebSocketEvent::Resync,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
                 if let Ok(json) = serde_json::to_string(&event) {
                     if sender.send(Message::Text(json)).await.is_err() {
                         break;
@@ -4902,10 +5025,10 @@ mod tests {
             "prepared".to_string(),
             serde_json::json!({"expiresAt":i64::MAX}),
         );
-        state.mcp_idempotency_results.write().await.insert(
-            "idempotent".to_string(),
-            serde_json::json!({"expiresAt":i64::MAX}),
-        );
+        state
+            .store
+            .claim_mcp_send("idempotent", &serde_json::json!({"expiresAt":i64::MAX}))
+            .unwrap();
 
         let request = HttpRequest::builder()
             .method("POST")
@@ -4943,7 +5066,7 @@ mod tests {
             .is_none());
         assert!(state.auth_tokens.read().await.is_empty());
         assert!(state.mcp_prepared_messages.read().await.is_empty());
-        assert!(state.mcp_idempotency_results.read().await.is_empty());
+        assert!(state.store.mcp_send_record("idempotent").unwrap().is_none());
         for filename in ["session.db", "session.db-wal", "session.db-shm"] {
             assert!(
                 !data_dir.join(filename).exists(),
@@ -5113,7 +5236,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_send_result_deletes_pending_message_and_releases_waiter() {
+    async fn failed_send_result_preserves_uncertain_message_and_releases_waiter() {
         let (state, data_dir) = test_state(None);
         state
             .store
@@ -5153,7 +5276,8 @@ mod tests {
             .store
             .get_messages_paginated("chat@example.test", None, None, None, true)
             .expect("messages");
-        assert!(messages.is_empty());
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].delivery_status.as_deref(), Some("uncertain"));
 
         let _ = std::fs::remove_dir_all(data_dir);
     }
@@ -5166,6 +5290,396 @@ mod tests {
 
         assert_eq!(payload.mime_type, "image/png");
         assert!(payload.decoded_size > 0);
+    }
+
+    #[tokio::test]
+    async fn login_attempts_are_limited_and_outbox_requires_auth() {
+        let (state, dir) = test_state(Some("correct"));
+        let router = create_router(state);
+        for index in 0..16 {
+            let response = router
+                .clone()
+                .oneshot(
+                    HttpRequest::builder()
+                        .method("POST")
+                        .uri("/api/auth")
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"password":"incorrect"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if index < 15 {
+                    StatusCode::OK
+                } else {
+                    StatusCode::TOO_MANY_REQUESTS
+                }
+            );
+            if index == 15 {
+                assert_eq!(response.headers()["retry-after"], "60");
+            }
+        }
+        assert_eq!(
+            router
+                .oneshot(empty_request("/api/outbox/private-operation"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn http_send_survives_disconnect_retries_and_restart_without_resending() {
+        let (state, dir) = test_state(None);
+        state
+            .store
+            .upsert_contact(
+                "test@s.whatsapp.net",
+                Some("Test contact"),
+                None,
+                Some("private"),
+                1,
+            )
+            .unwrap();
+        *state.connected.write().await = true;
+        let (commands, mut receiver) = mpsc::channel(8);
+        state.set_command_tx(commands).await;
+        let router = create_router(state.clone());
+        let request = || {
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/send")
+                .header("content-type", "application/json")
+                .header("idempotency-key", "durable-send-one")
+                .body(Body::from(
+                    r#"{"contactId":"test@s.whatsapp.net","text":"Hello"}"#,
+                ))
+                .unwrap()
+        };
+        let sending = tokio::spawn(router.clone().oneshot(request()));
+        let command = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let BridgeCommand::Send {
+            request_id: Some(request_id),
+            ..
+        } = command
+        else {
+            panic!("expected send")
+        };
+        sending.abort(); // Simulate the browser losing its HTTP connection after server acceptance.
+        state
+            .handle_send_result(BridgeSendResult {
+                request_id,
+                success: true,
+                message_id: Some("confirmed-one".into()),
+                timestamp: Some(1_700_000_000),
+                message_ids: vec![],
+                timestamps: vec![],
+                error: None,
+            })
+            .await;
+        for _ in 0..100 {
+            if state
+                .store
+                .outbox_entry("durable-send-one")
+                .unwrap()
+                .unwrap()
+                .state
+                == "confirmed"
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let response = router.clone().oneshot(request()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-delivery-state"], "confirmed");
+        assert!(receiver.try_recv().is_err());
+        let changed = HttpRequest::builder()
+            .method("POST")
+            .uri("/api/send")
+            .header("content-type", "application/json")
+            .header("idempotency-key", "durable-send-one")
+            .body(Body::from(
+                r#"{"contactId":"test@s.whatsapp.net","text":"Different"}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            router.oneshot(changed).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+        let restarted = AppState::new(
+            MessageStore::new(&dir).unwrap(),
+            PathBuf::from("web/public"),
+            dir.clone(),
+            None,
+            None,
+            None,
+        );
+        assert!(restarted.next_request_id() > request_id);
+        let response = create_router(restarted).oneshot(request()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["messageId"], "confirmed-one");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn timeout_preserves_uncertain_message_and_late_ack_reconciles_after_restart() {
+        let (state, dir) = test_state(None);
+        state
+            .store
+            .upsert_contact("chat@example.test", None, None, None, 1)
+            .unwrap();
+        state
+            .store
+            .add_message(&test_outgoing_message("pending-late", 1_700_000_000_000))
+            .unwrap();
+        state
+            .store
+            .claim_outbox("late-send", "fingerprint", "/api/send")
+            .unwrap();
+        let rx = crate::outbox::OPERATION_ID
+            .scope(
+                "late-send".to_string(),
+                state.register_pending_send(42, Some("pending-late".into())),
+            )
+            .await;
+        assert_eq!(
+            state
+                .wait_for_send_result_with_timeout(42, rx, Duration::from_millis(5))
+                .await
+                .unwrap_err(),
+            SendConfirmationError::Timeout
+        );
+        assert_eq!(
+            state
+                .store
+                .get_message_by_id("pending-late")
+                .unwrap()
+                .unwrap()
+                .delivery_status
+                .as_deref(),
+            Some("uncertain")
+        );
+        state
+            .store
+            .finish_outbox("late-send", 504, r#"{"error":"timeout"}"#)
+            .unwrap();
+        let restarted = AppState::new(
+            MessageStore::new(&dir).unwrap(),
+            PathBuf::from("web/public"),
+            dir.clone(),
+            None,
+            None,
+            None,
+        );
+        restarted
+            .handle_send_result(BridgeSendResult {
+                request_id: 42,
+                success: true,
+                message_id: Some("late-confirmed".into()),
+                timestamp: Some(1_700_000_003),
+                message_ids: vec![],
+                timestamps: vec![],
+                error: None,
+            })
+            .await;
+        assert!(restarted
+            .store
+            .get_message_by_id("pending-late")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            restarted
+                .store
+                .get_message_by_id("late-confirmed")
+                .unwrap()
+                .unwrap()
+                .delivery_status
+                .as_deref(),
+            Some("sent")
+        );
+        assert_eq!(
+            restarted
+                .store
+                .outbox_entry("late-send")
+                .unwrap()
+                .unwrap()
+                .state,
+            "confirmed"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn persisted_receipt_recovers_crash_before_message_and_http_commit() {
+        let (state, dir) = test_state(None);
+        state
+            .store
+            .upsert_contact("chat@example.test", None, None, None, 1)
+            .unwrap();
+        state
+            .store
+            .add_message(&test_outgoing_message("pending-crash", 1_700_000_000_000))
+            .unwrap();
+        state
+            .store
+            .claim_outbox("crashed", "fingerprint", "/api/send")
+            .unwrap();
+        state
+            .store
+            .register_outbox_attempt(70, Some("crashed"), Some("pending-crash"))
+            .unwrap();
+        let receipt = BridgeSendResult {
+            request_id: 70,
+            success: true,
+            message_id: Some("confirmed-crash".into()),
+            timestamp: Some(1_700_000_001),
+            message_ids: vec![],
+            timestamps: vec![],
+            error: None,
+        };
+        state
+            .store
+            .complete_attempt(70, true, &serde_json::to_string(&receipt).unwrap())
+            .unwrap();
+        drop(state);
+        let restarted = AppState::new(
+            MessageStore::new(&dir).unwrap(),
+            PathBuf::from("web/public"),
+            dir.clone(),
+            None,
+            None,
+            None,
+        );
+        assert!(restarted
+            .store
+            .get_message_by_id("pending-crash")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            restarted
+                .store
+                .get_message_by_id("confirmed-crash")
+                .unwrap()
+                .unwrap()
+                .delivery_status
+                .as_deref(),
+            Some("sent")
+        );
+        let operation = restarted.store.outbox_entry("crashed").unwrap().unwrap();
+        assert_eq!(operation.state, "confirmed");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&operation.response.unwrap()).unwrap()
+                ["messageId"],
+            "confirmed-crash"
+        );
+        assert!(!restarted
+            .store
+            .claim_outbox("crashed", "fingerprint", "/api/send")
+            .unwrap());
+        drop(restarted);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn incoming_translation_does_not_block_persistence_or_send_confirmations() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let entered_handler = entered.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/responses", listener.local_addr().unwrap());
+        let slow = Router::new().route(
+            "/responses",
+            post(move || {
+                let entered = entered_handler.clone();
+                async move {
+                    entered.notify_one();
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, slow).await.unwrap() });
+        let (_, dir) = test_state(None);
+        let translator = Arc::new(TranslationService::new_with_api_url(url));
+        let state = AppState::new(
+            MessageStore::new(&dir).unwrap(),
+            PathBuf::from("web/public"),
+            dir.clone(),
+            Some(translator.clone()),
+            None,
+            None,
+        );
+        crate::incoming::start(state.clone()).unwrap();
+        let event:crate::bridge::BridgeEvent=serde_json::from_value(serde_json::json!({"type":"message","id":"incoming-one","timestamp":1700000000,"from":{"jid":"123@s.whatsapp.net","phone":"123"},"chat":{"type":"private","jid":"123@s.whatsapp.net"},"content":{"type":"text","body":"Hola"},"is_from_me":false,"is_forwarded":false})).unwrap();
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            crate::handle_web_event(event.clone(), &state, &state.store, Some(&translator)),
+        )
+        .await
+        .expect("ingestion must not wait for OpenAI")
+        .unwrap();
+        assert_eq!(
+            state
+                .store
+                .get_message_by_id("incoming-one")
+                .unwrap()
+                .unwrap()
+                .original_text
+                .as_deref(),
+            Some("Hola")
+        );
+        tokio::time::timeout(Duration::from_secs(2), entered.notified())
+            .await
+            .expect("worker started the slow AI call");
+        let rx = state.register_pending_send(81, None).await;
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            crate::handle_web_event(
+                crate::bridge::BridgeEvent::SendResult {
+                    request_id: 81,
+                    success: true,
+                    message_id: Some("fast-confirmation".into()),
+                    timestamp: Some(1700000001),
+                    message_ids: vec![],
+                    timestamps: vec![],
+                    error: None,
+                },
+                &state,
+                &state.store,
+                Some(&translator),
+            ),
+        )
+        .await
+        .expect("send acknowledgements stay responsive")
+        .unwrap();
+        assert!(rx.await.unwrap().success);
+        crate::handle_web_event(event, &state, &state.store, Some(&translator))
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .store
+                .get_contact("123@s.whatsapp.net")
+                .unwrap()
+                .unwrap()
+                .unread_count,
+            1
+        );
+        server.abort();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

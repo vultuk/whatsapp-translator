@@ -3,12 +3,15 @@
 //! This application uses a Go bridge (wa-bridge) that implements the WhatsApp Web protocol
 //! via the whatsmeow library. Communication happens via JSON-lines over stdio.
 
+mod access;
 mod bridge;
 mod cli;
 mod display;
+mod incoming;
 mod link_preview;
 mod mcp;
 mod oauth;
+mod outbox;
 mod push;
 mod storage;
 mod style_analyzer;
@@ -37,6 +40,13 @@ use web::AppState;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse_args();
+    if args.web {
+        access::validate(
+            &args.host,
+            args.password.as_deref(),
+            args.allow_local_no_auth,
+        )?;
+    }
 
     // Initialize logging
     init_logging(args.verbose);
@@ -169,12 +179,14 @@ async fn run_web_mode(
         push_notifications,
     );
 
+    incoming::start(state.clone())?;
     // Spawn the web server (once, outside the bridge loop)
     let server_state = state.clone();
     let host = args.host.clone();
     let port = args.port;
+    let allow_local_no_auth = args.allow_local_no_auth;
     tokio::spawn(async move {
-        if let Err(e) = web::start_server(server_state, &host, port).await {
+        if let Err(e) = web::start_server(server_state, &host, port, allow_local_no_auth).await {
             error!("Web server error: {}", e);
         }
     });
@@ -301,9 +313,10 @@ async fn handle_web_event(
             // Extract unread count before moving msg
             let unread_count = msg.unread_count;
             let is_history = msg.is_history;
+            let already_stored = store.get_message_by_id(&msg.id)?.is_some();
 
             // Process and store the message
-            let stored_msg = process_message(msg, translator, Some(store)).await;
+            let stored_msg = process_message(msg, None, Some(store)).await;
 
             // Update contact with contact_name (not sender_name!)
             // contact_name is the chat name (other person for DMs, group name for groups)
@@ -320,19 +333,29 @@ async fn handle_web_event(
             if let Some(unread) = unread_count {
                 // History sync message with unread count from WhatsApp - use it directly
                 store.set_unread_count(&stored_msg.contact_id, unread)?;
-            } else if !stored_msg.is_from_me && !is_history {
+            } else if !stored_msg.is_from_me && !is_history && !already_stored {
                 // Live incoming message - increment unread
                 store.increment_unread(&stored_msg.contact_id)?;
             }
 
             // Store message
-            store.add_message(&stored_msg)?;
+            if !already_stored {
+                store.add_message(&stored_msg)?;
+            }
+
+            if !stored_msg.is_from_me
+                && !is_history
+                && translator.is_some()
+                && stored_msg.original_text.is_some()
+            {
+                store.enqueue_translation(&stored_msg.id)?;
+            }
 
             if !stored_msg.is_from_me && !is_history && stored_msg.content_type == "audio" {
                 voice::queue_incoming(state.clone(), stored_msg.id.clone());
             }
 
-            if !stored_msg.is_from_me && !is_history {
+            if !stored_msg.is_from_me && !is_history && !already_stored {
                 let push_state = Arc::clone(state);
                 let push_message = stored_msg.clone();
                 tokio::spawn(async move {
@@ -341,7 +364,15 @@ async fn handle_web_event(
             }
 
             // Broadcast to WebSocket clients
-            state.broadcast_message(stored_msg);
+            if already_stored {
+                if let Some(message) = store.get_message_by_id(&stored_msg.id)? {
+                    let _ = state
+                        .broadcast_tx
+                        .send(web::WebSocketEvent::MessageUpdated { message });
+                }
+            } else {
+                state.broadcast_message(stored_msg);
+            }
         }
 
         BridgeEvent::Error { code, message } => {

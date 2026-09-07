@@ -1302,15 +1302,11 @@ impl WhatsAppMcpServer {
         idempotency_key: &str,
         operation_key: &str,
     ) -> Result<Option<CallToolResult>, McpError> {
-        let records = self.state.mcp_idempotency_results.read().await;
-        let Some(value) = records.get(idempotency_key) else {
+        let Some(value) = self.state.store.mcp_send_record(idempotency_key).mcp()? else {
             return Ok(None);
         };
-        let record: McpIdempotencyRecord = serde_json::from_value(value.clone())
+        let record: McpIdempotencyRecord = serde_json::from_value(value)
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
-        if record.expires_at <= chrono::Utc::now().timestamp_millis() {
-            return Ok(None);
-        }
         if record.operation_key != operation_key {
             return Err(McpError::invalid_params(
                 "idempotency_key was already used for a different operation",
@@ -1343,23 +1339,13 @@ impl WhatsAppMcpServer {
             result: None,
             expires_at: chrono::Utc::now().timestamp_millis() + 24 * 60 * 60 * 1000,
         };
-        let mut records = self.state.mcp_idempotency_results.write().await;
-        let now = chrono::Utc::now().timestamp_millis();
-        records.retain(|_, value| {
-            value
-                .get("expiresAt")
-                .and_then(Value::as_i64)
-                .is_some_and(|expires_at| expires_at > now)
-        });
-        if records.contains_key(idempotency_key) {
-            false
-        } else {
-            records.insert(
-                idempotency_key.to_string(),
-                serde_json::to_value(record).expect("serialize idempotency record"),
-            );
-            true
-        }
+        self.state
+            .store
+            .claim_mcp_send(
+                idempotency_key,
+                &serde_json::to_value(record).expect("serialize idempotency record"),
+            )
+            .unwrap_or(false)
     }
 
     async fn finish_idempotent_operation(
@@ -1368,12 +1354,16 @@ impl WhatsAppMcpServer {
         status: &str,
         result: Value,
     ) {
-        let mut records = self.state.mcp_idempotency_results.write().await;
-        if let Some(value) = records.get_mut(idempotency_key) {
-            if let Ok(mut record) = serde_json::from_value::<McpIdempotencyRecord>(value.clone()) {
+        if let Ok(Some(value)) = self.state.store.mcp_send_record(idempotency_key) {
+            if let Ok(mut record) = serde_json::from_value::<McpIdempotencyRecord>(value) {
                 record.status = status.to_string();
                 record.result = Some(result);
-                *value = serde_json::to_value(record).expect("serialize idempotency record");
+                if let Err(error) = self.state.store.update_mcp_send(
+                    idempotency_key,
+                    &serde_json::to_value(record).expect("serialize idempotency record"),
+                ) {
+                    tracing::error!("Cannot persist MCP send outcome: {error}");
+                }
             }
         }
     }

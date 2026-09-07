@@ -70,6 +70,7 @@ final class BabelBridgeMacTests: XCTestCase {
     @MainActor
     func testComposerUsesAMultilineMacTextEditor() {
         let view = ComposerView(
+            contactID: "test-contact",
             text: .constant("First line"),
             reply: nil,
             isSending: false,

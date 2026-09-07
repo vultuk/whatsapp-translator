@@ -43,6 +43,9 @@ final class AppSession {
     private let cache: ChatCacheStore
     private let mediaCache: MediaCacheStore
     private let demoMode: Bool
+    var liveUpdatesReconnecting = false
+    private var recoveryTask: Task<Void, Never>?
+    private var recoveryNeedsAnotherPass = false
     private let demoConversationMode: Bool
     private var avatarRequests: Set<String> = []
     private var mediaRequests: Set<String> = []
@@ -632,6 +635,8 @@ final class AppSession {
     }
 
     func forgetServer() {
+        recoveryTask?.cancel()
+        liveUpdatesReconnecting = false
         Task {
             await api.disconnectLiveEvents()
             await cache.clear()
@@ -727,8 +732,10 @@ final class AppSession {
     }
 
     private func handle(_ event: LiveEvent) {
+        guard phase == .ready else { return }
         switch event.type {
-        case "message", "reaction":
+        case "message", "reaction", "message_updated":
+            if recoveryTask != nil { recoveryNeedsAnotherPass = true }
             guard let message = event.message else { return }
             messages[message.contactId] = normalizeMessages((messages[message.contactId] ?? []) + [message])
             if !message.isReaction {
@@ -741,6 +748,19 @@ final class AppSession {
             persistCacheSoon()
         case "voice_ready":
             if let id = event.messageId { voiceReadyIDs.insert(id) }
+        case "live_reconnecting":
+            liveUpdatesReconnecting = true
+        case "live_restored", "resync", "send_result":
+            liveUpdatesReconnecting = false
+            if recoveryTask != nil { recoveryNeedsAnotherPass = true; return }
+            recoveryTask = Task {
+                defer { recoveryTask = nil }
+                repeat {
+                    recoveryNeedsAnotherPass = false
+                    await refresh()
+                    if let id = selectedContactID { await loadMessages(for: id) }
+                } while recoveryNeedsAnotherPass && !Task.isCancelled
+            }
         case "status":
             if let connected = event.connected {
                 backendStatus = BackendStatus(connected: connected, phone: backendStatus.phone, name: backendStatus.name)

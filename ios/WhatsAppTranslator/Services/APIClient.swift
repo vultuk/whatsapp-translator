@@ -6,12 +6,15 @@ actor APIClient {
     private var token: String?
     private var webSocket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
+    private var liveGeneration = UUID()
+    private var lastLiveMessage = Date()
 
     init(session: URLSession = .shared) {
         self.session = session
     }
 
     func configure(_ configuration: ServerConfiguration) {
+        disconnectLiveEvents()
         self.configuration = configuration
         token = nil
     }
@@ -314,48 +317,77 @@ actor APIClient {
     }
 
     func connectLiveEvents(handler: @escaping @MainActor @Sendable (LiveEvent) -> Void) throws {
-        guard let configuration else { throw APIError.notConfigured }
+        guard configuration != nil else { throw APIError.notConfigured }
         disconnectLiveEvents()
-        var components = URLComponents(url: configuration.baseURL.appending(path: "ws"), resolvingAgainstBaseURL: false)
-        components?.scheme = configuration.baseURL.scheme == "https" ? "wss" : "ws"
-        if let token { components?.queryItems = [URLQueryItem(name: "token", value: token)] }
-        guard let url = components?.url else { throw APIError.invalidServer }
-
-        let socket = session.webSocketTask(with: url)
-        webSocket = socket
-        socket.resume()
+        let generation = liveGeneration
         receiveTask = Task { [weak self] in
             guard let self else { return }
-            await self.receiveMessages(socket: socket, handler: handler)
+            await self.runLiveConnection(generation: generation, handler: handler)
         }
     }
 
     func disconnectLiveEvents() {
+        liveGeneration = UUID()
         receiveTask?.cancel()
         receiveTask = nil
         webSocket?.cancel(with: .goingAway, reason: nil)
         webSocket = nil
     }
 
-    private func receiveMessages(
-        socket: URLSessionWebSocketTask,
+    private func runLiveConnection(
+        generation: UUID,
         handler: @escaping @MainActor @Sendable (LiveEvent) -> Void
     ) async {
-        while !Task.isCancelled {
+        var retry = 0
+        while !Task.isCancelled && generation == liveGeneration {
             do {
-                let message = try await socket.receive()
-                let data: Data
-                switch message {
-                case .string(let value): data = Data(value.utf8)
-                case .data(let value): data = value
-                @unknown default: continue
+                guard let configuration else { return }
+                if retry > 0 { let _: BackendStatus = try await authorizedRequest("/api/status") }
+                guard generation == liveGeneration && !Task.isCancelled else { return }
+                var components = URLComponents(url: configuration.baseURL.appending(path: "ws"), resolvingAgainstBaseURL: false)
+                components?.scheme = configuration.baseURL.scheme == "https" ? "wss" : "ws"
+                if let token { components?.queryItems = [URLQueryItem(name: "token", value: token)] }
+                guard let url = components?.url else { throw APIError.invalidServer }
+                let socket = session.webSocketTask(with: url)
+                webSocket = socket
+                lastLiveMessage = Date()
+                socket.resume()
+                let watchdog = Task { [weak self] in
+                    while !Task.isCancelled {
+                        do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                        guard let self else { return }
+                        await self.checkLiveHealth(generation: generation, socket: socket)
+                    }
                 }
-                if let event = try? JSONDecoder.backend.decode(LiveEvent.self, from: data) {
-                    await handler(event)
+                defer { watchdog.cancel(); socket.cancel(with: .goingAway, reason: nil) }
+                while !Task.isCancelled && generation == liveGeneration {
+                    let message = try await socket.receive()
+                    lastLiveMessage = Date()
+                    let data: Data
+                    switch message {
+                    case .string(let value): data = Data(value.utf8)
+                    case .data(let value): data = value
+                    @unknown default: continue
+                    }
+                    if let event = try? JSONDecoder.backend.decode(LiveEvent.self, from: data) {
+                        if event.type == "status" { retry = 0; await handler(.signal("live_restored")) }
+                        await handler(event)
+                    }
                 }
             } catch {
-                return
+                guard !Task.isCancelled && generation == liveGeneration else { return }
+                await handler(.signal("live_reconnecting"))
+                retry += 1
+                do { try await Task.sleep(for: .seconds(Self.reconnectDelay(attempt: retry))) } catch { return }
             }
+        }
+    }
+
+    static func reconnectDelay(attempt: Int) -> Double { min(30, pow(2, Double(min(max(attempt, 1), 5)))) }
+
+    private func checkLiveHealth(generation: UUID, socket: URLSessionWebSocketTask) {
+        if generation != liveGeneration || Date().timeIntervalSince(lastLiveMessage) > 50 {
+            socket.cancel(with: .goingAway, reason: nil)
         }
     }
 
@@ -422,11 +454,14 @@ actor APIClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = timeoutInterval
+        let sendIdentity = try await SendRecoveryStore.shared.identity(server: configuration.baseURL, path: path, method: method, body: body)
+        if let sendIdentity { request.setValue(sendIdentity.key, forHTTPHeaderField: "Idempotency-Key") }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let result = try await BackgroundPhotoUploadSession.shared.upload(request: request, body: body)
         guard let response = result.response as? HTTPURLResponse else { throw APIError.invalidServer }
+        try await SendRecoveryStore.shared.settle(sendIdentity, response: response)
         if response.statusCode == 401 { throw APIError.unauthorized }
         guard (200..<300).contains(response.statusCode) else {
             let message = (try? JSONDecoder.backend.decode(ErrorResponse.self, from: result.data).error)
@@ -450,6 +485,8 @@ actor APIClient {
         }
         var request = URLRequest(url: url)
         if let timeoutInterval { request.timeoutInterval = timeoutInterval }
+        let sendIdentity = try await SendRecoveryStore.shared.identity(server: configuration.baseURL, path: path, method: method, body: body)
+        if let sendIdentity { request.setValue(sendIdentity.key, forHTTPHeaderField: "Idempotency-Key") }
         request.httpMethod = method
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -458,8 +495,15 @@ actor APIClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        let (data, response) = try await session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do { (data, response) = try await session.data(for: request) }
+        catch {
+            if sendIdentity != nil { throw APIError.server("Delivery is uncertain. Retry the same action to check its result without sending twice.") }
+            throw error
+        }
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidServer }
+        try await SendRecoveryStore.shared.settle(sendIdentity, response: http)
         if http.statusCode == 401 { throw APIError.unauthorized }
         guard (200..<300).contains(http.statusCode) else {
             let message = (try? JSONDecoder.backend.decode(ErrorResponse.self, from: data).error)

@@ -25,6 +25,7 @@ Railway is the easiest hosted option for this app because it supports long-runni
 Minimum:
 
 - `WA_WEB=true`
+- `WA_PASSWORD` (required for hosted/network-accessible operation)
 
 Required for AI features:
 
@@ -36,7 +37,7 @@ Optional:
 - `WA_OPENAI_TRANSLATION_MODEL` default: `gpt-5.4-mini`
 - `WA_OPENAI_HIGH_END_MODEL` default: `gpt-5.4`
 - `WA_DEFAULT_LANGUAGE` default: `English`
-- `WA_PASSWORD` password for the web UI
+- `WA_ALLOW_LOCAL_NO_AUTH=true` permits password-free development only with an explicit loopback `WA_HOST`
 - `WA_HOST` default: `0.0.0.0`
 - `WA_PORT` default: `3000`
 - `WA_DATA_DIR` data directory for `session.db` and `messages.db`
@@ -58,8 +59,7 @@ all currently registered iPhones.
 
 Hosted deploy recommendation:
 
-- `WA_PASSWORD` is strongly recommended if the web UI is publicly reachable, and
-  is required before OAuth clients can be approved on non-loopback hosts
+- `WA_PASSWORD` is required on non-loopback hosts; startup fails without it
 - attach a persistent volume at `/data`
 - if `WA_PORT` is not set, the app will use Railway's `PORT`
 - MCP OAuth is intended for local MCP clients you explicitly approve. Dynamic
@@ -79,6 +79,8 @@ Run:
 
 ```bash
 export WA_WEB=true
+export WA_HOST=127.0.0.1
+export WA_ALLOW_LOCAL_NO_AUTH=true
 export OPENAI_API_KEY=your_key_here
 
 cargo run --release
@@ -95,6 +97,8 @@ go build -o wa-bridge .
 cd ..
 
 export WA_WEB=true
+export WA_HOST=127.0.0.1
+export WA_ALLOW_LOCAL_NO_AUTH=true
 export WA_BRIDGE_PATH="$PWD/wa-bridge/wa-bridge"
 export OPENAI_API_KEY=your_key_here
 
@@ -173,7 +177,7 @@ provided text unchanged is intentional.
 2. Attach a persistent volume mounted at `/data`.
 3. Set:
    - `OPENAI_API_KEY` if you want AI features
-   - `WA_PASSWORD` if the service will be publicly reachable
+   - `WA_PASSWORD` (required)
 4. Deploy and open the generated Railway domain.
 
 The repo includes [railway.toml](/Users/vultuk/Development/Personal/whatsapp-translator/railway.toml) for Dockerfile-based deploys and unauthenticated `/api/health` health checks.
@@ -193,6 +197,7 @@ docker run --rm -it \
   -p 3000:3000 \
   -v whatsapp-translator-data:/data \
   -e WA_WEB=true \
+  -e WA_PASSWORD=choose_a_strong_password \
   -e OPENAI_API_KEY=your_key_here \
   whatsapp-translator
 ```
@@ -216,3 +221,27 @@ bearer credentials for local MCP clients; protect the volume, set `WA_PASSWORD`
 on reachable deployments, and use logout or the protected OAuth client revocation
 API to revoke access. Do not commit those files or any `.env` file with real
 secrets.
+
+## Delivery and connection recovery
+
+Incoming text is stored immediately, then translated by two background workers.
+The persistent queue holds up to 1,000 pending jobs and retries failed jobs up to
+three attempts. Queue overflow and exhausted retries retain the original message;
+manual translation remains available. Completed translations update the existing
+message without creating another unread message.
+
+Native and browser clients reconnect with bounded backoff and refresh the open
+conversation to recover messages missed while disconnected. Outgoing actions use
+persisted idempotency keys. A lost response or server restart retains the same
+operation identity; retrying that operation does not blindly send another message.
+Pending sends remain visible as uncertain until confirmation arrives. A late
+WhatsApp acknowledgement reconciles the stored message and operation result.
+Check an uncertain conversation before composing a new send. These protections
+cannot prove delivery when WhatsApp never returns an acknowledgement.
+
+Keep the backend data volume and client app/browser storage intact for recovery.
+Logout clears server recovery records. MCP send claims and outcomes also persist
+across backend restarts. Deploy the updated backend before distributing the new
+native clients. Network-accessible startup requires a nonblank password; explicit
+password-free development binds only to loopback. Password verification allows
+15 attempts per minute across the single-user service, including OAuth approval.

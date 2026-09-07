@@ -12,6 +12,8 @@ use crate::oauth::{
     AccessToken, AuthorizationCode, OAuthClientRegistration, PendingAuthorization, RefreshToken,
 };
 use crate::translation::UsageInfo;
+mod reliability;
+pub use reliability::OutboxEntry;
 
 /// Stored message with translation info
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,6 +209,13 @@ impl MessageStore {
         )?;
         Ok(())
     }
+    pub fn release_voice_send(&self, id: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE voice_notes SET status='prepared' WHERE id=? AND status='sending'",
+            params![id],
+        )?;
+        Ok(())
+    }
 
     /// Create a new message store
     pub fn new(data_dir: &Path) -> Result<Self> {
@@ -234,6 +243,35 @@ impl MessageStore {
             PRAGMA synchronous=NORMAL;
             PRAGMA temp_store=MEMORY;
             PRAGMA cache_size=-20000;
+            CREATE TABLE IF NOT EXISTS translation_jobs (
+                message_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                retry_at INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS outbox (
+                id TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL,
+                path TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'sending',
+                status_code INTEGER,
+                response TEXT,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS mcp_send_records (
+                id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS outbox_attempts (
+                request_id INTEGER PRIMARY KEY,
+                outbox_id TEXT,
+                temp_message_id TEXT,
+                voice_note_id TEXT,
+                voice_original INTEGER NOT NULL DEFAULT 0,
+                expected_count INTEGER NOT NULL DEFAULT 1,
+                state TEXT NOT NULL DEFAULT 'sending',
+                result TEXT
+            );
             CREATE TABLE IF NOT EXISTS voice_notes (
                 id TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
@@ -1797,6 +1835,10 @@ impl MessageStore {
             DELETE FROM translation_usage;
             DELETE FROM link_previews;
             DELETE FROM voice_notes;
+            DELETE FROM translation_jobs;
+            DELETE FROM outbox_attempts;
+            DELETE FROM outbox;
+            DELETE FROM mcp_send_records;
             DELETE FROM app_settings WHERE key LIKE 'voice:%';
             "#,
         )?;
@@ -2626,6 +2668,79 @@ mod tests {
             is_translated: false,
             delivery_status: None,
         }
+    }
+
+    #[test]
+    fn translation_queue_survives_restart_and_bounds_retries() {
+        let (store, dir) = test_store();
+        store
+            .upsert_contact("chat@example.test", None, None, None, 1)
+            .unwrap();
+        store.add_message(&test_message("queued", 1)).unwrap();
+        store.enqueue_translation("queued").unwrap();
+        assert_eq!(
+            store.claim_translation().unwrap().as_deref(),
+            Some("queued")
+        );
+        drop(store);
+        let store = MessageStore::new(&dir).unwrap();
+        store.recover_translations().unwrap();
+        assert_eq!(
+            store.claim_translation().unwrap().as_deref(),
+            Some("queued")
+        );
+        store.retry_translation("queued").unwrap();
+        assert!(store.claim_translation().unwrap().is_none());
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE translation_jobs SET retry_at=0", [])
+            .unwrap();
+        assert_eq!(
+            store.claim_translation().unwrap().as_deref(),
+            Some("queued")
+        );
+        store.retry_translation("queued").unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE translation_jobs SET retry_at=0", [])
+            .unwrap();
+        assert!(store.claim_translation().unwrap().is_none());
+        assert_eq!(
+            store
+                .get_message_by_id("queued")
+                .unwrap()
+                .unwrap()
+                .original_text
+                .as_deref(),
+            Some("queued")
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn mcp_send_claim_and_outcome_survive_restart() {
+        let (store, dir) = test_store();
+        let pending = serde_json::json!({"state":"pending"});
+        assert!(store.claim_mcp_send("operation", &pending).unwrap());
+        drop(store);
+        let store = MessageStore::new(&dir).unwrap();
+        assert!(!store.claim_mcp_send("operation", &pending).unwrap());
+        assert_eq!(store.mcp_send_record("operation").unwrap(), Some(pending));
+        let outcome = serde_json::json!({"state":"completed", "messageId":"confirmed"});
+        store.update_mcp_send("operation", &outcome).unwrap();
+        drop(store);
+        let store = MessageStore::new(&dir).unwrap();
+        assert!(!store
+            .claim_mcp_send("operation", &serde_json::json!({}))
+            .unwrap());
+        assert_eq!(store.mcp_send_record("operation").unwrap(), Some(outcome));
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn message_ids(messages: &[StoredMessage]) -> Vec<String> {

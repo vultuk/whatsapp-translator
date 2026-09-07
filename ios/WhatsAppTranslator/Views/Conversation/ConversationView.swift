@@ -36,6 +36,11 @@ struct ConversationView: View {
         ZStack {
             ChatWallpaper()
             VStack(spacing: 0) {
+                if session.liveUpdatesReconnecting {
+                    Label("Reconnecting live updates… Your messages are saved.", systemImage: "wifi.slash")
+                        .font(.caption).padding(10).frame(maxWidth: .infinity)
+                        .background(.orange.opacity(0.12))
+                }
                 #if os(macOS)
                 MacConversationHeader(
                     contact: contact,

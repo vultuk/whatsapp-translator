@@ -81,6 +81,8 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     var deliveryState: MessageDeliveryState {
         guard isFromMe else { return .none }
         return switch deliveryStatus?.lowercased() {
+        case "sending": .sending
+        case "uncertain": .uncertain
         case "read", "played": .read
         case "delivered": .delivered
         default: .sent
@@ -244,6 +246,8 @@ private extension Character {
 
 enum MessageDeliveryState: Equatable, Sendable {
     case none
+    case sending
+    case uncertain
     case sent
     case delivered
     case read
@@ -251,6 +255,8 @@ enum MessageDeliveryState: Equatable, Sendable {
     var accessibilityLabel: String {
         switch self {
         case .none: ""
+        case .sending: "Sending"
+        case .uncertain: "Delivery uncertain — check before sending again"
         case .sent: "Sent"
         case .delivered: "Delivered"
         case .read: "Read"
@@ -567,6 +573,10 @@ struct LiveEvent: Decodable, Sendable {
     let stage: String?
     let completed: Int?
     let total: Int?
+
+    static func signal(_ type: String) -> LiveEvent {
+        LiveEvent(type: type, connected: nil, chatId: nil, message: nil, messageIds: nil, messageId: nil, status: nil, progressId: nil, stage: nil, completed: nil, total: nil)
+    }
 
     private enum CodingKeys: String, CodingKey {
         case type

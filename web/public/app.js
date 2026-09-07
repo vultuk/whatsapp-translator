@@ -1,4 +1,5 @@
 import { setupVoiceNotes } from './voice-notes.js';
+import { createReliableFetch, reconnectDelay, mergeMessageUpdate } from './send-recovery.js';
 // WhatsApp Translator Web Client
 
 import {
@@ -1630,6 +1631,7 @@ class WhatsAppClient {
       const result = await response.json();
 
       if (result.success) {
+        this.authExpired = false;
         // Store token
         if (result.token) {
           this.authToken = result.token;
@@ -1642,6 +1644,7 @@ class WhatsAppClient {
         // Start the app
         this.startApp();
       } else {
+        if (error) error.textContent = result.error || 'Unable to sign in.';
         error?.classList.remove('hidden');
         input?.focus();
         input?.select();
@@ -1663,11 +1666,14 @@ class WhatsAppClient {
     return headers;
   }
 
-  apiFetch(url, options = {}) {
-    return fetch(url, {
+  async apiFetch(url, options = {}) {
+    this.reliableFetch ||= createReliableFetch();
+    const response = await this.reliableFetch(url, {
       ...options,
       headers: this.getAuthHeaders(options.headers || {})
     });
+    if (response.status === 401) { this.authExpired = true; this.showPasswordOverlay(); }
+    return response;
   }
 
   // Handle logout
@@ -1754,32 +1760,77 @@ class WhatsAppClient {
 
   // WebSocket connection
   connectWebSocket() {
-    if (this.demoMode) return;
+    if (this.demoMode || this.authExpired) return;
+    if (this.ws && [WebSocket.OPEN, WebSocket.CONNECTING].includes(this.ws.readyState)) return;
+    clearTimeout(this.reconnectTimer);
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const tokenQuery = this.authToken ? `?token=${encodeURIComponent(this.authToken)}` : '';
     const wsUrl = `${protocol}//${window.location.host}/ws${tokenQuery}`;
     
-    this.ws = new WebSocket(wsUrl);
+    const socket = new WebSocket(wsUrl);
+    this.ws = socket;
+    this.lastLiveMessage = Date.now();
     
     this.ws.onopen = () => {
-      console.log('WebSocket connected');
+      clearInterval(this.liveWatchdog);
+      this.liveWatchdog = setInterval(() => { if (this.ws === socket && Date.now() - this.lastLiveMessage > 50000) socket.close(); }, 10000);
+      this.setLiveReconnectBanner(false);
+      void this.recoverLiveMessages();
     };
     
     this.ws.onmessage = (event) => {
+      if (this.ws !== socket) return;
+      this.lastLiveMessage = Date.now();
+      this.reconnectAttempt = 0;
       const data = JSON.parse(event.data);
       this.handleMessage(data);
     };
     
-    this.ws.onclose = () => {
-      if (this.demoMode) return;
-      console.log('WebSocket disconnected, reconnecting...');
-      setTimeout(() => this.connectWebSocket(), 3000);
+    this.ws.onclose = async () => {
+      if (this.demoMode || this.ws !== socket) return;
+      clearInterval(this.liveWatchdog);
+      this.setLiveReconnectBanner(true);
+      try { await this.apiFetch('/api/status'); } catch { /* Network still unavailable. */ }
+      if (this.authExpired || this.ws !== socket) return;
+      this.reconnectAttempt = (this.reconnectAttempt || 0) + 1;
+      this.reconnectTimer = setTimeout(() => this.connectWebSocket(), reconnectDelay(this.reconnectAttempt));
     };
     
     this.ws.onerror = (err) => {
       console.error('WebSocket error:', err);
     };
+  }
+
+  setLiveReconnectBanner(reconnecting) {
+    let banner = document.getElementById('live-reconnect-banner');
+    if (!banner) {
+      banner = document.createElement('div'); banner.id = 'live-reconnect-banner'; banner.setAttribute('role', 'status');
+      banner.textContent = 'Reconnecting live updates… Your messages are saved.';
+      document.getElementById('main-container')?.prepend(banner);
+    }
+    banner.hidden = !reconnecting;
+  }
+
+  async recoverLiveMessages() {
+    if (this.demoMode) return;
+    if (this.liveRecoveryRunning) { this.liveRecoveryPending = true; return; }
+    this.liveRecoveryRunning = true;
+    try {
+      do {
+        this.liveRecoveryPending = false;
+        await this.loadContacts();
+        if (this.currentContactId) await this.loadMessages(this.currentContactId);
+      } while (this.liveRecoveryPending && !this.authExpired);
+    } finally { this.liveRecoveryRunning = false; }
+  }
+
+  handleMessageUpdate(message) {
+    if (this.liveRecoveryRunning) this.liveRecoveryPending = true;
+    this.prepareMessageForCache(message);
+    this.messages.set(message.contactId, mergeMessageUpdate(this.messages.get(message.contactId) || [], message));
+    this.scheduleRenderContacts();
+    if (this.currentContactId === message.contactId) this.refreshCurrentConversationView();
   }
 
   // Handle incoming WebSocket messages
@@ -1803,6 +1854,13 @@ class WhatsAppClient {
       
       case 'voice_ready':
         window.dispatchEvent(new CustomEvent('voice-ready', {detail:data.message_id}));
+        break;
+      case 'message_updated':
+        this.handleMessageUpdate(data.message);
+        break;
+      case 'resync':
+      case 'send_result':
+        void this.recoverLiveMessages();
         break;
       case 'message':
         this.handleNewMessage(data.message);
@@ -2146,6 +2204,7 @@ class WhatsAppClient {
 
   // Handle new message
   handleNewMessage(message) {
+    if (this.liveRecoveryRunning) this.liveRecoveryPending = true;
     this.prepareMessageForCache(message);
 
     // Check if this is a reaction message
@@ -3492,6 +3551,8 @@ class WhatsAppClient {
         ${reactionsHtml}
         <div class="message-footer">
           <span class="message-time">${time}</span>
+          ${isOutgoing && message.deliveryStatus === 'uncertain' ? '<span class="delivery-uncertain">Delivery uncertain</span>' : ''}
+          ${isOutgoing && message.deliveryStatus === 'sending' ? '<span class="delivery-pending">Sending…</span>' : ''}
           ${starredBadge}
           ${translationIndicator}
           <div class="message-actions">
@@ -4090,23 +4151,25 @@ class WhatsAppClient {
     
     if (!text || !this.currentContactId) return;
     
+    const contactId = this.currentContactId;
+    const capturedReply = this.replyingTo ? {...this.replyingTo} : null;
     const sendButton = document.getElementById('send-button');
     sendButton.disabled = true;
     
     // Capture reply state before clearing
-    const replyTo = this.replyingTo ? this.replyingTo.messageId : null;
-    const replyToSender = this.replyingTo ? this.replyingTo.senderJid : null;
+    const replyTo = capturedReply ? capturedReply.messageId : null;
+    const replyToSender = capturedReply ? capturedReply.senderJid : null;
 
     if (this.demoMode) {
-      const replyContext = this.replyingTo ? { ...this.replyingTo } : null;
-      const metadata = this.getContactMetadata(this.currentContactId);
+      const replyContext = capturedReply ? { ...capturedReply } : null;
+      const metadata = this.getContactMetadata(contactId);
       const targetLanguage = metadata.targetLanguage || 'Spanish';
       const translatedText = simulateTranslation(text, targetLanguage);
       const sendOriginalFollowUp = Boolean(metadata.sendOriginalFollowUp && translatedText);
       const localMessage = {
         id: `demo-out-${Date.now()}`,
         timestamp: Date.now(),
-        contactId: this.currentContactId,
+        contactId: contactId,
         isFromMe: true,
         isForwarded: false,
         senderJid: this.getMessageSenderJid({ isFromMe: true }),
@@ -4119,22 +4182,22 @@ class WhatsAppClient {
       };
 
       input.value = '';
-      this.drafts = upsertDraft(this.drafts, this.currentContactId, '');
+      this.drafts = upsertDraft(this.drafts, contactId, '');
       this.persistDrafts();
       this.renderQuickReplies();
       this.clearReply();
       this.updateSendButton();
       this.autoResizeTextarea(input);
 
-      if (!this.messages.has(this.currentContactId)) {
-        this.messages.set(this.currentContactId, []);
+      if (!this.messages.has(contactId)) {
+        this.messages.set(contactId, []);
       }
-      this.messages.get(this.currentContactId).push(localMessage);
+      this.messages.get(contactId).push(localMessage);
       if (sendOriginalFollowUp) {
-        this.messages.get(this.currentContactId).push({
+        this.messages.get(contactId).push({
           id: `demo-original-${Date.now()}`,
           timestamp: Date.now() + 1,
-          contactId: this.currentContactId,
+          contactId: contactId,
           isFromMe: true,
           isForwarded: false,
           senderJid: this.getMessageSenderJid({ isFromMe: true }),
@@ -4153,7 +4216,7 @@ class WhatsAppClient {
     
     try {
       const requestBody = {
-        contactId: this.currentContactId,
+        contactId: contactId,
         text: text
       };
       
@@ -4163,8 +4226,8 @@ class WhatsAppClient {
         if (replyToSender) {
           requestBody.replyToSender = replyToSender;
         }
-        requestBody.replyToText = this.replyingTo?.text || null;
-        requestBody.replyToSenderName = this.replyingTo?.senderName || null;
+        requestBody.replyToText = capturedReply?.text || null;
+        requestBody.replyToSenderName = capturedReply?.senderName || null;
       }
       
       const response = await this.apiFetch('/api/send', {
@@ -4180,16 +4243,18 @@ class WhatsAppClient {
       }
       
       // Save reply context before clearing (for local message display)
-      const replyContext = this.replyingTo ? { ...this.replyingTo } : null;
+      const replyContext = capturedReply ? { ...capturedReply } : null;
       
-      // Clear input and reply state on success
-      input.value = '';
-      this.drafts = upsertDraft(this.drafts, this.currentContactId, '');
-      this.persistDrafts();
-      this.renderQuickReplies();
-      this.clearReply();
-      this.updateSendButton();
-      this.autoResizeTextarea(input);
+      // Only clear the draft that was actually sent; a different chat or newly typed draft stays intact.
+      if (this.currentContactId === contactId && input.value.trim() === text) {
+        input.value = '';
+        this.drafts = upsertDraft(this.drafts, contactId, '');
+        this.persistDrafts();
+        this.renderQuickReplies();
+        this.clearReply();
+        this.updateSendButton();
+        this.autoResizeTextarea(input);
+      }
       this.scheduleRenderContacts();
       this.updateChatHeaderNote();
       this.renderConversationWorkspace();
@@ -4198,7 +4263,7 @@ class WhatsAppClient {
       const localMessage = {
         id: result.messageId || 'temp-' + Date.now(),
         timestamp: result.timestamp || Date.now(),
-        contactId: this.currentContactId,
+        contactId: contactId,
         isFromMe: true,
         isForwarded: false,
         senderJid: this.getMessageSenderJid({ isFromMe: true }),
@@ -4217,18 +4282,18 @@ class WhatsAppClient {
       };
       
       // Add to local store and display
-      if (!this.messages.has(this.currentContactId)) {
-        this.messages.set(this.currentContactId, []);
+      if (!this.messages.has(contactId)) {
+        this.messages.set(contactId, []);
       }
       
-      const messages = this.messages.get(this.currentContactId);
+      const messages = this.messages.get(contactId);
       if (!messages.some(m => m.id === localMessage.id)) {
         messages.push(localMessage);
         if (result.originalFollowUpSent && result.originalMessageId) {
           messages.push({
             id: result.originalMessageId,
             timestamp: result.originalTimestamp || Date.now(),
-            contactId: this.currentContactId,
+            contactId: contactId,
             isFromMe: true,
             isForwarded: false,
             senderJid: this.getMessageSenderJid({ isFromMe: true }),
@@ -4248,7 +4313,7 @@ class WhatsAppClient {
       // Refresh usage stats if translation occurred
       if (result.isTranslated) {
         this.fetchGlobalUsage();
-        this.fetchConversationUsage(this.currentContactId);
+        this.fetchConversationUsage(contactId);
       }
 
       if (result.originalFollowUpError) {
@@ -5140,13 +5205,14 @@ class WhatsAppClient {
 
     // Handle visibility change (for reconnecting on mobile)
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && !this.connected) {
+      if (document.visibilityState === 'visible') {
         // Try to reconnect WebSocket if disconnected
-        if (this.ws.readyState === WebSocket.CLOSED) {
+        if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
           this.connectWebSocket();
         }
       }
     });
+    window.addEventListener('online', () => this.connectWebSocket());
 
     // Prevent pull-to-refresh on mobile when scrolling messages
     const messagesList = document.getElementById('messages-list');

@@ -627,7 +627,8 @@ private struct MessageDeliveryIndicator: View {
 
     var body: some View {
         HStack(spacing: -4) {
-            Image(systemName: "checkmark")
+            Image(systemName: state == .uncertain ? "exclamationmark.circle" : (state == .sending ? "clock" : "checkmark"))
+            if state == .uncertain { Text("Delivery uncertain").font(.caption2).padding(.leading, 6) }
             if state == .delivered || state == .read {
                 Image(systemName: "checkmark")
             }
