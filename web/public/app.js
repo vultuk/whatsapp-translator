@@ -4588,7 +4588,7 @@ class WhatsAppClient {
     const message = messages.find(m => m.id === messageId);
     if (!message) return;
     
-    if ((message.content_type || message.contentType || message.content?.type) === 'audio') {
+    if (['audio', 'voice note'].includes(String(message.content?.type || message.content_type || message.contentType || '').toLowerCase())) {
       this.translateVoiceMessage?.(messageId);
       return;
     }

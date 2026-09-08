@@ -523,9 +523,9 @@ pub async fn translate_received(
             if let Some(note) = cached_received(&state, &message_id)? {
                 return Ok(note.public());
             }
-            let _guard = state.voice_lock.try_lock().map_err(|_| {
-                anyhow::anyhow!("Another voice note is processing. Please try again shortly.")
-            })?;
+            let _guard = tokio::time::timeout(Duration::from_secs(180), state.voice_lock.lock())
+                .await
+                .context("Voice translation is busy. Please try again shortly.")?;
             Ok(translate_received_inner(&state, &message_id)
                 .await?
                 .public())
@@ -538,7 +538,7 @@ fn received_key(state: &AppState, message_id: &str) -> Result<String> {
         .store
         .get_message_by_id(message_id)?
         .context("Message not found")?;
-    if message.content_type != "audio" {
+    if !message.is_audio() {
         bail!("This message is not audio.");
     }
     if message.is_from_me
@@ -1207,20 +1207,59 @@ mod integration_tests {
             .store
             .set_voice_setting("test@s.whatsapp.net", "feminine")
             .unwrap();
-        let translated = build_note(
-            &state,
-            PrepareRequest {
-                contact_id: "test@s.whatsapp.net".into(),
-                media_data: B64.encode(audio),
-                reply_to: None,
-                reply_to_sender: None,
-                reply_to_text: None,
-            },
-            true,
-            "test-note".into(),
-        )
-        .await
-        .unwrap();
+        let content = crate::bridge::MessageContent::Audio {
+            mime_type: "audio/mpeg".into(),
+            file_size: audio.len() as u64,
+            duration_seconds: Some(1),
+            is_voice_note: true,
+            media_data: Some(B64.encode(audio)),
+        };
+        let incoming = StoredMessage {
+            id: "received-bridge-voice".into(),
+            contact_id: "test@s.whatsapp.net".into(),
+            timestamp: 1,
+            is_from_me: false,
+            is_forwarded: false,
+            sender_name: None,
+            sender_phone: None,
+            contact_name: None,
+            contact_phone: None,
+            chat_type: "private".into(),
+            content_type: content.type_name().into(),
+            content_json: serde_json::to_string(&content).unwrap(),
+            content: Some(serde_json::to_value(&content).unwrap()),
+            original_text: None,
+            translated_text: None,
+            source_language: None,
+            is_translated: false,
+            delivery_status: None,
+        };
+        assert_eq!(incoming.content_type, "Voice Note");
+        assert!(incoming.is_audio());
+        for label in ["Voice Note", "Audio", "audio"] {
+            let mut legacy = incoming.clone();
+            legacy.content_type = label.into();
+            assert!(legacy.is_audio());
+        }
+        let mut text = incoming.clone();
+        text.content_type = "Text".into();
+        text.content_json = r#"{"type":"text","body":"hello"}"#.into();
+        assert!(!text.is_audio());
+        state.store.add_message(&incoming).unwrap();
+        // A manual click waits for automatic processing instead of rejecting a valid voice note.
+        let guard = state.voice_lock.lock().await;
+        let manual_state = state.clone();
+        let manual = tokio::spawn(async move {
+            translate_received(State(manual_state), Path("received-bridge-voice".into())).await
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!manual.is_finished());
+        drop(guard);
+        let response = manual.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let translated = cached_received(&state, &incoming.id).unwrap().unwrap();
+        let again = translate_received(State(state.clone()), Path(incoming.id.clone())).await;
+        assert_eq!(again.status(), StatusCode::OK);
         assert_eq!(translated.target_language, "English");
         assert_eq!(translated.source_language, "Hungarian");
         assert_eq!(translated.transcript, "Jó reggelt");
@@ -1265,11 +1304,10 @@ mod integration_tests {
             commands.try_recv().is_err(),
             "A synthesis error must never send the original as fallback"
         );
-        assert!(state
-            .store
-            .get_messages("test@s.whatsapp.net")
-            .unwrap()
-            .is_empty());
+        let stored = state.store.get_messages("test@s.whatsapp.net").unwrap();
+        assert_eq!(stored.len(), 1, "preview must not send a message");
+        assert_eq!(stored[0].id, incoming.id);
+        assert!(stored[0].is_translated);
 
         assert_eq!(
             std::fs::read_dir(&dir.0)

@@ -351,7 +351,7 @@ async fn handle_web_event(
                 store.enqueue_translation(&stored_msg.id)?;
             }
 
-            if !stored_msg.is_from_me && !is_history && stored_msg.content_type == "audio" {
+            if !stored_msg.is_from_me && !is_history && stored_msg.is_audio() {
                 voice::queue_incoming(state.clone(), stored_msg.id.clone());
             }
 

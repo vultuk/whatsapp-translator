@@ -60,6 +60,26 @@ pub struct StoredMessage {
     pub delivery_status: Option<String>,
 }
 
+impl StoredMessage {
+    /// The bridge stores display labels in content_type, while the payload uses wire types.
+    pub fn is_audio(&self) -> bool {
+        if self.content_type.eq_ignore_ascii_case("audio")
+            || self.content_type.eq_ignore_ascii_case("voice note")
+        {
+            return true;
+        }
+        serde_json::from_str::<serde_json::Value>(&self.content_json)
+            .ok()
+            .and_then(|content| {
+                content
+                    .get("type")
+                    .and_then(|kind| kind.as_str())
+                    .map(|kind| kind.eq_ignore_ascii_case("audio"))
+            })
+            .unwrap_or(false)
+    }
+}
+
 /// Stored contact
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

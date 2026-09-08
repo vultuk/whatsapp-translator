@@ -1910,7 +1910,7 @@ async fn get_media(
                     .get_message_by_id(&message_id)
                     .ok()
                     .flatten()
-                    .is_some_and(|message| message.content_type.eq_ignore_ascii_case("audio"));
+                    .is_some_and(|message| message.is_audio());
             let (media_data, mime_type) = if is_audio {
                 match crate::voice::playable_audio(&media_data).await {
                     Ok(data) => (data, Some("audio/mpeg".to_string())),
