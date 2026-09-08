@@ -9,6 +9,7 @@ struct ConversationView: View {
     let contact: Contact
     @State private var draft = ""
     @State private var replyTarget: MessageReplyTarget?
+    @State private var focusedReplyMessage: ChatMessage?
     @State private var showSettings = ProcessInfo.processInfo.arguments.contains("-demoConversationSettings")
     @State private var showCost = ProcessInfo.processInfo.arguments.contains("-demoCost")
     @State private var showSearch = ProcessInfo.processInfo.arguments.contains("-demoSearch")
@@ -60,6 +61,7 @@ struct ConversationView: View {
     var body: some View {
         ZStack {
             ChatWallpaper()
+                .blur(radius: focusedReplyMessage == nil ? 0 : 8)
             VStack(spacing: 0) {
                 if session.liveUpdatesReconnecting {
                     Label("Reconnecting live updates… Your messages are saved.", systemImage: "wifi.slash")
@@ -116,7 +118,18 @@ struct ConversationView: View {
                     .translatorGlass(in: Capsule())
                     .padding(.top, 8)
                 }
-                messageTimeline
+                ZStack {
+                    messageTimeline
+                        .blur(radius: focusedReplyMessage == nil ? 0 : 8)
+                        .opacity(focusedReplyMessage == nil ? 1 : 0.35)
+                        .allowsHitTesting(focusedReplyMessage == nil)
+                        .accessibilityHidden(focusedReplyMessage != nil)
+                    if let focusedReplyMessage {
+                        FocusedReplyOverlay(destination: session.displayName(for: contact), isSending: session.sendingContactIDs.contains(contact.id), cancel: cancelReply) {
+                            messageBubble(message: focusedReplyMessage)
+                        }
+                    }
+                }
                 if let progress = activePhotoSend {
                     PhotoSendProgressView(progress: progress)
                         .padding(.horizontal, 12)
@@ -126,8 +139,9 @@ struct ConversationView: View {
                     contactID: contact.id,
                     text: $draft,
                     reply: replyTarget,
+                    showReplyPreview: focusedReplyMessage == nil,
                     isSending: session.sendingContactIDs.contains(contact.id),
-                    cancelReply: { replyTarget = nil },
+                    cancelReply: cancelReply,
                     sendImages: sendImages,
                     send: send
                 )
@@ -288,7 +302,7 @@ struct ConversationView: View {
                 mediaIsLoading: session.mediaLoadingIDs.contains(message.id),
                 mediaFailed: session.mediaErrorIDs.contains(message.id),
                 linkPreviews: message.extractedURLs.compactMap { session.linkPreviews[$0] },
-                reply: { replyTarget = session.replyTarget(for: message) },
+                reply: { selectReply(message) },
                 translate: { Task { await session.translate(message) } },
                 aiReply: { generateAIReply(to: message) },
                 toggleStar: { session.preferences.toggleStar(messageID: message.id, contactID: contact.id) },
@@ -314,13 +328,24 @@ struct ConversationView: View {
         return !Calendar.current.isDate(timelineItems[index - 1].date, inSameDayAs: timelineItems[index].date)
     }
 
+    private func selectReply(_ message: ChatMessage) {
+        guard !session.sendingContactIDs.contains(contact.id) else { return }
+        replyTarget = session.replyTarget(for: message)
+        focusedReplyMessage = message
+    }
+
+    private func cancelReply() {
+        replyTarget = nil
+        focusedReplyMessage = nil
+    }
+
     private func send() {
         let value = draft
         let reply = replyTarget
         Task {
             if await session.send(text: value, to: contact.id, reply: reply) {
                 draft = ""
-                replyTarget = nil
+                cancelReply()
             }
         }
     }
@@ -328,7 +353,7 @@ struct ConversationView: View {
     private func sendImages(_ images: [OutgoingImage], _ caption: String?) -> Bool {
         let reply = replyTarget
         if session.startPhotoSend(images, caption: caption, to: contact.id, reply: reply) {
-            replyTarget = nil
+            cancelReply()
             return true
         }
         return false
@@ -337,7 +362,7 @@ struct ConversationView: View {
     private func generateAIReply(to message: ChatMessage) {
         Task {
             guard let suggestion = await session.generateAIReply(to: message) else { return }
-            replyTarget = session.replyTarget(for: message)
+            selectReply(message)
             draft = suggestion
         }
     }

@@ -52,18 +52,48 @@ private struct LaunchView: View {
 
 private struct MainMessagesView: View {
     @Environment(AppSession.self) private var session
-    @State private var selected: ChatMessage?
-    @State private var drafts: [String: String] = [:]
+    @State private var replyDraft = UnifiedReplyDraft()
     @State private var sending = false
 
     var body: some View {
         Group {
             if session.mainTab == .messages {
-                UnifiedMessagesView(selected: $selected, drafts: $drafts, sending: $sending)
+                UnifiedMessagesView(replyDraft: $replyDraft, sending: $sending)
             } else {
                 ChatListView()
             }
         }
+    }
+}
+
+struct UnifiedReplyDraft {
+    var selected: ChatMessage?
+    var isFocused = false
+    var drafts: [String: String] = [:]
+
+    var text: String { selected.map { drafts[$0.contactId] ?? "" } ?? "" }
+
+    mutating func updateText(_ value: String, latestMessage: ChatMessage?) {
+        if selected == nil {
+            guard !value.isEmpty, let latestMessage else { return }
+            selected = latestMessage
+        }
+        if let selected { drafts[selected.contactId] = value }
+    }
+
+    mutating func select(_ message: ChatMessage) {
+        selected = message
+        isFocused = true
+    }
+
+    mutating func cancelSelection() {
+        selected = nil
+        isFocused = false
+    }
+
+    mutating func finishSending(to target: ChatMessage) {
+        drafts[target.contactId] = ""
+        if selected?.id == target.id { cancelSelection() }
     }
 }
 
@@ -96,16 +126,16 @@ struct MainNavigationToolbar: ToolbarContent {
 private struct UnifiedMessagesView: View {
     @Environment(AppSession.self) private var session
     @Environment(\.translatorPalette) private var palette
-    @Binding var selected: ChatMessage?
-    @Binding var drafts: [String: String]
+    @Binding var replyDraft: UnifiedReplyDraft
     @Binding var sending: Bool
     @State private var showSettings = false
     @State private var atBottom = true
     @FocusState private var composerFocused: Bool
 
     private var draft: Binding<String> {
-        Binding(get: { selected.map { drafts[$0.contactId] ?? "" } ?? "" }, set: { value in
-            if let selected { drafts[selected.contactId] = value }
+        Binding(get: { replyDraft.text }, set: { value in
+            guard !sending else { return }
+            replyDraft.updateText(value, latestMessage: session.unifiedMessages.last)
         })
     }
 
@@ -113,6 +143,7 @@ private struct UnifiedMessagesView: View {
         NavigationStack {
             ZStack {
                 ChatWallpaper()
+                    .blur(radius: replyDraft.isFocused ? 8 : 0)
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 12) {
@@ -161,6 +192,15 @@ private struct UnifiedMessagesView: View {
                         if atBottom { withAnimation { proxy.scrollTo("feed-bottom", anchor: .bottom) } }
                     }
                 }
+                .blur(radius: replyDraft.isFocused ? 8 : 0)
+                .opacity(replyDraft.isFocused ? 0.35 : 1)
+                .allowsHitTesting(!replyDraft.isFocused)
+                .accessibilityHidden(replyDraft.isFocused)
+                if replyDraft.isFocused, let selected = replyDraft.selected {
+                    FocusedReplyOverlay(destination: name(selected), isSending: sending, cancel: cancelReply) {
+                        bubble(selected)
+                    }
+                }
             }
             .navigationTitle("Messages")
             .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
@@ -203,7 +243,7 @@ private struct UnifiedMessagesView: View {
 
     private func select(_ message: ChatMessage) {
         guard !sending else { return }
-        selected = message
+        replyDraft.select(message)
         composerFocused = true
     }
 
@@ -222,8 +262,8 @@ private struct UnifiedMessagesView: View {
             aiReply: {
                 select(message)
                 Task {
-                    if let suggestion = await session.generateAIReply(to: message), selected?.id == message.id, !sending {
-                        drafts[message.contactId] = suggestion
+                    if let suggestion = await session.generateAIReply(to: message), replyDraft.selected?.id == message.id, !sending {
+                        replyDraft.drafts[message.contactId] = suggestion
                     }
                 }
             },
@@ -237,7 +277,7 @@ private struct UnifiedMessagesView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let selected {
+            if let selected = replyDraft.selected, !replyDraft.isFocused {
                 HStack(alignment: .top, spacing: 9) {
                     RoundedRectangle(cornerRadius: 2).fill(palette.accent).frame(width: 3)
                     VStack(alignment: .leading, spacing: 3) {
@@ -247,47 +287,58 @@ private struct UnifiedMessagesView: View {
                         Text(selected.displayText).font(.caption).lineLimit(1).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
-                    Button("Cancel reply", systemImage: "xmark.circle.fill") { self.selected = nil; composerFocused = false }
+                    Button("Cancel reply", systemImage: "xmark.circle.fill", action: cancelReply)
                         .labelStyle(.iconOnly).foregroundStyle(.secondary).disabled(sending)
                 }.fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .translatorGlass(in: RoundedRectangle(cornerRadius: 20))
+            } else if replyDraft.selected == nil {
+                Text(session.unifiedMessages.isEmpty ? "Waiting for messages" : "Type to reply to the latest message, or swipe to choose another")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ComposerGlassGroup {
                 HStack(alignment: .bottom, spacing: 10) {
                     TextField("Message", text: draft, axis: .vertical)
                         .lineLimit(1...5)
                         .textFieldStyle(.plain)
-                        .padding(10)
-                        .background(palette.incomingBubble, in: RoundedRectangle(cornerRadius: 20))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .frame(minHeight: 46)
+                        .translatorGlassControl(in: RoundedRectangle(cornerRadius: 24))
                         .focused($composerFocused)
-                        .disabled(sending)
+                        .disabled(sending || (replyDraft.selected == nil && session.unifiedMessages.isEmpty))
                     Button(action: send) {
                         Group {
                             if sending { ProgressView().tint(.white) }
                             else { Image(systemName: "arrow.up").font(.system(size: 19, weight: .semibold)) }
-                        }.frame(width: 42, height: 42).foregroundStyle(.white).background(palette.accent, in: Circle())
+                        }.frame(width: 46, height: 46).foregroundStyle(.white)
+                            .translatorGlassControl(in: Circle(), tint: palette.accent)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Send to \(name(selected))")
-                    .disabled(sending || draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel(replyDraft.selected.map { "Send to \(name($0))" } ?? "Send message")
+                    .disabled(sending || replyDraft.selected == nil || draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-            } else {
-                Label("Swipe a message to reply to its chat", systemImage: "arrowshape.turn.up.left")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).padding(.vertical, 9)
             }
         }
+        .frame(maxWidth: 900)
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(.regularMaterial)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func cancelReply() {
+        replyDraft.cancelSelection()
+        composerFocused = false
     }
 
     private func send() {
-        guard let target = selected, !sending else { return }
-        let text = drafts[target.contactId] ?? ""
+        guard let target = replyDraft.selected, !sending else { return }
+        let text = replyDraft.drafts[target.contactId] ?? ""
         sending = true
         Task {
             let sent = await session.send(text: text, to: target.contactId, reply: session.replyTarget(for: target), replyOnlyIfNotLatest: true)
             sending = false
             if sent {
-                drafts[target.contactId] = ""
-                selected = nil
+                replyDraft.finishSending(to: target)
                 composerFocused = false
             }
         }

@@ -164,3 +164,67 @@ private extension NSColor {
     }
 }
 #endif
+
+struct ComposerGlassGroup<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            GlassEffectContainer(spacing: 6) { content() }
+        } else { content() }
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func translatorGlassControl<S: Shape>(in shape: S, tint: Color? = nil) -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            glassEffect(.regular.tint(tint).interactive(), in: shape)
+        } else {
+            background(.ultraThinMaterial, in: shape)
+                .background(tint?.opacity(0.8) ?? .clear, in: shape)
+                .overlay(shape.stroke(.primary.opacity(0.10), lineWidth: 0.5))
+        }
+    }
+}
+
+struct FocusedReplyOverlay<Content: View>: View {
+    let destination: String
+    let isSending: Bool
+    let cancel: () -> Void
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 12) {
+                HStack {
+                    Text("Replying to \(destination)")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    Button(action: cancel) {
+                        Image(systemName: "xmark")
+                            .font(.body.weight(.semibold))
+                            .frame(width: 44, height: 44)
+                            .translatorGlassControl(in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close focused reply")
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isSending)
+                }
+                Spacer(minLength: 0)
+                ScrollView {
+                    content()
+                        .padding(.vertical, 4)
+                }
+                .defaultScrollAnchor(.bottom)
+                .frame(maxHeight: max(80, geometry.size.height * 0.7))
+            }
+            .padding(14)
+            .frame(maxWidth: 900)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(.black.opacity(0.06))
+        .accessibilityElement(children: .contain)
+    }
+}

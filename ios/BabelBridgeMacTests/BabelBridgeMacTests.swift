@@ -6,6 +6,70 @@ import UserNotifications
 
 final class BabelBridgeMacTests: XCTestCase {
     @MainActor
+    func testUnifiedQuickReplyLocksItsTargetAcrossNewMessages() async throws {
+        func message(_ id: String, _ contact: String, _ timestamp: Int64) throws -> ChatMessage {
+            let data = try JSONSerialization.data(withJSONObject: ["id": id, "contactId": contact, "timestamp": timestamp, "isFromMe": false, "isForwarded": false, "chatType": "group", "contentType": "Text", "isTranslated": false])
+            return try JSONDecoder().decode(ChatMessage.self, from: data)
+        }
+        let original = try message("original", "group@g.us", 100)
+        let newer = try message("newer", "group@g.us", 200)
+        let elsewhere = try message("elsewhere", "other@g.us", 300)
+        var draft = UnifiedReplyDraft()
+        draft.updateText("", latestMessage: original)
+        XCTAssertNil(draft.selected)
+        draft.updateText("H", latestMessage: original)
+        XCTAssertEqual(draft.selected?.id, original.id)
+        XCTAssertFalse(draft.isFocused)
+        draft.updateText("Hello", latestMessage: elsewhere)
+        XCTAssertEqual(draft.selected?.contactId, original.contactId)
+        draft.updateText("", latestMessage: newer)
+        draft.updateText("Hello again", latestMessage: newer)
+        XCTAssertEqual(draft.selected?.id, original.id)
+
+        let session = AppSession(demoMode: true)
+        session.messages = [original.contactId: [original, newer], elsewhere.contactId: [elsewhere]]
+        await session.loadFeed()
+        let target = try XCTUnwrap(draft.selected)
+        XCTAssertTrue(session.feedReplyNeedsQuote(target))
+        let sent = await session.send(text: draft.text, to: target.contactId, reply: session.replyTarget(for: target), replyOnlyIfNotLatest: true)
+        XCTAssertTrue(sent)
+        XCTAssertEqual(session.messages[original.contactId]?.last?.content?.replyContext?.messageId, original.id)
+        XCTAssertEqual(session.messages[elsewhere.contactId]?.count, 1)
+        draft.finishSending(to: target)
+        XCTAssertNil(draft.selected)
+        XCTAssertEqual(draft.text, "")
+        draft.updateText("Next reply", latestMessage: elsewhere)
+        XCTAssertEqual(draft.selected?.id, elsewhere.id)
+    }
+
+    func testUnifiedQuickReplyManualSelectionAndEmptyFeedStaySafe() throws {
+        func message(_ id: String, _ contact: String) throws -> ChatMessage {
+            let data = try JSONSerialization.data(withJSONObject: ["id": id, "contactId": contact, "timestamp": 100, "isFromMe": false, "isForwarded": false, "chatType": "group", "contentType": "Text", "isTranslated": false])
+            return try JSONDecoder().decode(ChatMessage.self, from: data)
+        }
+        let first = try message("first", "first@g.us")
+        let second = try message("second", "second@g.us")
+        var draft = UnifiedReplyDraft()
+        draft.updateText("Cannot route", latestMessage: nil)
+        XCTAssertNil(draft.selected)
+        XCTAssertTrue(draft.drafts.isEmpty)
+        draft.updateText("First draft", latestMessage: first)
+        draft.select(second)
+        XCTAssertTrue(draft.isFocused)
+        XCTAssertEqual(draft.text, "")
+        draft.updateText("Second draft", latestMessage: first)
+        XCTAssertEqual(draft.selected?.id, second.id)
+        draft.select(first)
+        XCTAssertEqual(draft.text, "First draft")
+        draft.cancelSelection()
+        XCTAssertFalse(draft.isFocused)
+        XCTAssertNil(draft.selected)
+        draft.updateText("Fresh reply", latestMessage: second)
+        XCTAssertEqual(draft.text, "Fresh reply")
+        XCTAssertEqual(draft.selected?.id, second.id)
+    }
+
+    @MainActor
     func testUnifiedFeedOrdersAcrossChatsAndScopesReplyContextToDestination() async throws {
         func message(_ id: String, _ contact: String, _ timestamp: Int64) throws -> ChatMessage {
             let data = try JSONSerialization.data(withJSONObject: ["id": id, "contactId": contact, "timestamp": timestamp, "isFromMe": false, "isForwarded": false, "chatType": "group", "contentType": "Text", "isTranslated": false])

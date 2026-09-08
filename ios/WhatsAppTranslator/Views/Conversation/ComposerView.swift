@@ -7,6 +7,7 @@ struct ComposerView: View {
     let contactID: String
     @Binding var text: String
     let reply: MessageReplyTarget?
+    var showReplyPreview = true
     let isSending: Bool
     let cancelReply: () -> Void
     let sendImages: ([OutgoingImage], String?) -> Bool
@@ -19,7 +20,7 @@ struct ComposerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let reply {
+            if let reply, showReplyPreview {
                 HStack(spacing: 10) {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(palette.accent)
@@ -40,37 +41,43 @@ struct ComposerView: View {
                 }
                 .padding(.horizontal, 15)
                 .padding(.vertical, 8)
+                .translatorGlass(in: RoundedRectangle(cornerRadius: 20))
+                .padding(.horizontal, 12)
             }
 
-            HStack(alignment: .center, spacing: 7) {
-                PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 30, matching: .images) {
-                    addImageLabel
-                }
-                .buttonStyle(.plain)
-                .disabled(isSending)
-                .accessibilityLabel("Send photos")
-
-                composerInput
-
-                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending {
-                    Button { showVoiceComposer = true } label: {
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 23, weight: .regular))
-                            .foregroundStyle(Color.primary)
-                            .frame(width: 44, height: 44)
+            ComposerGlassGroup {
+                HStack(alignment: .center, spacing: 7) {
+                    PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 30, matching: .images) {
+                        addImageLabel
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Record voice note")
-                    .help("Record voice note")
-                } else {
-                    sendButton
+                    .disabled(isSending)
+                    .accessibilityLabel("Send photos")
+                    .translatorGlassControl(in: Circle())
+
+                    composerInput
+
+                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending {
+                        Button { showVoiceComposer = true } label: {
+                            Image(systemName: "mic.fill")
+                                .font(.system(size: 23, weight: .regular))
+                                .foregroundStyle(Color.primary)
+                                .frame(width: 44, height: 44)
+                                .translatorGlassControl(in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Record voice note")
+                        .help("Record voice note")
+                    } else {
+                        sendButton
+                    }
                 }
+                .padding(.horizontal, 12)
+                .padding(.top, reply == nil || !showReplyPreview ? 8 : 2)
+                .padding(.bottom, 9)
             }
-            .padding(.horizontal, 12)
-            .padding(.top, reply == nil ? 8 : 2)
-            .padding(.bottom, 9)
         }
-        .background(palette.chatBackground)
+        .onChange(of: reply?.messageID) { _, value in focused = value != nil }
         .onChange(of: selectedPhotos) { _, items in
             guard !items.isEmpty else { return }
             Task {
@@ -147,21 +154,11 @@ struct ComposerView: View {
         return CGFloat(visibleLineCount * 19 + 5)
     }
 
-    @ViewBuilder
-    private var addImageLabel: some View {
-        #if os(macOS)
+    nonisolated private var addImageLabel: some View {
         Image(systemName: "plus")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 44, height: 44)
-            .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
-            .contentShape(RoundedRectangle(cornerRadius: 9))
-        #else
-        Image(systemName: "plus")
-            .font(.system(size: 25, weight: .regular))
+            .font(.system(size: 23, weight: .regular))
             .foregroundStyle(Color.primary)
-            .frame(width: 34, height: 44)
-        #endif
+            .frame(width: 44, height: 44)
     }
 
     @ViewBuilder
@@ -176,7 +173,7 @@ struct ComposerView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.white)
         .frame(width: 44, height: 44)
-        .background(palette.accent, in: Circle())
+        .translatorGlassControl(in: Circle(), tint: palette.accent)
         .opacity(isSendDisabled ? 0.42 : 1)
         .disabled(isSendDisabled)
         .allowsHitTesting(!isSending)
@@ -194,11 +191,7 @@ struct ComposerView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(isSendDisabled ? Color.platformSecondaryLabel : .white)
-        .background(
-            isSendDisabled ? Color.primary.opacity(0.08) : palette.accent,
-            in: Circle()
-        )
-        .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
+        .translatorGlassControl(in: Circle(), tint: isSendDisabled ? nil : palette.accent)
         .disabled(isSendDisabled)
         .allowsHitTesting(!isSending)
         .accessibilityLabel(isSending ? "Sending message" : "Send message")
@@ -241,27 +234,13 @@ struct ComposerView: View {
 }
 
 private struct ComposerInputStyle: ViewModifier {
-    @Environment(\.translatorPalette) private var palette
-    @ViewBuilder
     func body(content: Content) -> some View {
-        #if os(macOS)
         content
             .textFieldStyle(.plain)
-            .padding(.horizontal, 13)
-            .padding(.vertical, 8)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(.primary.opacity(0.09), lineWidth: 0.5)
-            }
-        #else
-        content
             .padding(.horizontal, 16)
-            .padding(.vertical, 6)
-            .frame(minHeight: 34)
-            .background(palette.incomingBubble, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 24).stroke(.primary.opacity(0.06), lineWidth: 0.5))
-        #endif
+            .padding(.vertical, 10)
+            .frame(minHeight: 44)
+            .translatorGlassControl(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 }
 
