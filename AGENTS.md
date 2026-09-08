@@ -7,3 +7,8 @@
 - Test, archive, and upload both targets. Do not assume an iOS upload also updates macOS, or that a backend/web deployment removes the need for the native TestFlight releases.
 - Verify that App Store Connect accepted both uploads and that both builds have entered processing. Report the version and build number for each platform in the final handoff.
 - If either upload cannot be completed, do not describe the request as fully released; report the exact blocker and which platform remains outstanding.
+
+## Apple build and release workflow
+
+- Always use the Xcode application through Computer Use for Apple builds, tests, archives, signing, and TestFlight uploads. Do not use command-line xcodebuild or the build runner for these actions.
+- Run storage preflight before building, use task-owned DerivedData and serial local tests, and preserve release archives and symbols.
