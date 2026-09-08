@@ -574,6 +574,17 @@ final class WhatsAppTranslatorTests: XCTestCase {
         )
     }
 
+    func testChatFiltersDistinguishUnreadAndGroupConversations() {
+        let direct = Contact(id: "direct", name: "Direct", phone: nil, type: "private", lastMessageTime: 1, unreadCount: 2, pinnedAt: nil, lastMessagePreview: nil)
+        let group = Contact(id: "group", name: "Group", phone: nil, type: "group", lastMessageTime: 2, unreadCount: 0, pinnedAt: nil, lastMessagePreview: nil)
+        XCTAssertTrue(ChatFilter.all.includes(direct))
+        XCTAssertTrue(ChatFilter.all.includes(group))
+        XCTAssertTrue(ChatFilter.unread.includes(direct))
+        XCTAssertFalse(ChatFilter.unread.includes(group))
+        XCTAssertFalse(ChatFilter.groups.includes(direct))
+        XCTAssertTrue(ChatFilter.groups.includes(group))
+    }
+
     func testWhatsAppStatusFeedBecomesDedicatedUpdatesToolbarItem() {
         let updates = Contact(
             id: "status@broadcast",

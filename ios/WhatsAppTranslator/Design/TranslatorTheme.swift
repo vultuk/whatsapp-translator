@@ -17,7 +17,7 @@ struct TranslatorPalette: Equatable {
     static func make(_ theme: AppTheme) -> TranslatorPalette {
         let colors: (String, String, String, String, String, String, String, String)
         switch theme {
-        case .whatsapp: colors = ("00A884", "00695C", "FFFFFF", "1F2C33", "D9FDD3", "005C4B", "EFEAE2", "0B141A")
+        case .whatsapp: colors = ("00A884", "00695C", "FFFFFF", "1F2C33", "DFF5E6", "005C4B", "F3F2ED", "0B141A")
         case .ocean: colors = ("0784C6", "075985", "FFFFFF", "172554", "DDF3FF", "164E63", "EDF8FF", "071827")
         case .sunset: colors = ("F26B4A", "B9382F", "FFFDFC", "36201F", "FFE1D6", "79362F", "FFF2E8", "1E1316")
         case .github: colors = ("238636", "1A7F37", "FFFFFF", "161B22", "DDF4E4", "1F6F32", "F6F8FA", "0D1117")
@@ -28,7 +28,7 @@ struct TranslatorPalette: Equatable {
         }
         return TranslatorPalette(
             accent: Color(hex: colors.0),
-            deepAccent: Color(hex: colors.1),
+            deepAccent: .adaptive(light: colors.1, dark: theme == .vercel ? "E5E5E5" : colors.0),
             incomingBubble: .adaptive(light: colors.2, dark: colors.3),
             outgoingBubble: .adaptive(light: colors.4, dark: colors.5),
             chatBackground: .adaptive(light: colors.6, dark: colors.7),

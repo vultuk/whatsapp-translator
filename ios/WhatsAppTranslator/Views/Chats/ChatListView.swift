@@ -5,6 +5,8 @@ struct ChatListView: View {
     @Environment(\.translatorPalette) private var palette
     @State private var showSettings = ProcessInfo.processInfo.arguments.contains("-demoSettings")
 
+    @State private var filter: ChatFilter = .all
+
     var body: some View {
         @Bindable var session = session
 
@@ -90,6 +92,13 @@ struct ChatListView: View {
     ) -> some View {
         #if os(macOS)
         VStack(spacing: 0) {
+            HStack {
+                Text("Chats").font(.largeTitle.bold())
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 16)
+            .padding(.bottom, 4)
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -110,19 +119,44 @@ struct ChatListView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
 
-            Divider()
+            filterBar
             contactList(selection: selection)
         }
         #else
-        contactList(selection: selection)
+        VStack(spacing: 0) {
+            filterBar
+            contactList(selection: selection)
+        }
             .searchable(text: searchText, prompt: "Search chats")
             .refreshable { await session.refresh() }
         #endif
     }
 
+    private var filterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(ChatFilter.allCases, id: \.self) { item in
+                    Button { filter = item } label: {
+                        Text(item.rawValue)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(filter == item ? palette.deepAccent : Color.secondary)
+                            .background(filter == item ? palette.accent.opacity(0.14) : Color.primary.opacity(0.045), in: Capsule())
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(filter == item ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal, 14)
+        }
+        .padding(.bottom, 6)
+    }
+
     private func contactList(selection: Binding<String?>) -> some View {
         List(selection: selection) {
-            ForEach(session.filteredContacts) { contact in
+            ForEach(session.filteredContacts.filter { filter.includes($0) }) { contact in
                 NavigationLink(value: contact.id) {
                     ChatRow(
                         contact: contact,
@@ -160,6 +194,11 @@ struct ChatListView: View {
             }
         }
         .listStyle(.plain)
+        .overlay {
+            if !session.contacts.isEmpty && session.filteredContacts.filter({ filter.includes($0) }).isEmpty {
+                ContentUnavailableView("No matching chats", systemImage: "bubble.left.and.bubble.right", description: Text("Try another filter or search."))
+            }
+        }
     }
 }
 
@@ -201,6 +240,20 @@ private struct EmptyConversationView: View {
                     .foregroundStyle(.secondary)
             }
             .padding(32)
+        }
+    }
+}
+
+enum ChatFilter: String, CaseIterable {
+    case all = "All"
+    case unread = "Unread"
+    case groups = "Groups"
+
+    func includes(_ contact: Contact) -> Bool {
+        switch self {
+        case .all: true
+        case .unread: contact.unreadCount > 0
+        case .groups: contact.isGroup
         }
     }
 }

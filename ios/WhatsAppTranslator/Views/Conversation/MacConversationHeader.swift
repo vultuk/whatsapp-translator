@@ -19,7 +19,7 @@ struct MacConversationHeader: View {
         HStack(spacing: 14) {
             Button(action: showContactSettings) {
                 HStack(spacing: 11) {
-                    ContactAvatar(contact: contact, url: avatarURL, size: 38)
+                    ContactAvatar(contact: contact, url: avatarURL, size: 42)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(displayName)
                             .font(.headline)
@@ -65,7 +65,7 @@ struct MacConversationHeader: View {
             .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 13)
         .background(.regularMaterial)
         .overlay(alignment: .bottom) {
             Divider()
@@ -73,11 +73,7 @@ struct MacConversationHeader: View {
     }
 
     private var subtitle: String {
-        var values = [localTime ?? "Auto-translation on"]
-        if let usage {
-            values.append(usage.costUsd.formatted(.currency(code: "USD").precision(.fractionLength(4))))
-        }
-        return values.joined(separator: "  ·  ")
+        localTime.map { "Auto-translation · \($0)" } ?? "Auto-translation on"
     }
 
     private func headerButton(

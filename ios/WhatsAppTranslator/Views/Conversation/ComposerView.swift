@@ -46,17 +46,26 @@ struct ComposerView: View {
                 PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 30, matching: .images) {
                     addImageLabel
                 }
+                .buttonStyle(.plain)
                 .disabled(isSending)
                 .accessibilityLabel("Send photos")
 
-                Button("Record voice note", systemImage: "mic.fill") { showVoiceComposer = true }
-                    .labelStyle(.iconOnly)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .disabled(isSending)
-
                 composerInput
 
-                sendButton
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending {
+                    Button { showVoiceComposer = true } label: {
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(palette.accent, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Record voice note")
+                    .help("Record voice note")
+                } else {
+                    sendButton
+                }
             }
             .padding(.horizontal, 12)
             .padding(.top, reply == nil ? 8 : 2)
@@ -145,13 +154,13 @@ struct ComposerView: View {
         Image(systemName: "plus")
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.secondary)
-            .frame(width: 34, height: 34)
+            .frame(width: 44, height: 44)
             .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
             .contentShape(RoundedRectangle(cornerRadius: 9))
         #else
         Image(systemName: "plus")
             .font(.system(size: 18, weight: .semibold))
-            .frame(width: 36, height: 36)
+            .frame(width: 44, height: 44)
             .background(.ultraThinMaterial, in: Circle())
             .overlay(Circle().stroke(.white.opacity(0.22), lineWidth: 0.5))
         #endif
@@ -168,8 +177,8 @@ struct ComposerView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
-        .frame(width: 34, height: 34)
-        .background(palette.accent, in: RoundedRectangle(cornerRadius: 9))
+        .frame(width: 44, height: 44)
+        .background(palette.accent, in: Circle())
         .opacity(isSendDisabled ? 0.42 : 1)
         .disabled(isSendDisabled)
         .allowsHitTesting(!isSending)
@@ -234,6 +243,7 @@ struct ComposerView: View {
 }
 
 private struct ComposerInputStyle: ViewModifier {
+    @Environment(\.translatorPalette) private var palette
     @ViewBuilder
     func body(content: Content) -> some View {
         #if os(macOS)
@@ -250,7 +260,8 @@ private struct ComposerInputStyle: ViewModifier {
         content
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .translatorGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(palette.incomingBubble, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 24).stroke(.primary.opacity(0.06), lineWidth: 0.5))
         #endif
     }
 }

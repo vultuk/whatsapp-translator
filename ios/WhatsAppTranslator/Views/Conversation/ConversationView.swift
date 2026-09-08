@@ -364,12 +364,16 @@ private struct ChatWallpaper: View {
     var body: some View {
         palette.chatBackground
             .overlay {
-                Image(systemName: "message.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.primary.opacity(0.018))
-                    #if os(iOS)
-                    .symbolEffect(.pulse, options: .repeating.speed(0.05))
-                    #endif
+                Canvas { context, size in
+                    for row in 0..<max(0, Int(size.height / 28 + 1)) {
+                        for column in 0..<max(0, Int(size.width / 28 + 1)) {
+                            let x = CGFloat(column) * 28 + (row.isMultiple(of: 2) ? 0 : 14)
+                            let dot = Path(ellipseIn: CGRect(x: x, y: CGFloat(row) * 28, width: 1.5, height: 1.5))
+                            context.fill(dot, with: .color(.primary.opacity(0.045)))
+                        }
+                    }
+                }
+                .accessibilityHidden(true)
             }
             .ignoresSafeArea()
     }

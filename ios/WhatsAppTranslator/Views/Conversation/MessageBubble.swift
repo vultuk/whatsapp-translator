@@ -316,7 +316,7 @@ struct MessageBubble: View {
             Button {
                 withAnimation(.snappy) { showActions.toggle() }
             } label: {
-                Image(systemName: showActions ? "xmark.circle.fill" : "ellipsis.circle")
+                Image(systemName: showActions ? "xmark" : "ellipsis")
             }
             .buttonStyle(.plain)
             .help(showActions ? "Hide message actions" : "Show message actions")

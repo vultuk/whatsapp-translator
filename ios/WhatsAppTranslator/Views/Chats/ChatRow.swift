@@ -16,7 +16,7 @@ struct ChatRow: View {
                 standardLayout
             }
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, 11)
         #if os(macOS)
         .frame(minHeight: 58)
         #endif
@@ -29,7 +29,7 @@ struct ChatRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
                     Text(displayName)
-                        .font(.headline)
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(Color.platformPrimaryLabel)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -41,7 +41,7 @@ struct ChatRow: View {
                         .fixedSize(horizontal: true, vertical: false)
                 }
                 HStack(spacing: 8) {
-                    previewText(lineLimit: 1)
+                    previewText(lineLimit: 2)
                     Spacer(minLength: 6)
                     statusIndicators
                 }
@@ -55,7 +55,7 @@ struct ChatRow: View {
             ContactAvatar(contact: contact, url: avatarURL, size: 46)
             VStack(alignment: .leading, spacing: 7) {
                 Text(displayName)
-                    .font(.headline)
+                    .font(.body.weight(.semibold))
                     .foregroundStyle(Color.platformPrimaryLabel)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -111,9 +111,9 @@ struct ChatRow: View {
 
     private var avatarSize: CGFloat {
         #if os(macOS)
-        44
+        48
         #else
-        52
+        56
         #endif
     }
 
