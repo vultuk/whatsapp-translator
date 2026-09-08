@@ -476,7 +476,33 @@ impl MessageStore {
 
         // Add conversation settings columns.
         self.migrate_add_conversation_settings_columns(&conn)?;
+        self.migrate_invalidate_unverified_language_labels(&conn)?;
 
+        Ok(())
+    }
+
+    fn migrate_invalidate_unverified_language_labels(&self, conn: &Connection) -> Result<()> {
+        let applied: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM app_settings WHERE key='language_detection_contract_v2')",
+            [],
+            |row| row.get(0),
+        )?;
+        if applied {
+            return Ok(());
+        }
+        // Older detection treated malformed model output as a successful
+        // owner-language result. These derived labels cannot be trusted. Keep
+        // message contents and successful translations; re-detect on chat open.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE messages SET source_language=NULL WHERE is_from_me=0 AND is_translated=0 AND COALESCE(translated_text,'')='' AND original_text IS NOT NULL AND source_language IS NOT NULL",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO app_settings(key,value) VALUES('language_detection_contract_v2','1')",
+            [],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -2694,6 +2720,55 @@ mod tests {
             is_translated: false,
             delivery_status: None,
         }
+    }
+
+    #[test]
+    fn legacy_language_labels_are_rechecked_once_without_losing_translations() {
+        let (store, dir) = test_store();
+        store
+            .upsert_contact("chat@example.test", None, None, None, 0)
+            .unwrap();
+        let mut message = test_message("legacy", 1);
+        message.source_language = Some("English".into());
+        store.add_message(&message).unwrap();
+        message.id = "translated".into();
+        message.source_language = Some("Hungarian".into());
+        message.translated_text = Some("Good morning".into());
+        message.is_translated = true;
+        store.add_message(&message).unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM app_settings WHERE key='language_detection_contract_v2'",
+                [],
+            )
+            .unwrap();
+        drop(store);
+        let store = MessageStore::new(&dir).unwrap();
+        let legacy = store.get_message_by_id("legacy").unwrap().unwrap();
+        assert!(legacy.source_language.is_none());
+        assert_eq!(legacy.original_text.as_deref(), Some("legacy"));
+        let translated = store.get_message_by_id("translated").unwrap().unwrap();
+        assert_eq!(translated.source_language.as_deref(), Some("Hungarian"));
+        assert_eq!(translated.translated_text.as_deref(), Some("Good morning"));
+        store
+            .finish_translation("legacy", None, "English", false)
+            .unwrap();
+        drop(store);
+        let store = MessageStore::new(&dir).unwrap();
+        assert_eq!(
+            store
+                .get_message_by_id("legacy")
+                .unwrap()
+                .unwrap()
+                .source_language
+                .as_deref(),
+            Some("English")
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
