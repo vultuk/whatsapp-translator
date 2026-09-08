@@ -830,10 +830,21 @@ impl WhatsAppMcpServer {
         let target_language = if mode == TranslationMode::Never {
             None
         } else {
-            if let Some(target) = args.get("target_language").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()) {
+            if let Some(target) = args
+                .get("target_language")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
                 Some(target.to_string())
             } else {
-                crate::incoming::outgoing_language(&self.state, contact_id, args.get("reply_to_message_id").and_then(Value::as_str)).await.mcp()?
+                crate::incoming::outgoing_language(
+                    &self.state,
+                    contact_id,
+                    args.get("reply_to_message_id").and_then(Value::as_str),
+                )
+                .await
+                .mcp()?
             }
         };
 

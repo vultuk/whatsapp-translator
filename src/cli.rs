@@ -45,11 +45,7 @@ pub struct Args {
     pub openai_api_key: Option<String>,
 
     /// OpenAI model for language detection and style analysis
-    #[arg(
-        long,
-        env = "WA_OPENAI_DETECTION_MODEL",
-        default_value = "gpt-6-astra"
-    )]
+    #[arg(long, env = "WA_OPENAI_DETECTION_MODEL", default_value = "gpt-6-astra")]
     pub openai_detection_model: String,
 
     /// OpenAI model for translation

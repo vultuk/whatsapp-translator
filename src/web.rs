@@ -545,7 +545,12 @@ pub struct ConversationSettingsResponse {
     pub send_original_follow_up: bool,
 }
 
-const SUPPORTED_OPENAI_MODELS: &[&str] = &["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+const SUPPORTED_OPENAI_MODELS: &[&str] = &[
+    "gpt-6-astra",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+];
 const SUPPORTED_REASONING_EFFORTS: &[&str] = &["none", "low", "medium", "high", "xhigh", "max"];
 
 #[derive(Deserialize)]
@@ -1806,7 +1811,13 @@ async fn update_openai_settings(
 ) -> impl IntoResponse {
     let model = req.model.filter(|value| !value.is_empty());
     let reasoning_effort = req.reasoning_effort.filter(|value| !value.is_empty());
-    let reasoning_effort = if model.as_deref() == Some("gpt-6-astra") && matches!(reasoning_effort.as_deref(), None | Some("none")) { Some("low".to_string()) } else { reasoning_effort };
+    let reasoning_effort = if model.as_deref() == Some("gpt-6-astra")
+        && matches!(reasoning_effort.as_deref(), None | Some("none"))
+    {
+        Some("low".to_string())
+    } else {
+        reasoning_effort
+    };
     if model
         .as_deref()
         .is_some_and(|value| !SUPPORTED_OPENAI_MODELS.contains(&value))
@@ -1885,8 +1896,14 @@ async fn get_messages(
             }
             if state.translator.is_some() {
                 for message in &messages {
-                    if !message.is_from_me && !message.is_audio() && message.source_language.is_none()
-                        && message.original_text.as_deref().is_some_and(|text| !text.trim().is_empty()) {
+                    if !message.is_from_me
+                        && !message.is_audio()
+                        && message.source_language.is_none()
+                        && message
+                            .original_text
+                            .as_deref()
+                            .is_some_and(|text| !text.trim().is_empty())
+                    {
                         if let Err(error) = state.store.enqueue_translation(&message.id) {
                             warn!("Could not queue conversation translation: {error}");
                         }
@@ -2012,10 +2029,19 @@ async fn send_message(
 
     // Determine the target before checking translator availability. If a target exists,
     // translation is necessary and every failure must stop before WhatsApp is touched.
-    let target_lang = match crate::incoming::outgoing_language(&state, &req.contact_id, req.reply_to.as_deref()).await {
-        Ok(language) => language,
-        Err(error) => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": error.to_string()}))).into_response(),
-    };
+    let target_lang =
+        match crate::incoming::outgoing_language(&state, &req.contact_id, req.reply_to.as_deref())
+            .await
+        {
+            Ok(language) => language,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({"error": error.to_string()})),
+                )
+                    .into_response()
+            }
+        };
     let (text_to_send, _original_text, was_translated, target_language) = if let Some(conv_lang) =
         target_lang
     {
@@ -2402,13 +2428,27 @@ async fn send_original_follow_up(
     ))
 }
 
-async fn translate_caption(state: &AppState, contact_id: &str, reply_id: Option<&str>, caption: Option<&str>) -> anyhow::Result<(Option<String>, Option<String>)> {
-    let Some(text) = caption.filter(|text| !text.trim().is_empty()) else { return Ok((caption.map(str::to_string), None)); };
+async fn translate_caption(
+    state: &AppState,
+    contact_id: &str,
+    reply_id: Option<&str>,
+    caption: Option<&str>,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    let Some(text) = caption.filter(|text| !text.trim().is_empty()) else {
+        return Ok((caption.map(str::to_string), None));
+    };
     let language = crate::incoming::outgoing_language(state, contact_id, reply_id).await?;
-    let Some(target) = language.as_deref() else { return Ok((Some(text.to_string()), None)); };
-    let translator = state.translator.as_ref().ok_or_else(|| anyhow::anyhow!("Translation is unavailable; image was not sent"))?;
+    let Some(target) = language.as_deref() else {
+        return Ok((Some(text.to_string()), None));
+    };
+    let translator = state
+        .translator
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Translation is unavailable; image was not sent"))?;
     let (translated, usage) = translator.translate_outgoing(text, target).await?;
-    state.store.record_usage(Some(contact_id), None, &usage, "translate_outgoing_caption")?;
+    state
+        .store
+        .record_usage(Some(contact_id), None, &usage, "translate_outgoing_caption")?;
     Ok((Some(translated), language))
 }
 
@@ -2453,9 +2493,22 @@ async fn send_image(
             .into_response();
     }
 
-    let (translated_caption, caption_language) = match translate_caption(&state, &req.contact_id, req.reply_to.as_deref(), req.caption.as_deref()).await {
+    let (translated_caption, caption_language) = match translate_caption(
+        &state,
+        &req.contact_id,
+        req.reply_to.as_deref(),
+        req.caption.as_deref(),
+    )
+    .await
+    {
         Ok(result) => result,
-        Err(error) => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": error.to_string()}))).into_response(),
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": error.to_string()})),
+            )
+                .into_response()
+        }
     };
     let caption_changed = translated_caption != req.caption;
 
@@ -2515,7 +2568,11 @@ async fn send_image(
             }))
         })),
         original_text: req.caption.clone(),
-        translated_text: if caption_changed { translated_caption.clone() } else { None },
+        translated_text: if caption_changed {
+            translated_caption.clone()
+        } else {
+            None
+        },
         source_language: caption_language.clone(),
         is_translated: caption_changed,
         delivery_status: Some("sending".to_string()),
@@ -2652,9 +2709,22 @@ async fn send_images(
             .into_response();
     }
 
-    let (translated_caption, caption_language) = match translate_caption(&state, &req.contact_id, req.reply_to.as_deref(), req.caption.as_deref()).await {
+    let (translated_caption, caption_language) = match translate_caption(
+        &state,
+        &req.contact_id,
+        req.reply_to.as_deref(),
+        req.caption.as_deref(),
+    )
+    .await
+    {
         Ok(result) => result,
-        Err(error) => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": error.to_string()}))).into_response(),
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": error.to_string()})),
+            )
+                .into_response()
+        }
     };
     let caption_changed = translated_caption != req.caption;
 
@@ -2804,9 +2874,21 @@ async fn send_images(
             content_type: "Image".to_string(),
             content_json: content.to_string(),
             content: Some(content),
-            original_text: if index == 0 { req.caption.clone() } else { None },
-            translated_text: if index == 0 && caption_changed { translated_caption.clone() } else { None },
-            source_language: if index == 0 { caption_language.clone() } else { None },
+            original_text: if index == 0 {
+                req.caption.clone()
+            } else {
+                None
+            },
+            translated_text: if index == 0 && caption_changed {
+                translated_caption.clone()
+            } else {
+                None
+            },
+            source_language: if index == 0 {
+                caption_language.clone()
+            } else {
+                None
+            },
             is_translated: index == 0 && caption_changed,
             delivery_status: Some("sent".to_string()),
         };
@@ -3082,10 +3164,22 @@ async fn translate_message(
     };
     let message = match state.store.get_message_by_id(&req.message_id) {
         Ok(Some(message)) if message.contact_id == req.contact_id && !message.is_from_me => message,
-        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Incoming message not found in this conversation"}))).into_response(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({"error": "Incoming message not found in this conversation"}),
+                ),
+            )
+                .into_response()
+        }
     };
     let Some(text) = message.original_text.as_deref() else {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Message has no text or caption"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Message has no text or caption"})),
+        )
+            .into_response();
     };
     // Get conversation settings for this contact
     let settings = state
@@ -3135,18 +3229,28 @@ async fn translate_message(
     }
 
     if let Err(error) = state.store.finish_translation(
-        &req.message_id, result.translated_text.as_deref(), &result.source_language, result.needs_translation,
+        &req.message_id,
+        result.translated_text.as_deref(),
+        &result.source_language,
+        result.needs_translation,
     ) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Could not save translation: {error}")}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Could not save translation: {error}")})),
+        )
+            .into_response();
     }
     if let Ok(Some(message)) = state.store.get_message_by_id(&req.message_id) {
-        let _ = state.broadcast_tx.send(WebSocketEvent::MessageUpdated { message });
+        let _ = state
+            .broadcast_tx
+            .send(WebSocketEvent::MessageUpdated { message });
     }
     Json(serde_json::json!({
         "success": true, "translatedText": result.translated_text,
         "sourceLanguage": result.source_language, "needsTranslation": result.needs_translation,
         "error": null,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 /// AI compose endpoint - generates a message using OpenAI
@@ -4792,41 +4896,119 @@ mod tests {
         }));
         let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
         let (_, dir) = test_state(None);
-        let state = AppState::new(MessageStore::new(&dir).unwrap(), PathBuf::from("web/public"), dir.clone(), Some(Arc::new(TranslationService::new_with_api_url(url))), None, None);
-        state.store.upsert_contact("chat@example.test", None, None, None, 0).unwrap();
-        state.store.update_conversation_settings("chat@example.test", &ConversationSettings { language_override: Some("Hungarian".into()), ..Default::default() }).unwrap();
-        let (caption, language) = translate_caption(&state, "chat@example.test", None, Some("Good morning")).await.unwrap();
-        assert_eq!(caption.as_deref(), Some("Jó reggelt")); assert_eq!(language.as_deref(), Some("Hungarian"));
-        let mut message = test_outgoing_message("incoming", 1); message.is_from_me = false; message.original_text = Some("Good morning".into());
-        state.store.add_message(&message).unwrap(); state.store.enqueue_translation("incoming").unwrap();
+        let state = AppState::new(
+            MessageStore::new(&dir).unwrap(),
+            PathBuf::from("web/public"),
+            dir.clone(),
+            Some(Arc::new(TranslationService::new_with_api_url(url))),
+            None,
+            None,
+        );
+        state
+            .store
+            .upsert_contact("chat@example.test", None, None, None, 0)
+            .unwrap();
+        state
+            .store
+            .update_conversation_settings(
+                "chat@example.test",
+                &ConversationSettings {
+                    language_override: Some("Hungarian".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let (caption, language) =
+            translate_caption(&state, "chat@example.test", None, Some("Good morning"))
+                .await
+                .unwrap();
+        assert_eq!(caption.as_deref(), Some("Jó reggelt"));
+        assert_eq!(language.as_deref(), Some("Hungarian"));
+        let mut message = test_outgoing_message("incoming", 1);
+        message.is_from_me = false;
+        message.original_text = Some("Good morning".into());
+        state.store.add_message(&message).unwrap();
+        state.store.enqueue_translation("incoming").unwrap();
         let mut events = state.broadcast_tx.subscribe();
-        let response = translate_message(State(state.clone()), Json(TranslateMessageRequest { text: "client text is ignored".into(), message_id: "incoming".into(), contact_id: "chat@example.test".into() })).await.into_response();
+        let response = translate_message(
+            State(state.clone()),
+            Json(TranslateMessageRequest {
+                text: "client text is ignored".into(),
+                message_id: "incoming".into(),
+                contact_id: "chat@example.test".into(),
+            }),
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let saved = state.store.get_message_by_id("incoming").unwrap().unwrap();
-        assert!(!saved.is_translated); assert_eq!(saved.source_language.as_deref(), Some("English"));
+        assert!(!saved.is_translated);
+        assert_eq!(saved.source_language.as_deref(), Some("English"));
         assert!(state.store.claim_translation().unwrap().is_none());
-        assert!(matches!(events.try_recv().unwrap(), WebSocketEvent::MessageUpdated { .. }));
-        server.abort(); std::fs::remove_dir_all(dir).unwrap();
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            WebSocketEvent::MessageUpdated { .. }
+        ));
+        server.abort();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn outgoing_language_prefers_reply_then_override_and_rejects_other_chat() {
         let (state, dir) = test_state(None);
-        state.store.upsert_contact("chat@example.test", None, None, None, 0).unwrap();
+        state
+            .store
+            .upsert_contact("chat@example.test", None, None, None, 0)
+            .unwrap();
         for n in 0..4 {
             let mut message = test_outgoing_message(&format!("hungarian-{n}"), n);
-            message.is_from_me = false; message.source_language = Some("Hungarian".into());
+            message.is_from_me = false;
+            message.source_language = Some("Hungarian".into());
             state.store.add_message(&message).unwrap();
         }
         let mut reply = test_outgoing_message("reply", 5);
-        reply.is_from_me = false; reply.source_language = Some("French".into());
+        reply.is_from_me = false;
+        reply.source_language = Some("French".into());
         state.store.add_message(&reply).unwrap();
-        assert_eq!(crate::incoming::outgoing_language(&state, "chat@example.test", None).await.unwrap().as_deref(), Some("Hungarian"));
-        assert_eq!(crate::incoming::outgoing_language(&state, "chat@example.test", Some("reply")).await.unwrap().as_deref(), Some("French"));
-        state.store.update_conversation_settings("chat@example.test", &ConversationSettings { language_override: Some("German".into()), ..Default::default() }).unwrap();
-        assert_eq!(crate::incoming::outgoing_language(&state, "chat@example.test", Some("reply")).await.unwrap().as_deref(), Some("German"));
-        assert!(crate::incoming::outgoing_language(&state, "other@example.test", Some("reply")).await.is_err());
-        let error = translate_caption(&state, "chat@example.test", None, Some("Good morning")).await.unwrap_err();
+        assert_eq!(
+            crate::incoming::outgoing_language(&state, "chat@example.test", None)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("Hungarian")
+        );
+        assert_eq!(
+            crate::incoming::outgoing_language(&state, "chat@example.test", Some("reply"))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("French")
+        );
+        state
+            .store
+            .update_conversation_settings(
+                "chat@example.test",
+                &ConversationSettings {
+                    language_override: Some("German".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            crate::incoming::outgoing_language(&state, "chat@example.test", Some("reply"))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("German")
+        );
+        assert!(
+            crate::incoming::outgoing_language(&state, "other@example.test", Some("reply"))
+                .await
+                .is_err()
+        );
+        let error = translate_caption(&state, "chat@example.test", None, Some("Good morning"))
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("not sent"));
         std::fs::remove_dir_all(dir).unwrap();
     }

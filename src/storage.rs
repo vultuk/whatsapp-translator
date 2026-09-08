@@ -1688,7 +1688,11 @@ impl MessageStore {
             "#,
         )?;
 
-        let language: Option<String> = stmt.query_row(params![contact_id, limit.clamp(1, 100) as i64], |row| row.get(0)).optional()?;
+        let language: Option<String> = stmt
+            .query_row(params![contact_id, limit.clamp(1, 100) as i64], |row| {
+                row.get(0)
+            })
+            .optional()?;
 
         Ok(language)
     }
@@ -2695,7 +2699,9 @@ mod tests {
     #[test]
     fn conversation_language_uses_recent_incoming_messages_and_latest_tie() {
         let (store, dir) = test_store();
-        store.upsert_contact("chat@example.test", None, None, None, 0).unwrap();
+        store
+            .upsert_contact("chat@example.test", None, None, None, 0)
+            .unwrap();
         for n in 0..25 {
             let mut message = test_message(&format!("old-{n}"), n);
             message.source_language = Some("English".into());
@@ -2706,15 +2712,37 @@ mod tests {
             message.source_language = Some("Hungarian".into());
             store.add_message(&message).unwrap();
         }
-        assert_eq!(store.get_conversation_language("chat@example.test", 4).unwrap().as_deref(), Some("Hungarian"));
+        assert_eq!(
+            store
+                .get_conversation_language("chat@example.test", 4)
+                .unwrap()
+                .as_deref(),
+            Some("Hungarian")
+        );
         let mut reply = test_message("latest", 30);
         reply.source_language = Some("French".into());
         store.add_message(&reply).unwrap();
-        assert_eq!(store.get_conversation_language("chat@example.test", 2).unwrap().as_deref(), Some("French"));
-        reply.id = "outgoing".into(); reply.timestamp = 31; reply.is_from_me = true; reply.source_language = Some("English".into());
+        assert_eq!(
+            store
+                .get_conversation_language("chat@example.test", 2)
+                .unwrap()
+                .as_deref(),
+            Some("French")
+        );
+        reply.id = "outgoing".into();
+        reply.timestamp = 31;
+        reply.is_from_me = true;
+        reply.source_language = Some("English".into());
         store.add_message(&reply).unwrap();
-        assert_eq!(store.get_conversation_language("chat@example.test", 2).unwrap().as_deref(), Some("French"));
-        drop(store); std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            store
+                .get_conversation_language("chat@example.test", 2)
+                .unwrap()
+                .as_deref(),
+            Some("French")
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -2755,7 +2783,10 @@ mod tests {
             .unwrap()
             .execute("UPDATE translation_jobs SET retry_at=0", [])
             .unwrap();
-        assert_eq!(store.claim_translation().unwrap().as_deref(), Some("queued"));
+        assert_eq!(
+            store.claim_translation().unwrap().as_deref(),
+            Some("queued")
+        );
         assert_eq!(
             store
                 .get_message_by_id("queued")
