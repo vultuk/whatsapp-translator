@@ -3,6 +3,9 @@ import SwiftUI
 struct ChatListView: View {
     @Environment(AppSession.self) private var session
     @Environment(\.translatorPalette) private var palette
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @State private var showSettings = ProcessInfo.processInfo.arguments.contains("-demoSettings")
 
     @State private var filter: ChatFilter = .all
@@ -20,29 +23,14 @@ struct ChatListView: View {
             )
             #endif
             .navigationTitle("Chats")
+            #if os(iOS)
             .toolbar {
-                #if os(macOS)
-                ToolbarItemGroup(placement: .primaryAction) {
-                    updatesToolbarButton
-                    Button("Refresh chats", systemImage: "arrow.clockwise") {
-                        Task { await session.refresh() }
-                    }
-                    .keyboardShortcut("r", modifiers: .command)
-                    .labelStyle(.iconOnly)
-                    .help("Refresh chats")
-                    SettingsLink {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                    .labelStyle(.iconOnly)
-                    .help("Settings")
+                if horizontalSizeClass == .compact {
+                    MainNavigationToolbar(showSettings: $showSettings)
                 }
-                #else
-                ToolbarItemGroup(placement: platformTrailingToolbarPlacement) {
-                    updatesToolbarButton
-                    Button("Settings", systemImage: "gearshape") { showSettings = true }
-                }
-                #endif
+                ToolbarItem(placement: .topBarLeading) { updatesToolbarButton }
             }
+            #endif
             .overlay {
                 if session.contacts.isEmpty {
                     ContentUnavailableView(
@@ -57,11 +45,23 @@ struct ChatListView: View {
                let contact = session.contacts.first(where: { $0.id == id }) {
                 ConversationView(contact: contact)
                     .id(id)
+                    #if os(iOS)
+                    .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
+                    #endif
             } else {
                 EmptyConversationView()
+                    #if os(iOS)
+                    .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
+                    #endif
             }
         }
         .navigationSplitViewStyle(.balanced)
+        #if os(macOS)
+        .toolbar {
+            MainNavigationToolbar(showSettings: $showSettings)
+            ToolbarItem(placement: .navigation) { updatesToolbarButton }
+        }
+        #endif
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
         }
@@ -204,6 +204,9 @@ struct ChatListView: View {
 
 private struct UpdatesToolbarIcon: View {
     @Environment(\.translatorPalette) private var palette
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     let unreadCount: Int
 
     var body: some View {
@@ -227,6 +230,9 @@ private struct UpdatesToolbarIcon: View {
 
 private struct EmptyConversationView: View {
     @Environment(\.translatorPalette) private var palette
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     var body: some View {
         ZStack {

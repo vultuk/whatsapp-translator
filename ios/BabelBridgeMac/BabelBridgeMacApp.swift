@@ -31,6 +31,15 @@ struct BabelBridgeMacApp: App {
         .windowToolbarStyle(.unifiedCompact)
         .commands {
             SidebarCommands()
+            CommandGroup(after: .toolbar) {
+                Button("Refresh") {
+                    Task {
+                        if session.mainTab == .messages { await session.loadFeed() }
+                        else { await session.refresh() }
+                    }
+                }
+                .keyboardShortcut("r", modifiers: .command)
+            }
             CommandGroup(replacing: .help) {
                 Link("Babel Bridge on GitHub", destination: URL(string: "https://github.com/vultuk/whatsapp-translator")!)
                 Divider()

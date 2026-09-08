@@ -3,6 +3,9 @@ import SwiftUI
 struct ConversationView: View {
     @Environment(AppSession.self) private var session
     @Environment(\.translatorPalette) private var palette
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     let contact: Contact
     @State private var draft = ""
     @State private var replyTarget: MessageReplyTarget?
@@ -12,6 +15,28 @@ struct ConversationView: View {
     @State private var messageSearch = ""
     @State private var starredOnly = false
     @State private var usage: UsageSummary?
+
+    #if os(iOS)
+    private var conversationTitleButton: some View {
+        Button { showSettings = true } label: {
+            HStack(spacing: 9) {
+                ContactAvatar(contact: contact, url: session.avatarURLs[contact.id], size: 38)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(session.displayName(for: contact))
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text(conversationHeaderSubtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .platformCompactControlTypography()
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens nickname, timezone and translation settings")
+    }
+    #endif
 
     private var messages: [ChatMessage] { session.messages[contact.id] ?? [] }
     private var activePhotoSend: PhotoSendProgress? {
@@ -122,29 +147,22 @@ struct ConversationView: View {
         #if os(iOS)
         .toolbarBackground(palette.chatBackground, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if horizontalSizeClass == .compact {
+                conversationTitleButton
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(palette.chatBackground)
+            }
+        }
         #endif
         .toolbar {
             #if os(iOS)
-            ToolbarItem(placement: .principal) {
-                Button { showSettings = true } label: {
-                    HStack(spacing: 9) {
-                        ContactAvatar(contact: contact, url: session.avatarURLs[contact.id], size: 38)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(session.displayName(for: contact))
-                                .font(.headline)
-                                .lineLimit(1)
-                            Text(conversationHeaderSubtitle)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .platformCompactControlTypography()
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint("Opens nickname, timezone and translation settings")
+            if horizontalSizeClass != .compact {
+                ToolbarItem(placement: .principal) { conversationTitleButton }
             }
-            ToolbarItem(placement: platformTrailingToolbarPlacement) {
+            ToolbarItem(placement: .topBarLeading) {
                 Menu("Conversation", systemImage: "ellipsis") {
                     Button("Search messages", systemImage: "magnifyingglass") {
                         Task { await activateSearch() }

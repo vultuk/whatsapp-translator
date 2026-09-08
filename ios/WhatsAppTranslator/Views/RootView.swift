@@ -52,23 +52,11 @@ private struct LaunchView: View {
 
 private struct MainMessagesView: View {
     @Environment(AppSession.self) private var session
-    @Environment(\.translatorPalette) private var palette
     @State private var selected: ChatMessage?
     @State private var drafts: [String: String] = [:]
     @State private var sending = false
 
     var body: some View {
-        #if os(iOS)
-        TabView(selection: Binding(get: { session.mainTab }, set: { session.mainTab = $0 })) {
-            Tab("Messages", systemImage: "text.bubble.fill", value: AppSession.MainTab.messages) {
-                UnifiedMessagesView(selected: $selected, drafts: $drafts, sending: $sending)
-            }
-            Tab("Chats", systemImage: "person.2.fill", value: AppSession.MainTab.chats) {
-                ChatListView()
-            }
-        }
-        .tint(palette.deepAccent)
-        #else
         Group {
             if session.mainTab == .messages {
                 UnifiedMessagesView(selected: $selected, drafts: $drafts, sending: $sending)
@@ -76,39 +64,32 @@ private struct MainMessagesView: View {
                 ChatListView()
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack(spacing: 4) {
-                tab("Messages", symbol: "text.bubble.fill", value: .messages)
-                tab("Chats", symbol: "person.2.fill", value: .chats)
-            }
-            .padding(5)
-            .frame(width: 260)
-            .translatorGlass(in: Capsule())
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-        }
-        #endif
     }
+}
 
-    private func tab(_ title: String, symbol: String, value: AppSession.MainTab) -> some View {
-        Button {
-            session.mainTab = value
-        } label: {
-            VStack(spacing: 3) {
-                Image(systemName: symbol).font(.system(size: 20))
-                Text(title).font(.caption2.weight(.semibold))
+struct MainNavigationToolbar: ToolbarContent {
+    @Environment(AppSession.self) private var session
+    @Binding var showSettings: Bool
+
+    var body: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
+            Button("Messages", systemImage: session.mainTab == .messages ? "text.bubble.fill" : "text.bubble") {
+                session.mainTab = .messages
             }
-            .foregroundStyle(session.mainTab == value ? palette.deepAccent : .secondary)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .background {
-                if session.mainTab == value {
-                    Capsule().fill(palette.accent.opacity(0.16))
-                }
+            .accessibilityAddTraits(session.mainTab == .messages ? .isSelected : [])
+            .help("Messages")
+            Button("Chats", systemImage: session.mainTab == .chats ? "person.2.fill" : "person.2") {
+                session.mainTab = .chats
             }
-            .contentShape(Capsule())
+            .accessibilityAddTraits(session.mainTab == .chats ? .isSelected : [])
+            .help("Chats")
+            #if os(macOS)
+            SettingsLink { Label("Settings", systemImage: "gearshape") }
+                .help("Settings")
+            #else
+            Button("Settings", systemImage: "gearshape") { showSettings = true }
+            #endif
         }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(session.mainTab == value ? .isSelected : [])
     }
 }
 
@@ -182,20 +163,7 @@ private struct UnifiedMessagesView: View {
                 }
             }
             .navigationTitle("Messages")
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    #if os(macOS)
-                    Button("Refresh messages", systemImage: "arrow.clockwise") {
-                        Task { await session.loadFeed() }
-                    }
-                    .keyboardShortcut("r", modifiers: .command)
-                    .help("Refresh messages")
-                    SettingsLink { Label("Settings", systemImage: "gearshape") }
-                    #else
-                    Button("Settings", systemImage: "gearshape") { showSettings = true }
-                    #endif
-                }
-            }
+            .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
             .safeAreaInset(edge: .bottom, spacing: 0) { composer }
             .sheet(isPresented: $showSettings) { AppSettingsView() }
         }
