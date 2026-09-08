@@ -57,6 +57,7 @@ struct VoicePreferenceSection: View {
 struct VoiceAudioPreview: View {
     let encoded: String
     let title: String
+    var compact = false
     @State private var player: AVAudioPlayer?
     @State private var playing = false
     @State private var error: String?
@@ -75,10 +76,22 @@ struct VoiceAudioPreview: View {
                     playing = true
                 } catch { self.error = error.localizedDescription }
             } label: {
-                Label(playing ? "Pause \(title)" : "Play \(title)", systemImage: playing ? "pause.circle.fill" : "play.circle.fill")
-                    .frame(minHeight: 44)
+                if compact {
+                    HStack(spacing: 10) {
+                        Image(systemName: playing ? "pause.fill" : "play.fill")
+                            .font(.system(size: 24))
+                            .frame(width: 44, height: 44)
+                        Image(systemName: "waveform")
+                            .resizable().scaledToFit().frame(width: 145, height: 28)
+                    }
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(playing ? "Pause \(title)" : "Play \(title)")
+                } else {
+                    Label(playing ? "Pause \(title)" : "Play \(title)", systemImage: playing ? "pause.circle.fill" : "play.circle.fill")
+                        .frame(minHeight: 44)
+                }
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
         }
         .onChange(of: encoded) { _, _ in player?.stop(); player = nil; playing = false }
@@ -104,12 +117,17 @@ struct VoiceTranslationPlayer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let note {
-                Picker("Recording", selection: $showOriginal) {
-                    Text("Translated").tag(false)
-                    Text("Original").tag(true)
-                }.pickerStyle(.segmented)
-                VoiceAudioPreview(encoded: showOriginal ? note.originalData : note.audioData, title: showOriginal ? "original" : "translation")
-                if !showOriginal { Text("\(note.targetLanguage) · AI-generated voice").font(.caption).foregroundStyle(.secondary) }
+                VoiceAudioPreview(encoded: showOriginal ? note.originalData : note.audioData, title: showOriginal ? "original" : "translation", compact: true)
+                Menu {
+                    Picker("Recording", selection: $showOriginal) {
+                        Text("Translated · AI voice").tag(false)
+                        Text("Original recording").tag(true)
+                    }
+                } label: {
+                    Label(showOriginal ? "Original" : "\(note.targetLanguage) · AI voice", systemImage: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 DisclosureGroup("Transcript") {
                     Text(showOriginal ? note.transcript : note.translation).font(.callout).textSelection(.enabled)
                 }
@@ -117,12 +135,13 @@ struct VoiceTranslationPlayer: View {
                 if let originalURL {
                     AudioMessagePlayer(url: originalURL, title: "Original voice note", duration: message.content?.durationSeconds)
                 }
-                Button { translate() } label: {
-                    if busy { ProgressView("Translating voice…") }
-                    else { Label("Translate voice", systemImage: "waveform.badge.mic") }
+                if busy { ProgressView("Translating voice…").font(.caption) }
+                else {
+                    Button("Translate", systemImage: "character.bubble") { translate() }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
                 }
-                .disabled(busy)
-                .frame(minHeight: 44)
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
         }

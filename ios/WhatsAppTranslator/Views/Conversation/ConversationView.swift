@@ -119,12 +119,16 @@ struct ConversationView: View {
             )
         }
         .platformInlineNavigationTitle()
+        #if os(iOS)
+        .toolbarBackground(palette.chatBackground, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        #endif
         .toolbar {
             #if os(iOS)
             ToolbarItem(placement: .principal) {
                 Button { showSettings = true } label: {
                     HStack(spacing: 9) {
-                        ContactAvatar(contact: contact, url: session.avatarURLs[contact.id], size: 34)
+                        ContactAvatar(contact: contact, url: session.avatarURLs[contact.id], size: 38)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(session.displayName(for: contact))
                                 .font(.headline)
@@ -206,7 +210,7 @@ struct ConversationView: View {
         #if os(macOS)
         "Babel Bridge"
         #else
-        session.displayName(for: contact)
+        ""
         #endif
     }
 
@@ -229,7 +233,7 @@ struct ConversationView: View {
             ContentUnavailableView(
                 starredOnly ? "No starred messages" : "No messages found",
                 systemImage: starredOnly ? "star" : "magnifyingglass",
-                description: Text(starredOnly ? "Use the actions button under a message to star it." : "Try another search.")
+                description: Text(starredOnly ? "Touch and hold a message to star it." : "Try another search.")
             )
             .padding(.top, 80)
         }
@@ -365,12 +369,23 @@ private struct ChatWallpaper: View {
         palette.chatBackground
             .overlay {
                 Canvas { context, size in
-                    for row in 0..<max(0, Int(size.height / 28 + 1)) {
-                        for column in 0..<max(0, Int(size.width / 28 + 1)) {
-                            let x = CGFloat(column) * 28 + (row.isMultiple(of: 2) ? 0 : 14)
-                            let dot = Path(ellipseIn: CGRect(x: x, y: CGFloat(row) * 28, width: 1.5, height: 1.5))
-                            context.fill(dot, with: .color(.primary.opacity(0.045)))
+                    for row in 0..<max(0, Int(size.height / 64 + 1)) {
+                        for column in 0..<max(0, Int(size.width / 64 + 1)) {
+                            let index = (row * 3 + column) % 8
+                            if let symbol = context.resolveSymbol(id: index) {
+                                var tile = context
+                                tile.translateBy(x: CGFloat(column) * 64 + (row.isMultiple(of: 2) ? 8 : 36), y: CGFloat(row) * 64 + 20)
+                                tile.rotate(by: .degrees(Double((row + column) % 3 - 1) * 22))
+                                tile.draw(symbol, at: .zero)
+                            }
                         }
+                    }
+                } symbols: {
+                    ForEach(Array(["cup.and.saucer", "paperplane", "heart", "camera", "sun.max", "leaf", "globe.europe.africa", "sparkles"].enumerated()), id: \.offset) { index, symbol in
+                        Image(systemName: symbol)
+                            .font(.system(size: 32, weight: .ultraLight))
+                            .foregroundStyle(Color.secondary.opacity(0.14))
+                            .tag(index)
                     }
                 }
                 .accessibilityHidden(true)

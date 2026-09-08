@@ -135,6 +135,11 @@ struct MessageBubble: View {
         max(demoSwipeOffset, MessageSwipeReply.offset(translation: swipeTranslation))
     }
 
+    private var usesInlineText: Bool {
+        message.mediaKind == nil && ["text", "conversation", "extendedTextMessage"].contains(message.normalizedContentType)
+            && linkPreviews.isEmpty && albumMessages.count <= 1
+    }
+
     private var isStandaloneEmoji: Bool { message.standaloneEmojiText != nil }
 
     var body: some View {
@@ -184,6 +189,13 @@ struct MessageBubble: View {
                             .fixedSize(horizontal: true, vertical: true)
                             .textSelection(.enabled)
                             .accessibilityLabel("Emoji: \(emoji)")
+                    } else if usesInlineText {
+                        CompactMessageLayout {
+                            Text(MessageTextLinkifier.attributedString(from: showAlternate ? (message.alternateText ?? message.displayText) : message.displayText))
+                                .font(.body)
+                                .textSelection(.enabled)
+                            messageMetadata
+                        }
                     } else if albumMessages.count > 1 {
                         PhotoAlbumGrid(
                             messages: albumMessages,
@@ -223,8 +235,9 @@ struct MessageBubble: View {
 
                     if isStandaloneEmoji {
                         standaloneEmojiMetadata
-                    } else {
+                    } else if !usesInlineText {
                         messageMetadata
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                     }
 
                     if showActions {
@@ -232,15 +245,16 @@ struct MessageBubble: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
-                .padding(.horizontal, isStandaloneEmoji ? 4 : 12)
-                .padding(.vertical, isStandaloneEmoji ? 2 : 9)
+                .frame(maxWidth: message.mediaKind == .image ? 260 : (message.mediaKind == .audio ? 238 : nil), alignment: .leading)
+                .padding(.horizontal, isStandaloneEmoji ? 4 : (message.mediaKind == .image ? 4 : 9))
+                .padding(.vertical, isStandaloneEmoji ? 2 : 5)
                 .background {
                     if !isStandaloneEmoji {
                         UnevenRoundedRectangle(
-                            topLeadingRadius: message.isFromMe ? 17 : 4,
-                            bottomLeadingRadius: 17,
-                            bottomTrailingRadius: 17,
-                            topTrailingRadius: message.isFromMe ? 4 : 17,
+                            topLeadingRadius: message.isFromMe ? 13 : 4,
+                            bottomLeadingRadius: 13,
+                            bottomTrailingRadius: 13,
+                            topTrailingRadius: message.isFromMe ? 4 : 13,
                             style: .continuous
                         )
                         .fill(message.isFromMe ? palette.outgoingBubble : palette.incomingBubble)
@@ -264,6 +278,7 @@ struct MessageBubble: View {
                 }
             )
             .accessibilityAction(named: "Reply") { reply() }
+            .accessibilityAction(named: "Message actions") { showActions.toggle() }
             if !message.isFromMe { Spacer(minLength: bubbleEdgeInset) }
         }
         .frame(maxWidth: .infinity)
@@ -291,40 +306,24 @@ struct MessageBubble: View {
                 Button {
                     withAnimation(.snappy) { showAlternate.toggle() }
                 } label: {
-                    if usesCompactMessageChrome {
-                        Image(systemName: "character.bubble")
-                    } else {
-                        Label(showAlternate ? "Original" : "Translated", systemImage: "character.bubble")
-                            .lineLimit(1)
-                    }
+                    Image(systemName: showAlternate ? "character" : "character.bubble")
+
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(showAlternate ? "Show translated message" : "Show original message")
             }
             if isBusy { ProgressView().controlSize(.mini) }
-            #if os(macOS)
-            Spacer().frame(width: 8)
-            #else
-            Spacer(minLength: 8)
-            #endif
             if isStarred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
             Text(message.date.formatted(date: .omitted, time: .shortened))
                 .fixedSize(horizontal: true, vertical: false)
             if message.isFromMe {
                 MessageDeliveryIndicator(state: message.deliveryState)
             }
-            Button {
-                withAnimation(.snappy) { showActions.toggle() }
-            } label: {
-                Image(systemName: showActions ? "xmark" : "ellipsis")
-            }
-            .buttonStyle(.plain)
-            .help(showActions ? "Hide message actions" : "Show message actions")
-            .accessibilityLabel(showActions ? "Hide message actions" : "Show message actions")
-            .accessibilityHint("Reply, translate, star or react")
+
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
+        .fixedSize()
         .platformCompactControlTypography()
     }
 
@@ -506,7 +505,7 @@ struct MessageBubble: View {
     }
 
     private var bubbleEdgeInset: CGFloat {
-        usesCompactMessageChrome ? 18 : 52
+        usesCompactMessageChrome || message.mediaKind != nil ? 18 : 36
     }
 
     private var standaloneEmojiFontSize: CGFloat {
@@ -687,5 +686,26 @@ private struct LinkPreviewCard: View {
             }
             .buttonStyle(.plain)
         }
+    }
+}
+
+/// Short messages and receipts share a line; longer text wraps without expanding short bubbles.
+struct CompactMessageLayout: Layout {
+    private func measurements(_ proposal: ProposedViewSize, _ subviews: Subviews) -> (CGSize, CGSize, Bool, CGFloat) {
+        let footer = subviews[1].sizeThatFits(.unspecified)
+        let natural = subviews[0].sizeThatFits(.unspecified)
+        let available = max(1, proposal.width ?? natural.width + footer.width + 8)
+        let inline = natural.width + footer.width + 8 <= available
+        let text = inline ? natural : subviews[0].sizeThatFits(ProposedViewSize(width: available, height: nil))
+        return (text, footer, inline, inline ? text.width + footer.width + 8 : max(text.width, footer.width))
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (text, footer, inline, width) = measurements(proposal, subviews)
+        return CGSize(width: width, height: inline ? max(text.height, footer.height) : text.height + footer.height + 2)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (text, footer, inline, _) = measurements(proposal, subviews)
+        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(text))
+        subviews[1].place(at: CGPoint(x: bounds.maxX - footer.width, y: inline ? bounds.maxY - footer.height : bounds.minY + text.height + 2), proposal: ProposedViewSize(footer))
     }
 }

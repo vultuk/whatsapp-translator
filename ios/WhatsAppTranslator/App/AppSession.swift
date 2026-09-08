@@ -1001,6 +1001,15 @@ final class AppSession {
         backendStatus = BackendStatus(connected: true, phone: "447853803055", name: "Simon Skinner")
         contacts = Contact.demoContacts
         messages = ChatMessage.demoMessages
+        if ProcessInfo.processInfo.arguments.contains("-demoWhatsAppLayout") {
+            let id = "virag@s.whatsapp.net"
+            messages[id] = [
+                .demo(id: "compact-in", contactID: id, timestamp: 1_783_939_620_000, fromMe: false, body: "Are you coming along?", translated: nil, sender: nil),
+                .demo(id: "compact-out", contactID: id, timestamp: 1_783_939_740_000, fromMe: true, body: "I do…", translated: nil, sender: nil, deliveryStatus: "read"),
+                .demoImage(contactID: id, id: "portrait", timestamp: 1_783_940_100_000, caption: "A lovely afternoon in the sunshine. ☀️"),
+                .demo(id: "compact-last", contactID: id, timestamp: 1_783_940_400_000, fromMe: false, body: "See you soon", translated: nil, sender: nil)
+            ]
+        }
         if ProcessInfo.processInfo.arguments.contains("-demoPhotoAlbum"),
            var conversation = messages["virag@s.whatsapp.net"],
            let imageIndex = conversation.firstIndex(where: \.isImage) {
@@ -1031,7 +1040,7 @@ final class AppSession {
     }
 
     private func demoPhoto() -> PlatformImage {
-        DemoImageFactory.landscape(size: CGSize(width: 640, height: 420))
+        DemoImageFactory.landscape(size: CGSize(width: 640, height: ProcessInfo.processInfo.arguments.contains("-demoWhatsAppLayout") ? 1400 : 420))
     }
 }
 

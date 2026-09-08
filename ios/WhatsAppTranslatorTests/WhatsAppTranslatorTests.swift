@@ -574,6 +574,23 @@ final class WhatsAppTranslatorTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testCompactMessageLayoutHugsShortTextAndWrapsLongMessages() {
+        func measured(_ text: String) -> CGSize {
+            let host = UIHostingController(rootView: CompactMessageLayout {
+                Text(text).font(.body)
+                Text("16:06").font(.caption2).fixedSize()
+            }.padding(9))
+            return host.sizeThatFits(in: CGSize(width: 300, height: 1_000))
+        }
+        let short = measured("I do…")
+        let long = measured(String(repeating: "A longer message that needs to wrap. ", count: 5))
+        XCTAssertLessThan(short.width, 180)
+        XCTAssertLessThan(short.height, 60)
+        XCTAssertLessThanOrEqual(long.width, 300)
+        XCTAssertGreaterThan(long.height, short.height)
+    }
+
     func testChatFiltersDistinguishUnreadAndGroupConversations() {
         let direct = Contact(id: "direct", name: "Direct", phone: nil, type: "private", lastMessageTime: 1, unreadCount: 2, pinnedAt: nil, lastMessagePreview: nil)
         let group = Contact(id: "group", name: "Group", phone: nil, type: "group", lastMessageTime: 2, unreadCount: 0, pinnedAt: nil, lastMessagePreview: nil)

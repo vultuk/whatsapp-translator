@@ -40,7 +40,7 @@ struct RichMessageContentView: View {
         Group {
             switch message.mediaKind {
             case .image:
-                imageContent(maxWidth: 280, maxHeight: 280)
+                imageContent(maxWidth: 260, maxHeight: 360)
                 caption
             case .sticker:
                 imageContent(maxWidth: 180, maxHeight: 180)
@@ -74,19 +74,13 @@ struct RichMessageContentView: View {
     @ViewBuilder
     private func imageContent(maxWidth: CGFloat, maxHeight: CGFloat) -> some View {
         if let image {
+            let ratio = max(image.size.width / max(image.size.height, 1), 0.72)
+            let width = maxWidth
             Image(platformImage: image)
                 .resizable()
-                .scaledToFit()
-                .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                .scaledToFill()
+                .frame(width: width, height: min(maxHeight, width / ratio))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(alignment: .bottomTrailing) {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(7)
-                        .background(.black.opacity(0.56), in: Circle())
-                        .padding(7)
-                }
                 .contentShape(Rectangle())
                 .highPriorityGesture(
                     TapGesture().onEnded { showPhotoViewer = true }
@@ -271,18 +265,29 @@ struct AudioMessagePlayer: View {
                 }
             }
             .labelStyle(.iconOnly)
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.circle)
-            Image(systemName: "waveform").foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.callout.weight(.semibold))
+            .buttonStyle(.plain)
+            .font(.system(size: 24))
+            .foregroundStyle(.secondary)
+            .frame(width: 44, height: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 2) {
+                    ForEach(0..<36) { index in
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.5))
+                            .frame(width: 3, height: CGFloat(5 + ((index * 7 + 11) % 23)))
+                    }
+                }
+                .accessibilityHidden(true)
                 if let playbackError { Text(playbackError).font(.caption).foregroundStyle(.red) }
-                if let duration { Text(duration.formatted(.number.precision(.fractionLength(0))) + " sec").font(.caption).foregroundStyle(.secondary) }
+                if let duration {
+                    Text(String(format: "%d:%02d", Int(duration) / 60, Int(duration) % 60))
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }
         }
-        .padding(9)
-        .frame(minWidth: 220, alignment: .leading)
-        .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityLabel(title)
+        .padding(.vertical, 2)
+        .frame(width: 238, alignment: .leading)
         .task(id: url) {
             player?.stop(); player = nil; isPlaying = false; playbackError = nil
             while !Task.isCancelled {

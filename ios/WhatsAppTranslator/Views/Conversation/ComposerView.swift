@@ -42,7 +42,7 @@ struct ComposerView: View {
                 .padding(.vertical, 8)
             }
 
-            HStack(alignment: .bottom, spacing: 9) {
+            HStack(alignment: .center, spacing: 7) {
                 PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 30, matching: .images) {
                     addImageLabel
                 }
@@ -55,10 +55,9 @@ struct ComposerView: View {
                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending {
                     Button { showVoiceComposer = true } label: {
                         Image(systemName: "mic.fill")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .font(.system(size: 23, weight: .regular))
+                            .foregroundStyle(Color.primary)
                             .frame(width: 44, height: 44)
-                            .background(palette.accent, in: Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Record voice note")
@@ -71,7 +70,7 @@ struct ComposerView: View {
             .padding(.top, reply == nil ? 8 : 2)
             .padding(.bottom, 9)
         }
-        .background(.ultraThinMaterial)
+        .background(palette.chatBackground)
         .onChange(of: selectedPhotos) { _, items in
             guard !items.isEmpty else { return }
             Task {
@@ -159,10 +158,9 @@ struct ComposerView: View {
             .contentShape(RoundedRectangle(cornerRadius: 9))
         #else
         Image(systemName: "plus")
-            .font(.system(size: 18, weight: .semibold))
-            .frame(width: 44, height: 44)
-            .background(.ultraThinMaterial, in: Circle())
-            .overlay(Circle().stroke(.white.opacity(0.22), lineWidth: 0.5))
+            .font(.system(size: 25, weight: .regular))
+            .foregroundStyle(Color.primary)
+            .frame(width: 34, height: 44)
         #endif
     }
 
@@ -259,7 +257,8 @@ private struct ComposerInputStyle: ViewModifier {
         #else
         content
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.vertical, 6)
+            .frame(minHeight: 34)
             .background(palette.incomingBubble, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 24).stroke(.primary.opacity(0.06), lineWidth: 0.5))
         #endif

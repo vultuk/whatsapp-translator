@@ -12,7 +12,7 @@ struct WhatsAppTranslatorApp: App {
                 .environment(session)
                 .environment(\.translatorPalette, TranslatorPalette.make(session.preferences.theme))
                 .tint(TranslatorPalette.make(session.preferences.theme).accent)
-                .preferredColorScheme(session.preferences.colorMode.colorScheme)
+                .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("-demoWhatsAppLayout") ? .light : session.preferences.colorMode.colorScheme)
                 .task { await session.start() }
                 .onChange(of: scenePhase) { _, phase in
                     guard phase == .active else { return }
