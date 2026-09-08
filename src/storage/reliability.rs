@@ -264,7 +264,7 @@ impl MessageStore {
     pub fn claim_translation(&self) -> Result<Option<String>> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        let id = tx.query_row("SELECT message_id FROM translation_jobs WHERE status='pending' AND retry_at<=? ORDER BY rowid LIMIT 1", params![chrono::Utc::now().timestamp()], |row| row.get::<_, String>(0)).optional()?;
+        let id = tx.query_row("SELECT message_id FROM translation_jobs WHERE status='pending' AND retry_at<=? ORDER BY attempts ASC, rowid DESC LIMIT 1", params![chrono::Utc::now().timestamp()], |row| row.get::<_, String>(0)).optional()?;
         if let Some(id) = &id {
             tx.execute("UPDATE translation_jobs SET status='processing', attempts=attempts+1 WHERE message_id=?", params![id])?;
         }

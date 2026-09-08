@@ -2821,6 +2821,37 @@ mod tests {
     }
 
     #[test]
+    fn fresh_translations_take_priority_over_recovered_failures() {
+        let (store, dir) = test_store();
+        store
+            .upsert_contact("chat@example.test", None, None, None, 0)
+            .unwrap();
+        for id in ["old-failure", "new-message"] {
+            store.add_message(&test_message(id, 1)).unwrap();
+            store.enqueue_translation(id).unwrap();
+        }
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE translation_jobs SET attempts=3 WHERE message_id='old-failure'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            store.claim_translation().unwrap().as_deref(),
+            Some("new-message")
+        );
+        assert_eq!(
+            store.claim_translation().unwrap().as_deref(),
+            Some("old-failure")
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn translation_queue_survives_restart_and_retries_transient_failures() {
         let (store, dir) = test_store();
         store
