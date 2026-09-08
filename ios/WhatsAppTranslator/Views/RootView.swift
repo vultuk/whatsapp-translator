@@ -77,6 +77,7 @@ struct UnifiedReplyDraft {
         if selected == nil {
             guard !value.isEmpty, let latestMessage else { return }
             selected = latestMessage
+            isFocused = true
         }
         if let selected { drafts[selected.contactId] = value }
     }

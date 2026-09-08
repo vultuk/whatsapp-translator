@@ -17,14 +17,16 @@ final class BabelBridgeMacTests: XCTestCase {
         var draft = UnifiedReplyDraft()
         draft.updateText("", latestMessage: original)
         XCTAssertNil(draft.selected)
+        XCTAssertFalse(draft.isFocused)
         draft.updateText("H", latestMessage: original)
         XCTAssertEqual(draft.selected?.id, original.id)
-        XCTAssertFalse(draft.isFocused)
+        XCTAssertTrue(draft.isFocused)
         draft.updateText("Hello", latestMessage: elsewhere)
         XCTAssertEqual(draft.selected?.contactId, original.contactId)
         draft.updateText("", latestMessage: newer)
         draft.updateText("Hello again", latestMessage: newer)
         XCTAssertEqual(draft.selected?.id, original.id)
+        XCTAssertTrue(draft.isFocused)
 
         let session = AppSession(demoMode: true)
         session.messages = [original.contactId: [original, newer], elsewhere.contactId: [elsewhere]]
