@@ -58,23 +58,36 @@ private struct MainMessagesView: View {
     @State private var sending = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            Group {
-                if session.mainTab == .messages {
-                    UnifiedMessagesView(selected: $selected, drafts: $drafts, sending: $sending)
-                } else {
-                    ChatListView()
-                }
+        #if os(iOS)
+        TabView(selection: Binding(get: { session.mainTab }, set: { session.mainTab = $0 })) {
+            Tab("Messages", systemImage: "text.bubble.fill", value: AppSession.MainTab.messages) {
+                UnifiedMessagesView(selected: $selected, drafts: $drafts, sending: $sending)
             }
-            Divider()
-            HStack(spacing: 0) {
+            Tab("Chats", systemImage: "person.2.fill", value: AppSession.MainTab.chats) {
+                ChatListView()
+            }
+        }
+        .tint(palette.deepAccent)
+        #else
+        Group {
+            if session.mainTab == .messages {
+                UnifiedMessagesView(selected: $selected, drafts: $drafts, sending: $sending)
+            } else {
+                ChatListView()
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack(spacing: 4) {
                 tab("Messages", symbol: "text.bubble.fill", value: .messages)
                 tab("Chats", symbol: "person.2.fill", value: .chats)
             }
-            .padding(.top, 9)
-            .padding(.bottom, 7)
-            .background(.regularMaterial)
+            .padding(5)
+            .frame(width: 260)
+            .translatorGlass(in: Capsule())
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
+        #endif
     }
 
     private func tab(_ title: String, symbol: String, value: AppSession.MainTab) -> some View {
@@ -86,8 +99,13 @@ private struct MainMessagesView: View {
                 Text(title).font(.caption2.weight(.semibold))
             }
             .foregroundStyle(session.mainTab == value ? palette.deepAccent : .secondary)
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background {
+                if session.mainTab == value {
+                    Capsule().fill(palette.accent.opacity(0.16))
+                }
+            }
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(session.mainTab == value ? .isSelected : [])
