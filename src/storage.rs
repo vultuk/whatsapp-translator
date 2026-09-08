@@ -349,6 +349,7 @@ impl MessageStore {
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_messages_contact_id ON messages(contact_id);
             CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_messages_feed_cursor ON messages(timestamp DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_desc ON messages(contact_id, timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_id_desc ON messages(contact_id, timestamp DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_contacts_last_message ON contacts(last_message_time DESC);
@@ -1452,6 +1453,60 @@ impl MessageStore {
     /// Get messages for a specific contact (all messages - for MCP/internal use)
     pub fn get_messages(&self, contact_id: &str) -> Result<Vec<StoredMessage>> {
         self.get_messages_paginated(contact_id, None, None, None, false)
+    }
+
+    /// Bounded, stable timeline across conversations. Media remains lazy-loaded.
+    pub fn get_unified_messages(
+        &self,
+        limit: u32,
+        before: Option<i64>,
+        before_id: Option<&str>,
+    ) -> Result<Vec<StoredMessage>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"SELECT m.id, m.contact_id, m.timestamp, m.is_from_me, m.is_forwarded,
+                      m.sender_name, m.sender_phone, m.chat_type, m.content_type,
+                      m.content_json, m.original_text, m.translated_text, m.source_language,
+                      m.is_translated, m.delivery_status, c.name, c.phone
+               FROM messages m LEFT JOIN contacts c ON c.id = m.contact_id
+               WHERE m.contact_id != 'status@broadcast'
+                 AND lower(m.content_type) != 'reaction'
+                 AND lower(COALESCE(json_extract(m.content_json, '$.type'), '')) != 'reaction'
+                 AND (?1 IS NULL OR m.timestamp < ?1 OR
+                     (m.timestamp = ?1 AND ?2 IS NOT NULL AND m.id < ?2))
+               ORDER BY m.timestamp DESC, m.id DESC LIMIT ?3"#,
+        )?;
+        let mut messages = stmt
+            .query_map(params![before, before_id, limit], |row| {
+                Self::row_to_stored_message(row, row.get(15)?, row.get(16)?)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for message in &mut messages {
+            let (json, content) = Self::strip_media_from_content(&message.content_json);
+            message.content_json = json;
+            message.content = content;
+        }
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// The target must belong to this conversation. Reactions do not change reply context.
+    pub fn reply_is_latest(&self, contact_id: &str, message_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            r#"SELECT id = (
+                  SELECT id FROM messages WHERE contact_id = ?1
+                    AND lower(content_type) != 'reaction'
+                    AND lower(COALESCE(json_extract(content_json, '$.type'), '')) != 'reaction'
+                  ORDER BY timestamp DESC, id DESC LIMIT 1)
+               FROM messages WHERE contact_id = ?1 AND id = ?2
+                 AND lower(content_type) != 'reaction'
+                 AND lower(COALESCE(json_extract(content_json, '$.type'), '')) != 'reaction'"#,
+            params![contact_id, message_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .context("The selected message is no longer in this conversation")
     }
 
     /// Get media data for a specific message
@@ -2692,6 +2747,49 @@ mod tests {
         ));
         let store = MessageStore::new(&data_dir).expect("test store");
         (store, data_dir)
+    }
+
+    #[test]
+    fn unified_feed_paginates_across_chats_and_quotes_only_older_context() {
+        let (store, path) = test_store();
+        store
+            .upsert_contact("chat@example.test", None, None, None, 0)
+            .unwrap();
+        store
+            .upsert_contact("other@example.test", None, None, None, 0)
+            .unwrap();
+        let first = test_message("a", 100);
+        let second = test_message("b", 100);
+        let mut other = test_message("c", 101);
+        other.contact_id = "other@example.test".into();
+        store.add_message(&first).unwrap();
+        store.add_message(&second).unwrap();
+        store.add_message(&other).unwrap();
+        assert!(store.reply_is_latest(&first.contact_id, "b").unwrap());
+        assert!(!store.reply_is_latest(&first.contact_id, "a").unwrap());
+        assert!(store.reply_is_latest(&first.contact_id, "c").is_err());
+        let page = store.get_unified_messages(2, None, None).unwrap();
+        assert_eq!(
+            page.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["b", "c"]
+        );
+        let older = store.get_unified_messages(2, Some(100), Some("b")).unwrap();
+        assert_eq!(
+            older.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["a"]
+        );
+        let mut reaction = test_message("reaction", 200);
+        reaction.content_type = "Reaction".into();
+        store.add_message(&reaction).unwrap();
+        assert!(store.reply_is_latest(&first.contact_id, "b").unwrap());
+        assert_eq!(store.get_unified_messages(10, None, None).unwrap().len(), 3);
+        let later = test_message("later", 300);
+        store.add_message(&later).unwrap();
+        assert!(!store.reply_is_latest(&first.contact_id, "b").unwrap());
+        store.delete_message("b").unwrap();
+        assert!(store.reply_is_latest(&first.contact_id, "b").is_err());
+        drop(store);
+        let _ = std::fs::remove_dir_all(path);
     }
 
     fn test_message(id: &str, timestamp: i64) -> StoredMessage {

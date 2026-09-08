@@ -254,6 +254,9 @@ pub struct SendMessageRequest {
     pub reply_to_text: Option<String>,
     /// Sender display name of the replied message (for storage)
     pub reply_to_sender_name: Option<String>,
+    /// Unified feed: quote only when another message has since arrived in this chat.
+    #[serde(default)]
+    pub reply_only_if_not_latest: bool,
 }
 
 /// Send message response
@@ -1156,6 +1159,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(get_conversation_settings).put(update_conversation_settings),
         )
         .route("/api/messages/:contact_id", get(get_messages))
+        .route("/api/feed", get(get_unified_messages))
         .route("/api/media/:message_id", get(get_media))
         .route("/api/avatar/:jid", get(get_avatar))
         .route("/api/qr", get(get_qr))
@@ -1853,6 +1857,7 @@ struct MessagesQuery {
     /// Only get messages before this timestamp (for loading older messages)
     before: Option<i64>,
     /// Tie-breaker message ID for stable pagination when timestamps match
+    #[serde(alias = "before_id")]
     before_id: Option<String>,
 }
 
@@ -1862,6 +1867,45 @@ struct MessagesQuery {
 struct MessagesResponse {
     messages: Vec<StoredMessage>,
     has_more: bool,
+}
+
+async fn get_unified_messages(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<MessagesQuery>,
+) -> impl IntoResponse {
+    let limit = params.limit.unwrap_or(50).clamp(1, 100);
+    match state
+        .store
+        .get_unified_messages(limit + 1, params.before, params.before_id.as_deref())
+    {
+        Ok(mut messages) => {
+            let has_more = messages.len() > limit as usize;
+            if has_more {
+                messages.remove(0);
+            }
+            if state.translator.is_some() {
+                for message in &messages {
+                    if !message.is_from_me
+                        && !message.is_audio()
+                        && message.source_language.is_none()
+                        && message
+                            .original_text
+                            .as_deref()
+                            .is_some_and(|text| !text.trim().is_empty())
+                    {
+                        if let Err(error) = state.store.enqueue_translation(&message.id) {
+                            warn!("Could not queue feed translation: {error}");
+                        }
+                    }
+                }
+            }
+            Json(MessagesResponse { messages, has_more }).into_response()
+        }
+        Err(error) => {
+            error!("Failed to load unified feed: {error}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Could not load messages").into_response()
+        }
+    }
 }
 
 async fn get_messages(
@@ -1998,7 +2042,7 @@ async fn get_avatar(
 
 async fn send_message(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<SendMessageRequest>,
+    Json(mut req): Json<SendMessageRequest>,
 ) -> impl IntoResponse {
     // Validate input
     if req.contact_id.is_empty() || req.text.is_empty() {
@@ -2009,6 +2053,22 @@ async fn send_message(
             })),
         )
             .into_response();
+    }
+
+    if req.reply_only_if_not_latest {
+        let valid = req
+            .reply_to
+            .as_deref()
+            .is_some_and(|id| state.store.reply_is_latest(&req.contact_id, id).is_ok());
+        if !valid {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Select a message in the destination conversation before replying"
+                })),
+            )
+                .into_response();
+        }
     }
 
     // Check if connected
@@ -2129,6 +2189,29 @@ async fn send_message(
         settings.send_original_follow_up,
     );
     let text_to_send = send_plan[0].clone();
+
+    // Recheck after translation, immediately before preparing the WhatsApp send.
+    if req.reply_only_if_not_latest {
+        match state
+            .store
+            .reply_is_latest(&req.contact_id, req.reply_to.as_deref().unwrap_or_default())
+        {
+            Ok(true) => {
+                req.reply_to = None;
+                req.reply_to_sender = None;
+                req.reply_to_text = None;
+                req.reply_to_sender_name = None;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": error.to_string()})),
+                )
+                    .into_response()
+            }
+        }
+    }
 
     let request_id = state.next_request_id();
     let timestamp = chrono::Utc::now().timestamp_millis();
@@ -4729,6 +4812,202 @@ mod tests {
             .expect("request")
     }
 
+    fn feed_test_message(id: &str, contact_id: &str, timestamp: i64) -> StoredMessage {
+        let content = serde_json::json!({"type":"text", "body":id});
+        StoredMessage {
+            id: id.into(),
+            contact_id: contact_id.into(),
+            timestamp,
+            is_from_me: false,
+            is_forwarded: false,
+            sender_name: Some("Tester".into()),
+            sender_phone: None,
+            contact_name: None,
+            contact_phone: None,
+            chat_type: "group".into(),
+            content_type: "Text".into(),
+            content_json: content.to_string(),
+            content: Some(content),
+            original_text: None,
+            translated_text: None,
+            source_language: None,
+            is_translated: false,
+            delivery_status: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn unified_feed_requires_auth_and_pages_without_marking_chats_read() {
+        let (locked, locked_dir) = test_state(Some("private"));
+        assert_eq!(
+            create_router(locked)
+                .oneshot(empty_request("/api/feed"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let (state, dir) = test_state(None);
+        for contact in ["one@g.us", "two@g.us"] {
+            state
+                .store
+                .upsert_contact(contact, None, None, Some("group"), 1)
+                .unwrap();
+        }
+        for (id, contact, time) in [
+            ("a", "one@g.us", 100),
+            ("b", "two@g.us", 100),
+            ("c", "one@g.us", 200),
+        ] {
+            state
+                .store
+                .add_message(&feed_test_message(id, contact, time))
+                .unwrap();
+        }
+        let before = state
+            .store
+            .get_contact("one@g.us")
+            .unwrap()
+            .unwrap()
+            .unread_count;
+        let app = create_router(state.clone());
+        let response = app
+            .clone()
+            .oneshot(empty_request("/api/feed?limit=2"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["hasMore"], true);
+        assert_eq!(payload["messages"][0]["id"], "b");
+        assert_eq!(payload["messages"][1]["id"], "c");
+        let response = app
+            .oneshot(empty_request("/api/feed?limit=2&before=100&before_id=b"))
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["messages"][0]["id"], "a");
+        assert_eq!(payload["hasMore"], false);
+        assert_eq!(
+            state
+                .store
+                .get_contact("one@g.us")
+                .unwrap()
+                .unwrap()
+                .unread_count,
+            before
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(locked_dir);
+    }
+
+    #[tokio::test]
+    async fn unified_feed_rejects_missing_deleted_or_wrong_group_context_before_sending() {
+        let (state, dir) = test_state(None);
+        state
+            .store
+            .upsert_contact("one@g.us", None, None, Some("group"), 1)
+            .unwrap();
+        state
+            .store
+            .upsert_contact("two@g.us", None, None, Some("group"), 1)
+            .unwrap();
+        state
+            .store
+            .add_message(&feed_test_message("other", "two@g.us", 100))
+            .unwrap();
+        state
+            .store
+            .add_message(&feed_test_message("deleted", "one@g.us", 100))
+            .unwrap();
+        state.store.delete_message("deleted").unwrap();
+        state.set_connected(true, None, None).await;
+        let (sender, mut receiver) = mpsc::channel(8);
+        state.set_command_tx(sender).await;
+        let app = create_router(state);
+        for selected in [None, Some("deleted"), Some("other")] {
+            let request = HttpRequest::builder().method("POST").uri("/api/send")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({"contactId":"one@g.us", "text":"Reply", "replyTo":selected, "replyOnlyIfNotLatest":true}).to_string())).unwrap();
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert!(receiver.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn unified_feed_sends_to_selected_group_and_quotes_only_its_older_messages() {
+        for (selected, expected_quote) in [("a", Some("a")), ("b", None)] {
+            let (state, dir) = test_state(None);
+            for contact in ["one@g.us", "two@g.us"] {
+                state
+                    .store
+                    .upsert_contact(contact, None, None, Some("group"), 1)
+                    .unwrap();
+            }
+            for (id, contact, time) in [
+                ("a", "one@g.us", 100),
+                ("b", "one@g.us", 200),
+                ("c", "two@g.us", 300),
+            ] {
+                state
+                    .store
+                    .add_message(&feed_test_message(id, contact, time))
+                    .unwrap();
+            }
+            state.set_connected(true, None, None).await;
+            let (sender, mut receiver) = mpsc::channel(8);
+            state.set_command_tx(sender).await;
+            let request = HttpRequest::builder().method("POST").uri("/api/send")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({"contactId":"one@g.us", "text":"Reply", "replyTo":selected, "replyToSender":"sender@s.whatsapp.net", "replyToText":selected, "replyOnlyIfNotLatest":true}).to_string())).unwrap();
+            let sending = tokio::spawn(create_router(state.clone()).oneshot(request));
+            let command = tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let BridgeCommand::Send {
+                request_id: Some(request_id),
+                to,
+                reply_to,
+                reply_to_sender,
+                ..
+            } = command
+            else {
+                panic!("expected send");
+            };
+            assert_eq!(to, "one@g.us");
+            assert_eq!(reply_to.as_deref(), expected_quote);
+            assert_eq!(reply_to_sender.is_some(), expected_quote.is_some());
+            state
+                .handle_send_result(BridgeSendResult {
+                    request_id,
+                    success: true,
+                    message_id: Some("sent".into()),
+                    timestamp: Some(1_700_000_000),
+                    message_ids: vec![],
+                    timestamps: vec![],
+                    error: None,
+                })
+                .await;
+            assert_eq!(sending.await.unwrap().unwrap().status(), StatusCode::OK);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     #[test]
     fn oauth_scopes_default_to_read_only_and_are_canonicalized() {
         assert_eq!(
@@ -4823,6 +5102,7 @@ mod tests {
         let response = send_message(
             State(state.clone()),
             Json(SendMessageRequest {
+                reply_only_if_not_latest: false,
                 contact_id: contact_id.to_string(),
                 text: "Hello".to_string(),
                 reply_to: None,
