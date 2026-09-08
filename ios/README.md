@@ -23,6 +23,26 @@ stored in the system Keychain. The client authenticates against `/api/auth`,
 uses the bearer-protected REST API, and receives live updates over the
 authenticated `/ws` endpoint.
 
+## Unified Messages view
+
+Messages is the default tab on iPhone, iPad and Mac. It combines private and group
+conversations in chronological order, with a chat label on every message and
+cursor-based loading of earlier history. Opening the feed does not mark every
+chat as read. Chats retains the individual conversation view and its full media
+composer.
+
+Swipe or use a message's Reply action to select the destination for a text reply.
+The composer names that chat and keeps a separate draft for each destination.
+The backend validates the selected message belongs to the destination, then checks
+again after translation: the latest message in that chat receives an ordinary
+send; an older message receives a quoted reply. Activity in other chats does not
+change the decision. The existing durable send route handles retries.
+
+The feed uses authenticated `GET /api/feed?limit=50&before=…&before_id=…` and
+`POST /api/send` with `replyOnlyIfNotLatest: true`. Ordinary chat replies retain
+their existing explicit quote behavior. Use `-demo -demoUnifiedFeed` in Xcode's
+Run arguments to inspect a synthetic mixed-chat example.
+
 ## Native Mac app
 
 The Mac app provides a resizable two-column conversation window, native menu

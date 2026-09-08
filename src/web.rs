@@ -4864,6 +4864,7 @@ mod tests {
                 .add_message(&feed_test_message(id, contact, time))
                 .unwrap();
         }
+        state.store.set_unread_count("one@g.us", 3).unwrap();
         let before = state
             .store
             .get_contact("one@g.us")

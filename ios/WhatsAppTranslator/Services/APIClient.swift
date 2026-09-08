@@ -129,8 +129,17 @@ actor APIClient {
         )
     }
 
-    func send(contactID: String, text: String, reply: MessageReplyTarget? = nil) async throws -> SendMessageResponse {
+    func feed(before: Int64? = nil, beforeID: String? = nil) async throws -> MessagesResponse {
+        var components = URLComponents()
+        components.queryItems = [URLQueryItem(name: "limit", value: "50")]
+        if let before { components.queryItems?.append(URLQueryItem(name: "before", value: String(before))) }
+        if let beforeID { components.queryItems?.append(URLQueryItem(name: "before_id", value: beforeID)) }
+        return try await authorizedRequest("/api/feed?" + (components.percentEncodedQuery ?? ""))
+    }
+
+    func send(contactID: String, text: String, reply: MessageReplyTarget? = nil, replyOnlyIfNotLatest: Bool = false) async throws -> SendMessageResponse {
         let payload = SendMessageRequest(
+            replyOnlyIfNotLatest: replyOnlyIfNotLatest ? true : nil,
             contactId: contactID,
             text: text,
             replyTo: reply?.messageID,

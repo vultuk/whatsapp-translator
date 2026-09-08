@@ -363,7 +363,7 @@ private struct PhotoSendProgressView: View {
     }
 }
 
-private struct ChatWallpaper: View {
+struct ChatWallpaper: View {
     @Environment(\.translatorPalette) private var palette
     var body: some View {
         palette.chatBackground

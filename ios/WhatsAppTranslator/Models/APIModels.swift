@@ -381,6 +381,7 @@ struct MessageReplyTarget: Equatable, Sendable {
 }
 
 struct SendMessageRequest: Encodable, Sendable {
+    var replyOnlyIfNotLatest: Bool? = nil
     let contactId: String
     let text: String
     let replyTo: String?

@@ -644,6 +644,45 @@ final class WhatsAppTranslatorTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testUnifiedFeedOrdersAcrossChatsAndScopesReplyContextToDestination() async throws {
+        func message(_ id: String, _ contact: String, _ timestamp: Int64) throws -> ChatMessage {
+            let data = try JSONSerialization.data(withJSONObject: ["id": id, "contactId": contact, "timestamp": timestamp, "isFromMe": false, "isForwarded": false, "chatType": "group", "contentType": "Text", "isTranslated": false])
+            return try JSONDecoder().decode(ChatMessage.self, from: data)
+        }
+        let session = AppSession(demoMode: true)
+        let first = try message("a", "group@g.us", 100)
+        let latest = try message("b", "group@g.us", 100)
+        let elsewhere = try message("c", "other@g.us", 200)
+        session.messages = [first.contactId: [first, latest], elsewhere.contactId: [elsewhere]]
+        await session.loadFeed()
+        XCTAssertEqual(session.mainTab, .messages)
+        XCTAssertEqual(session.unifiedMessages.map(\.id), ["a", "b", "c"])
+        XCTAssertTrue(session.feedReplyNeedsQuote(first))
+        XCTAssertFalse(session.feedReplyNeedsQuote(latest))
+        XCTAssertFalse(session.feedReplyNeedsQuote(elsewhere))
+        // Loading another chat must not remove older messages from the feed.
+        session.messages[first.contactId] = [latest]
+        XCTAssertEqual(session.unifiedMessages.map(\.id), ["a", "b", "c"])
+        let normalSent = await session.send(text: "Normal", to: elsewhere.contactId, reply: session.replyTarget(for: elsewhere), replyOnlyIfNotLatest: true)
+        XCTAssertTrue(normalSent)
+        XCTAssertNil(session.messages[elsewhere.contactId]?.last?.content?.replyContext)
+        let quotedSent = await session.send(text: "Quoted", to: first.contactId, reply: session.replyTarget(for: first), replyOnlyIfNotLatest: true)
+        XCTAssertTrue(quotedSent)
+        XCTAssertEqual(session.messages[first.contactId]?.last?.content?.replyContext?.messageId, first.id)
+    }
+
+    func testUnifiedFeedSendEncodesConditionalQuoteWithoutChangingOrdinaryReplies() throws {
+        var request = SendMessageRequest(contactId: "group@g.us", text: "Reply", replyTo: "selected", replyToSender: nil, replyToText: "Original", replyToSenderName: nil)
+        let ordinary = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertNil(ordinary["replyOnlyIfNotLatest"])
+        request.replyOnlyIfNotLatest = true
+        let feed = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertEqual(feed["replyOnlyIfNotLatest"] as? Bool, true)
+        XCTAssertEqual(feed["contactId"] as? String, "group@g.us")
+        XCTAssertEqual(feed["replyTo"] as? String, "selected")
+    }
+
     func testSendMessageRequestEncodesReplyContext() throws {
         let request = SendMessageRequest(
             contactId: "chat@g.us",

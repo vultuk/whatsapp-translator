@@ -17,7 +17,71 @@ final class AppSession {
     var backendStatus = BackendStatus(connected: false, phone: nil, name: nil)
     var contacts: [Contact] = []
     var avatarURLs: [String: URL] = [:]
+    enum MainTab { case messages, chats }
+    var mainTab: MainTab = .messages
+    var feedByID: [String: ChatMessage] = [:]
+    var feedHasMore = false
+    var feedHasLoaded = false
+    var feedLoading = false
+    var feedError: String?
+    private var feedCursor: ChatMessage?
+    private var feedGeneration = UUID()
+    private var feedEventsDuringLoad: Set<String> = []
     var messages: [String: [ChatMessage]] = [:]
+
+    var unifiedMessages: [ChatMessage] {
+        var result = feedByID
+        for message in messages.values.joined() where result[message.id] != nil {
+            result[message.id] = message
+        }
+        return result.values.filter { !$0.isReaction && $0.contactId != "status@broadcast" }.sorted {
+            $0.timestamp == $1.timestamp ? $0.id < $1.id : $0.timestamp < $1.timestamp
+        }
+    }
+
+    func feedReplyNeedsQuote(_ message: ChatMessage) -> Bool {
+        let conversation = (messages[message.contactId] ?? []) + feedByID.values.filter { $0.contactId == message.contactId }
+        return conversation.contains {
+            !$0.isReaction && ($0.timestamp > message.timestamp || ($0.timestamp == message.timestamp && $0.id > message.id))
+        }
+    }
+
+    func loadFeed(older: Bool = false) async {
+        guard !feedLoading, !older || feedHasMore else { return }
+        if demoMode {
+            feedByID = Dictionary(messages.values.joined().map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+            feedHasLoaded = true
+            return
+        }
+        feedLoading = true
+        feedEventsDuringLoad = []
+        feedError = nil
+        let generation = feedGeneration
+        defer { if generation == feedGeneration { feedLoading = false } }
+        do {
+            let cursor = older ? feedCursor : nil
+            let response = try await api.feed(before: cursor?.timestamp, beforeID: cursor?.id)
+            guard generation == feedGeneration else { return }
+            // Refresh starts a contiguous window; older pages extend only this server cursor.
+            var next = older ? feedByID : [:]
+            for message in response.messages { next[message.id] = message }
+            // Events received while the request was in flight are newer than its snapshot.
+            for id in feedEventsDuringLoad {
+                if let live = feedByID[id] { next[id] = live }
+            }
+            feedByID = next
+            feedHasLoaded = true
+            feedCursor = response.messages.first
+            feedHasMore = response.hasMore
+            let pageMessages = response.messages.map { next[$0.id] ?? $0 }
+            for (id, page) in Dictionary(grouping: pageMessages, by: \.contactId) {
+                messages[id] = normalizeMessages((messages[id] ?? []) + page)
+            }
+        } catch {
+            guard generation == feedGeneration, !Self.isExpectedCancellation(error) else { return }
+            feedError = error.localizedDescription
+        }
+    }
     var messageHistoryHasMore: [String: Bool] = [:]
     var selectedContactID: String?
     var searchText = ""
@@ -285,21 +349,27 @@ final class AppSession {
         }
     }
 
-    func send(text: String, to contactID: String, reply: MessageReplyTarget? = nil) async -> Bool {
+    func send(text: String, to contactID: String, reply: MessageReplyTarget? = nil, replyOnlyIfNotLatest: Bool = false) async -> Bool {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return false }
         sendingContactIDs.insert(contactID)
         defer { sendingContactIDs.remove(contactID) }
 
         if demoMode {
-            let message = ChatMessage.demoOutgoing(contactID: contactID, text: clean)
+            var quotedReply = reply
+            if replyOnlyIfNotLatest, let reply {
+                guard let target = ((messages[contactID] ?? []) + Array(feedByID.values)).first(where: { $0.id == reply.messageID && $0.contactId == contactID }) else { return false }
+                if !feedReplyNeedsQuote(target) { quotedReply = nil }
+            }
+            let message = ChatMessage.demoOutgoing(contactID: contactID, text: clean, reply: quotedReply)
             messages[contactID, default: []].append(message)
+            feedByID[message.id] = message
             updateContactPreview(contactID: contactID, preview: "You: \(clean)", timestamp: message.timestamp)
             return true
         }
 
         do {
-            let response = try await api.send(contactID: contactID, text: clean, reply: reply)
+            let response = try await api.send(contactID: contactID, text: clean, reply: reply, replyOnlyIfNotLatest: replyOnlyIfNotLatest)
             if let contact = contacts.first(where: { $0.id == contactID }) {
                 MessagingIntentDonor.donateOutgoing(
                     originalText: clean,
@@ -309,6 +379,7 @@ final class AppSession {
                 )
             }
             await loadMessages(for: contactID)
+            await loadFeed()
             await refresh()
             return true
         } catch {
@@ -653,6 +724,13 @@ final class AppSession {
         mediaErrorIDs = []
         linkPreviews = [:]
         messages = [:]
+        feedByID = [:]
+        feedCursor = nil
+        feedHasMore = false
+        feedHasLoaded = false
+        feedLoading = false
+        feedGeneration = UUID()
+        mainTab = .messages
         selectedContactID = nil
         phase = .needsConfiguration
     }
@@ -703,6 +781,7 @@ final class AppSession {
         guard phase == .ready, !demoMode, !isConnecting else { return }
         _ = await restoreCachedState()
         await refresh()
+        if mainTab == .messages { await loadFeed() }
     }
 
     func registerPushDevice(token: String, installationID: String, environment: String) async {
@@ -723,6 +802,7 @@ final class AppSession {
     }
 
     func openConversation(fromNotification contactID: String) {
+        mainTab = .chats
         selectedContactID = contactID
         Task {
             await refresh()
@@ -739,6 +819,10 @@ final class AppSession {
             guard let message = event.message else { return }
             messages[message.contactId] = normalizeMessages((messages[message.contactId] ?? []) + [message])
             if !message.isReaction {
+                if event.type == "message" || feedByID[message.id] != nil {
+                    feedByID[message.id] = message
+                    if feedLoading { feedEventsDuringLoad.insert(message.id) }
+                }
                 updateContactPreview(
                     contactID: message.contactId,
                     preview: message.displayText,
@@ -758,7 +842,8 @@ final class AppSession {
                 repeat {
                     recoveryNeedsAnotherPass = false
                     await refresh()
-                    if let id = selectedContactID { await loadMessages(for: id) }
+                    if feedHasLoaded || mainTab == .messages { await loadFeed() }
+                    if mainTab == .chats, let id = selectedContactID { await loadMessages(for: id) }
                 } while recoveryNeedsAnotherPass && !Task.isCancelled
             }
         case "status":
@@ -1001,6 +1086,25 @@ final class AppSession {
         backendStatus = BackendStatus(connected: true, phone: "447853803055", name: "Simon Skinner")
         contacts = Contact.demoContacts
         messages = ChatMessage.demoMessages
+        if ProcessInfo.processInfo.arguments.contains("-demoUnifiedFeed") {
+            let base: Int64 = 1_783_940_000_000
+            contacts = [
+                Contact(id: "weekend@g.us", name: "Weekend plans", phone: nil, type: "group", lastMessageTime: base + 240_000, unreadCount: 2, pinnedAt: nil, lastMessagePreview: "Alex: Meet by the café?"),
+                Contact(id: "studio@g.us", name: "Studio team", phone: nil, type: "group", lastMessageTime: base + 300_000, unreadCount: 1, pinnedAt: nil, lastMessagePreview: "Sam: The new draft is ready."),
+                Contact(id: "jordan@s.whatsapp.net", name: "Jordan", phone: nil, type: "private", lastMessageTime: base + 180_000, unreadCount: 1, pinnedAt: nil, lastMessagePreview: "See you tomorrow!")
+            ]
+            messages = [
+                "weekend@g.us": [
+                    .demo(id: "weekend-first", contactID: "weekend@g.us", timestamp: base, fromMe: false, body: "Shall we head out at ten?", translated: nil, sender: "Alex", chatType: "group"),
+                    .demo(id: "weekend-latest", contactID: "weekend@g.us", timestamp: base + 240_000, fromMe: false, body: "Meet by the café?", translated: nil, sender: "Alex", chatType: "group")
+                ],
+                "studio@g.us": [
+                    .demo(id: "studio-first", contactID: "studio@g.us", timestamp: base + 60_000, fromMe: false, body: "Could you take a look at the colours?", translated: nil, sender: "Sam", chatType: "group"),
+                    .demo(id: "studio-latest", contactID: "studio@g.us", timestamp: base + 300_000, fromMe: false, body: "The new draft is ready.", translated: nil, sender: "Sam", chatType: "group")
+                ],
+                "jordan@s.whatsapp.net": [.demo(id: "jordan-latest", contactID: "jordan@s.whatsapp.net", timestamp: base + 180_000, fromMe: false, body: "See you tomorrow!", translated: nil, sender: "Jordan")]
+            ]
+        }
         if ProcessInfo.processInfo.arguments.contains("-demoWhatsAppLayout") {
             let id = "virag@s.whatsapp.net"
             messages[id] = [
@@ -1030,6 +1134,7 @@ final class AppSession {
             messageImages[imageMessage.id] = demoPhoto()
         }
         if demoConversationMode {
+            mainTab = .chats
             selectedContactID = contacts.first(where: \.showsInChatList)?.id
             if ProcessInfo.processInfo.arguments.contains("-demoSending"),
                let selectedContactID {
@@ -1066,8 +1171,8 @@ private extension ChatMessage {
         ]
     ]
 
-    static func demoOutgoing(contactID: String, text: String) -> ChatMessage {
-        demo(id: UUID().uuidString, contactID: contactID, timestamp: Int64(Date().timeIntervalSince1970 * 1_000), fromMe: true, body: text, translated: nil, sender: nil)
+    static func demoOutgoing(contactID: String, text: String, reply: MessageReplyTarget? = nil) -> ChatMessage {
+        demo(id: UUID().uuidString, contactID: contactID, timestamp: Int64(Date().timeIntervalSince1970 * 1_000), fromMe: true, body: text, translated: nil, sender: nil, reply: reply)
     }
 
     static func demoImage(
@@ -1130,7 +1235,7 @@ private extension ChatMessage {
         )
     }
 
-    static func demo(id: String, contactID: String, timestamp: Int64, fromMe: Bool, body: String, translated: String?, sender: String?, deliveryStatus: String? = nil, chatType: String = "private") -> ChatMessage {
+    static func demo(id: String, contactID: String, timestamp: Int64, fromMe: Bool, body: String, translated: String?, sender: String?, deliveryStatus: String? = nil, chatType: String = "private", reply: MessageReplyTarget? = nil) -> ChatMessage {
         ChatMessage(
             id: id,
             contactId: contactID,
@@ -1143,7 +1248,7 @@ private extension ChatMessage {
             contactPhone: nil,
             chatType: chatType,
             contentType: "Text",
-            content: MessageContent(type: "text", body: body, showTranslatedPrimary: nil, replyContext: nil),
+            content: MessageContent(type: "text", body: body, showTranslatedPrimary: nil, replyContext: reply.map { ReplyContext(messageId: $0.messageID, senderName: $0.senderName, text: $0.text) }),
             originalText: translated == nil ? nil : body,
             translatedText: translated,
             sourceLanguage: translated == nil ? nil : "Hungarian",
