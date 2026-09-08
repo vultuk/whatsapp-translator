@@ -1902,7 +1902,29 @@ async fn get_media(
 
     match state.store.get_message_media(&message_id) {
         Ok(Some((media_data, mime_type))) => {
-            // Return the base64 media data and mime type
+            let is_audio = mime_type
+                .as_deref()
+                .is_some_and(|mime| mime.starts_with("audio/"))
+                || state
+                    .store
+                    .get_message_by_id(&message_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|message| message.content_type.eq_ignore_ascii_case("audio"));
+            let (media_data, mime_type) = if is_audio {
+                match crate::voice::playable_audio(&media_data).await {
+                    Ok(data) => (data, Some("audio/mpeg".to_string())),
+                    Err(error) => {
+                        return (
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            Json(serde_json::json!({"error": error.to_string()})),
+                        )
+                            .into_response()
+                    }
+                }
+            } else {
+                (media_data, mime_type)
+            };
             Json(serde_json::json!({
                 "media_data": media_data,
                 "mime_type": mime_type

@@ -505,6 +505,9 @@ actor APIClient {
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidServer }
         try await SendRecoveryStore.shared.settle(sendIdentity, response: http)
         if http.statusCode == 401 { throw APIError.unauthorized }
+        if http.statusCode == 404 && path.hasPrefix("/api/voice/") {
+            throw APIError.server("This server needs the voice-note update. Update the backend, then retry.")
+        }
         guard (200..<300).contains(http.statusCode) else {
             let message = (try? JSONDecoder.backend.decode(ErrorResponse.self, from: data).error)
                 ?? String(data: data, encoding: .utf8)

@@ -557,11 +557,11 @@ final class AppSession {
             }
             try? await mediaCache.remove(messageID: message.id)
         }
-        if let base64 = message.content?.mediaData, let data = Data(base64Encoded: base64) {
+        if message.mediaKind != .audio || demoMode, let base64 = message.content?.mediaData, let data = Data(base64Encoded: base64) {
             await storeMedia(data, mimeType: message.content?.mimeType, for: message)
             return
         }
-        guard message.content?.hasMedia == true, !demoMode else { return }
+        guard message.content?.hasMedia == true || message.content?.mediaData != nil, !demoMode else { return }
         mediaRequests.insert(message.id)
         mediaLoadingIDs.insert(message.id)
         defer {
@@ -833,7 +833,11 @@ final class AppSession {
             }
             messageImages[message.id] = image
             return true
-        case .video, .audio, .document:
+        case .audio:
+            guard url.pathExtension == "mp3" else { return false }
+            messageMediaURLs[message.id] = url
+            return true
+        case .video, .document:
             messageMediaURLs[message.id] = url
             return true
         case nil:
@@ -842,7 +846,7 @@ final class AppSession {
     }
 
     private func storeMedia(_ data: Data, mimeType: String?, for message: ChatMessage) async {
-        let preferredExtension = message.content?.fileName
+        let preferredExtension = (message.mediaKind == .audio && mimeType == "audio/mpeg" ? "mp3" : nil) ?? message.content?.fileName
             .flatMap { URL(fileURLWithPath: $0).pathExtension.nilIfBlank }
             ?? mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
             ?? defaultMediaExtension(for: message.mediaKind)

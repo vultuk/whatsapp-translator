@@ -14,6 +14,7 @@ export function setupVoiceNotes(app) {
       throw new Error('Connect a backend to translate and send real voice notes.');
     }
     const response = await app.apiFetch(path, { method, headers: {'Content-Type':'application/json'}, ...(body === undefined ? {} : {body:JSON.stringify(body)}) });
+    if (response.status === 404) throw new Error("This server needs the voice-note update. Update the backend, then retry.");
     const value = await response.json();
     if (!response.ok) throw new Error(value.error || 'Voice operation failed. Please try again.');
     return value;
@@ -125,6 +126,10 @@ export function setupVoiceNotes(app) {
       if (node.nextElementSibling?.classList.contains('voice-inline')) node.nextElementSibling.remove();
     });
   });
+  app.translateVoiceMessage = id => {
+    const action = [...document.querySelectorAll('button.voice-translate-action')].find(button => button.dataset.voiceMessageId === id);
+    if (action && !action.disabled) action.click();
+  };
   const readyIDs = new Set();
   window.addEventListener('voice-ready', event => {
     readyIDs.add(event.detail);
@@ -141,7 +146,7 @@ export function setupVoiceNotes(app) {
       node.dataset.voiceMounted = 'true';
       const box = el('div', null, 'voice-inline');
       const translate = button('Translate voice', async () => {
-        translate.disabled = true; translate.textContent = 'Translating voice…';
+        status.textContent = ''; translate.disabled = true; translate.textContent = 'Translating voice…';
         try { const note = await api(`/api/voice/translate/${encodeURIComponent(id)}`); preview(box, note); node.hidden = true; }
         catch (error) { translate.disabled = false; translate.textContent = 'Retry voice translation'; status.textContent = error.message; }
       });

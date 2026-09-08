@@ -162,6 +162,15 @@ impl Drop for Scratch {
     }
 }
 async fn convert(dir: &FsPath, input: &str, output: &str, options: &[&str]) -> Result<Vec<u8>> {
+    convert_audio(dir, input, output, options, true).await
+}
+async fn convert_audio(
+    dir: &FsPath,
+    input: &str,
+    output: &str,
+    options: &[&str],
+    limit_duration: bool,
+) -> Result<Vec<u8>> {
     let mut command = Command::new("ffmpeg");
     command
         .kill_on_drop(true)
@@ -181,18 +190,18 @@ async fn convert(dir: &FsPath, input: &str, output: &str, options: &[&str]) -> R
             "-1",
             "-threads",
             "1",
-            "-t",
-            "241",
             "-fs",
             "16000000",
-        ])
-        .args(options)
-        .arg(dir.join(output));
+        ]);
+    if limit_duration {
+        command.args(["-t", "241"]);
+    }
+    command.args(options).arg(dir.join(output));
     let output_result = tokio::time::timeout(Duration::from_secs(45), command.output())
         .await
         .context("Audio conversion timed out")??;
     if !output_result.status.success() {
-        bail!("Could not read this recording. Please record again.");
+        bail!("Could not decode this audio. Please retry downloading the voice note.");
     }
     let bytes = tokio::fs::read(dir.join(output)).await?;
     if bytes.is_empty() || bytes.len() >= 16_000_000 {
@@ -200,6 +209,26 @@ async fn convert(dir: &FsPath, input: &str, output: &str, options: &[&str]) -> R
     }
     Ok(bytes)
 }
+/// Playback conversion is independent of AI translation and preserves the full recording.
+pub async fn playable_audio(encoded: &str) -> Result<String> {
+    static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+    let _permit = tokio::time::timeout(Duration::from_secs(90), SLOTS.acquire())
+        .await
+        .context("Audio playback is busy. Please try again.")??;
+    let bytes = decode_audio(encoded)?;
+    let dir = Scratch::new(&std::env::temp_dir())?;
+    tokio::fs::write(dir.0.join("source"), bytes).await?;
+    let mp3 = convert_audio(
+        &dir.0,
+        "source",
+        "playback.mp3",
+        &["-codec:a", "libmp3lame", "-b:a", "96k"],
+        false,
+    )
+    .await?;
+    Ok(B64.encode(mp3))
+}
+
 fn decode_audio(encoded: &str) -> Result<Vec<u8>> {
     if encoded.len() > MAX_BYTES.div_ceil(3) * 4 {
         bail!("Voice notes must be smaller than 16 MB.");
@@ -473,9 +502,9 @@ pub async fn prepare(
 ) -> Response {
     result_response(
         async {
-            let _guard = state.voice_lock.try_lock().map_err(|_| {
-                anyhow::anyhow!("Another voice note is processing. Please try again shortly.")
-            })?;
+            let _guard = tokio::time::timeout(Duration::from_secs(180), state.voice_lock.lock())
+                .await
+                .context("Voice translation is busy. Please try again shortly.")?;
             let note = build_note(&state, req, false, uuid::Uuid::new_v4().to_string()).await?;
             state
                 .store
@@ -1070,6 +1099,57 @@ mod integration_tests {
         .await;
         assert!(result["error"].as_str().unwrap().contains("cannot be sent"));
     }
+    #[tokio::test]
+    async fn playback_decodes_whatsapp_opus_without_ai_and_preserves_long_notes() {
+        let dir = TestDirectory::new();
+        let source = Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=240:duration=245",
+                "-c:a",
+                "libopus",
+                "-f",
+                "ogg",
+                "pipe:1",
+            ])
+            .output()
+            .await
+            .expect("ffmpeg is required");
+        assert!(source.status.success());
+        let encoded = playable_audio(&B64.encode(source.stdout)).await.unwrap();
+        tokio::fs::write(dir.0.join("playback.mp3"), B64.decode(encoded).unwrap())
+            .await
+            .unwrap();
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(dir.0.join("playback.mp3"))
+            .output()
+            .await
+            .unwrap();
+        assert!(probe.status.success());
+        let seconds: f64 = String::from_utf8(probe.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            seconds >= 245.0 && seconds < 246.0,
+            "full recording must survive: {seconds}"
+        );
+        assert!(playable_audio(&B64.encode([0_u8; 64])).await.is_err());
+    }
+
     #[tokio::test]
     async fn voice_pipeline_converts_audio_and_translates_into_default_language() {
         let dir = TestDirectory::new();

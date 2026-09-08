@@ -3698,18 +3698,10 @@ class WhatsAppClient {
         const audioMime = content.mime_type || content.mimeType || 'audio/ogg';
         const isVoiceNote = content.is_voice_note || content.isVoiceNote;
         
-        if (audioData) {
-          const audioSrc = audioData.startsWith('data:') ? audioData : `data:${audioMime};base64,${audioData}`;
-          return `
-            <div class="message-audio ${isVoiceNote ? 'voice-note' : ''}">
-              <audio controls preload="metadata">
-                <source src="${audioSrc}" type="${audioMime}">
-                Your browser does not support audio playback.
-              </audio>
-              ${isVoiceNote ? '<span class="voice-note-label">Voice Note</span>' : ''}
-            </div>
-          `;
-        } else if (audioHasMedia) {
+        if (audioData && audioMime === 'audio/mpeg') {
+          const src = audioData.startsWith('data:') ? audioData : `data:audio/mpeg;base64,${audioData}`;
+          return `<div class="message-audio ${isVoiceNote ? 'voice-note' : ''}"><audio controls preload="metadata" src="${this.escapeHtml(src)}"></audio></div>`;
+        } else if (audioHasMedia || audioData) {
           // Media needs to be lazy loaded - show placeholder
           const audioType = isVoiceNote ? 'voice note' : 'audio';
           const durationText = content.duration_seconds ? this.formatDuration(content.duration_seconds) : '';
@@ -4596,6 +4588,11 @@ class WhatsAppClient {
     const message = messages.find(m => m.id === messageId);
     if (!message) return;
     
+    if ((message.content_type || message.contentType || message.content?.type) === 'audio') {
+      this.translateVoiceMessage?.(messageId);
+      return;
+    }
+
     // Check if already translated
     if (message.is_translated || message.isTranslated) {
       if (!silent) alert('This message has already been translated.');
@@ -6146,6 +6143,13 @@ class WhatsAppClient {
       // Remove lazy-media class and replace content
       container.classList.remove('lazy-media');
       container.innerHTML = mediaHtml;
+      const audioPlayer = container.querySelector('audio');
+      if (audioPlayer) audioPlayer.onerror = () => {
+        const status = document.createElement('p');
+        status.textContent = 'Unable to play this voice note. Reload to retry downloading it.';
+        status.setAttribute('role', 'alert');
+        container.append(status);
+      };
 
       // Also update the message cache so re-renders show the media
       this.updateMessageMediaCache(messageId, data.media_data, actualMimeType);

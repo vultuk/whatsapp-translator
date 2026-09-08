@@ -52,6 +52,7 @@ struct RichMessageContentView: View {
                 }
                 caption
             case .audio:
+                if mediaURL == nil { mediaPlaceholder(systemImage: "waveform", title: "Voice note") }
                 VoiceTranslationPlayer(message: message, originalURL: mediaURL)
             case .document:
                 if let mediaURL {
@@ -245,15 +246,28 @@ struct AudioMessagePlayer: View {
     let url: URL
     let title: String
     let duration: Double?
-    @State private var player: AVPlayer?
+    @State private var player: AVAudioPlayer?
     @State private var isPlaying = false
+    @State private var playbackError: String?
 
     var body: some View {
         HStack(spacing: 10) {
             Button(isPlaying ? "Pause" : "Play", systemImage: isPlaying ? "pause.fill" : "play.fill") {
-                if player == nil { player = AVPlayer(url: url) }
-                if isPlaying { player?.pause() } else { player?.play() }
-                isPlaying.toggle()
+                do {
+                    playbackError = nil
+                    if player == nil { player = try AVAudioPlayer(contentsOf: url) }
+                    if isPlaying { player?.pause() } else {
+                        #if os(iOS)
+                        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+                        try AVAudioSession.sharedInstance().setActive(true)
+                        #endif
+                        guard player?.play() == true else { throw CocoaError(.fileReadCorruptFile) }
+                    }
+                    isPlaying = player?.isPlaying == true
+                } catch {
+                    isPlaying = false
+                    playbackError = "Unable to play this voice note: \(error.localizedDescription)"
+                }
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderedProminent)
@@ -261,13 +275,21 @@ struct AudioMessagePlayer: View {
             Image(systemName: "waveform").foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.callout.weight(.semibold))
+                if let playbackError { Text(playbackError).font(.caption).foregroundStyle(.red) }
                 if let duration { Text(duration.formatted(.number.precision(.fractionLength(0))) + " sec").font(.caption).foregroundStyle(.secondary) }
             }
         }
         .padding(9)
         .frame(minWidth: 220, alignment: .leading)
         .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
-        .onDisappear { player?.pause() }
+        .task(id: url) {
+            player?.stop(); player = nil; isPlaying = false; playbackError = nil
+            while !Task.isCancelled {
+                isPlaying = player?.isPlaying == true
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        .onDisappear { player?.pause(); isPlaying = false }
     }
 }
 
