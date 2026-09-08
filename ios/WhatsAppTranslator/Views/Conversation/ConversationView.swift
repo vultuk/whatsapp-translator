@@ -59,6 +59,12 @@ struct ConversationView: View {
     }
 
     var body: some View {
+        GeometryReader { geometry in
+            conversationContent(bottomSafeArea: geometry.safeAreaInsets.bottom)
+        }
+    }
+
+    private func conversationContent(bottomSafeArea: CGFloat) -> some View {
         ZStack {
             ChatWallpaper()
                 .blur(radius: focusedReplyMessage == nil ? 0 : 8)
@@ -145,6 +151,7 @@ struct ConversationView: View {
                     sendImages: sendImages,
                     send: send
                 )
+                .padding(.bottom, ComposerLayout.bottomAdjustment(for: bottomSafeArea))
             }
         }
         .navigationTitle(platformNavigationTitle)

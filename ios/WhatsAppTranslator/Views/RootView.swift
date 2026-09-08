@@ -141,6 +141,12 @@ private struct UnifiedMessagesView: View {
     }
 
     var body: some View {
+        GeometryReader { geometry in
+            messagesContent(bottomSafeArea: geometry.safeAreaInsets.bottom)
+        }
+    }
+
+    private func messagesContent(bottomSafeArea: CGFloat) -> some View {
         NavigationStack {
             ZStack {
                 ChatWallpaper()
@@ -205,7 +211,9 @@ private struct UnifiedMessagesView: View {
             }
             .navigationTitle("Messages")
             .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
-            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                composer.padding(.bottom, ComposerLayout.bottomAdjustment(for: bottomSafeArea))
+            }
             .sheet(isPresented: $showSettings) { AppSettingsView() }
         }
         .task { if !session.feedHasLoaded { await session.loadFeed() } }

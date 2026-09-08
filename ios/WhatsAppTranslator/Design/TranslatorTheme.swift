@@ -228,3 +228,17 @@ struct FocusedReplyOverlay<Content: View>: View {
         .accessibilityElement(children: .contain)
     }
 }
+
+
+enum ComposerLayout {
+    static func bottomAdjustment(for safeAreaBottom: CGFloat) -> CGFloat {
+        #if os(iOS)
+        // Keep the resting composer close to the home indicator, like Messages.
+        // A keyboard-sized inset retains normal keyboard avoidance and spacing.
+        guard safeAreaBottom <= 44 else { return 0 }
+        return -min(16, max(0, safeAreaBottom - 18))
+        #else
+        return 0
+        #endif
+    }
+}
