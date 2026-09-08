@@ -187,6 +187,7 @@ struct MessageBubble: View {
                     } else if albumMessages.count > 1 {
                         PhotoAlbumGrid(
                             messages: albumMessages,
+                            showAlternate: showAlternate,
                             images: albumImages,
                             loadingIDs: albumLoadingIDs,
                             failedIDs: albumFailedIDs,
@@ -542,6 +543,7 @@ struct MessageBubble: View {
 
 private struct PhotoAlbumGrid: View {
     let messages: [ChatMessage]
+    let showAlternate: Bool
     let images: [String: PlatformImage]
     let loadingIDs: Set<String>
     let failedIDs: Set<String>
@@ -570,7 +572,7 @@ private struct PhotoAlbumGrid: View {
             if let caption = messages.compactMap({ message -> String? in
                 guard let caption = message.content?.caption?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !caption.isEmpty else { return nil }
-                return caption
+                return showAlternate ? (message.alternateText ?? message.displayText) : message.displayText
             }).first {
                 Text(MessageTextLinkifier.attributedString(from: caption))
                     .font(.body)

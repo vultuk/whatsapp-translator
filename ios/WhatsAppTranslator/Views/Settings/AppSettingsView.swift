@@ -10,6 +10,7 @@ struct AppSettingsView: View {
 
     private let models = [
         ("", "App defaults"),
+        ("gpt-6-astra", "GPT-6 Astra"),
         ("gpt-5.6-sol", "GPT-5.6 Sol · most capable"),
         ("gpt-5.6-terra", "GPT-5.6 Terra · balanced"),
         ("gpt-5.6-luna", "GPT-5.6 Luna · fastest value"),

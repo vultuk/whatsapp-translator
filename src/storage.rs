@@ -1667,7 +1667,7 @@ impl MessageStore {
     pub fn get_conversation_language(
         &self,
         contact_id: &str,
-        _limit: usize,
+        limit: usize,
     ) -> Result<Option<String>> {
         let conn = self.conn.lock().unwrap();
 
@@ -1675,18 +1675,20 @@ impl MessageStore {
         let mut stmt = conn.prepare(
             r#"
             SELECT source_language, COUNT(*) as cnt
-            FROM messages 
-            WHERE contact_id = ? 
-              AND is_from_me = 0 
-              AND source_language IS NOT NULL
-              AND source_language != ''
-            GROUP BY source_language
-            ORDER BY cnt DESC
+            FROM (
+                SELECT source_language, timestamp FROM messages
+                WHERE contact_id = ? AND is_from_me = 0
+                  AND source_language IS NOT NULL AND source_language != ''
+                  AND lower(source_language) NOT IN ('unknown', 'undetermined', 'neutral', 'mixed')
+                ORDER BY timestamp DESC, id DESC LIMIT ?
+            )
+            GROUP BY source_language COLLATE NOCASE
+            ORDER BY cnt DESC, MAX(timestamp) DESC
             LIMIT 1
             "#,
         )?;
 
-        let language: Option<String> = stmt.query_row(params![contact_id], |row| row.get(0)).ok();
+        let language: Option<String> = stmt.query_row(params![contact_id, limit.clamp(1, 100) as i64], |row| row.get(0)).optional()?;
 
         Ok(language)
     }
@@ -2691,7 +2693,32 @@ mod tests {
     }
 
     #[test]
-    fn translation_queue_survives_restart_and_bounds_retries() {
+    fn conversation_language_uses_recent_incoming_messages_and_latest_tie() {
+        let (store, dir) = test_store();
+        store.upsert_contact("chat@example.test", None, None, None, 0).unwrap();
+        for n in 0..25 {
+            let mut message = test_message(&format!("old-{n}"), n);
+            message.source_language = Some("English".into());
+            store.add_message(&message).unwrap();
+        }
+        for n in 25..29 {
+            let mut message = test_message(&format!("recent-{n}"), n);
+            message.source_language = Some("Hungarian".into());
+            store.add_message(&message).unwrap();
+        }
+        assert_eq!(store.get_conversation_language("chat@example.test", 4).unwrap().as_deref(), Some("Hungarian"));
+        let mut reply = test_message("latest", 30);
+        reply.source_language = Some("French".into());
+        store.add_message(&reply).unwrap();
+        assert_eq!(store.get_conversation_language("chat@example.test", 2).unwrap().as_deref(), Some("French"));
+        reply.id = "outgoing".into(); reply.timestamp = 31; reply.is_from_me = true; reply.source_language = Some("English".into());
+        store.add_message(&reply).unwrap();
+        assert_eq!(store.get_conversation_language("chat@example.test", 2).unwrap().as_deref(), Some("French"));
+        drop(store); std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn translation_queue_survives_restart_and_retries_transient_failures() {
         let (store, dir) = test_store();
         store
             .upsert_contact("chat@example.test", None, None, None, 1)
@@ -2728,7 +2755,7 @@ mod tests {
             .unwrap()
             .execute("UPDATE translation_jobs SET retry_at=0", [])
             .unwrap();
-        assert!(store.claim_translation().unwrap().is_none());
+        assert_eq!(store.claim_translation().unwrap().as_deref(), Some("queued"));
         assert_eq!(
             store
                 .get_message_by_id("queued")

@@ -48,7 +48,7 @@ pub struct Args {
     #[arg(
         long,
         env = "WA_OPENAI_DETECTION_MODEL",
-        default_value = "gpt-5.4-nano"
+        default_value = "gpt-6-astra"
     )]
     pub openai_detection_model: String,
 
@@ -56,12 +56,12 @@ pub struct Args {
     #[arg(
         long,
         env = "WA_OPENAI_TRANSLATION_MODEL",
-        default_value = "gpt-5.4-mini"
+        default_value = "gpt-6-astra"
     )]
     pub openai_translation_model: String,
 
     /// OpenAI model for AI compose and styled replies
-    #[arg(long, env = "WA_OPENAI_HIGH_END_MODEL", default_value = "gpt-5.4")]
+    #[arg(long, env = "WA_OPENAI_HIGH_END_MODEL", default_value = "gpt-6-astra")]
     pub openai_high_end_model: String,
 
     /// Default language for messages (messages in this language won't be translated)

@@ -346,10 +346,7 @@ async fn build_note(
     let target = if incoming {
         translator.default_language().to_string()
     } else {
-        settings
-            .language_override
-            .clone()
-            .or(state.store.get_conversation_language(&req.contact_id, 10)?)
+        crate::incoming::outgoing_language(state, &req.contact_id, req.reply_to.as_deref()).await?
             .context("Set this conversation’s language before sending a translated voice note.")?
     };
     let preference = state.store.voice_setting(if incoming {

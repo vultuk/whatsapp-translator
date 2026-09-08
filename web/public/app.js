@@ -4642,7 +4642,7 @@ class WhatsAppClient {
       if (!response.ok || !result.success) {
         throw new Error(result.error || 'Translation failed');
       }
-      if (!result.translatedText || !String(result.translatedText).trim()) {
+      if (result.needsTranslation !== false && (!result.translatedText || !String(result.translatedText).trim())) {
         throw new Error(result.error || 'Translation did not return translated text');
       }
       
@@ -4651,8 +4651,8 @@ class WhatsAppClient {
       message.translatedText = result.translatedText;
       message.source_language = result.sourceLanguage;
       message.sourceLanguage = result.sourceLanguage;
-      message.is_translated = true;
-      message.isTranslated = true;
+      message.is_translated = result.needsTranslation !== false;
+      message.isTranslated = result.needsTranslation !== false;
       
       // Re-render messages to show translation
       if (rerender) {

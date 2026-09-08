@@ -191,3 +191,30 @@ extension BabelBridgeMacTests {
         XCTAssertTrue(purpose.contains("voice"))
     }
 }
+
+extension BabelBridgeMacTests {
+    @MainActor
+    func testTranslatedImageCaptionRendersWithOriginalAlternative() throws {
+        let json = #"{"id":"caption-fixture","contactId":"fixture@g.us","timestamp":1700000000000,"isFromMe":false,"isForwarded":false,"chatType":"group","contentType":"Image","content":{"type":"image","caption":"Jó reggelt Budapestről!","mime_type":"image/jpeg"},"originalText":"Jó reggelt Budapestről!","translatedText":"Good morning from Budapest!","sourceLanguage":"Hungarian","isTranslated":true}"#
+        let message = try JSONDecoder().decode(ChatMessage.self, from: Data(json.utf8))
+        XCTAssertEqual(message.displayText, "Good morning from Budapest!")
+        let content = HStack(alignment: .top, spacing: 28) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Translated caption").font(.headline)
+                RichMessageContentView(message: message, displayText: message.displayText, image: nil, mediaURL: nil, isLoading: false, failed: false, retry: {})
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Show original").font(.headline)
+                RichMessageContentView(message: message, displayText: message.originalText!, image: nil, mediaURL: nil, isLoading: false, failed: false, retry: {})
+            }
+        }.padding(24).frame(width: 640).background(.white).foregroundStyle(.black).environment(\.colorScheme, .light)
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+        let rendered = try XCTUnwrap(renderer.nsImage)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(rendered.tiffRepresentation)))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+        attachment.name = "Translated caption and original"; attachment.lifetime = .keepAlways; add(attachment)
+        try png.write(to: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("babelbridge-caption-build33.png"))
+    }
+}

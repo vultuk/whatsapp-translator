@@ -64,6 +64,7 @@ struct RichMessageContentView: View {
                 } else {
                     mediaPlaceholder(systemImage: "doc.fill", title: message.displayText)
                 }
+                caption
             case nil:
                 nonMediaContent
             }
@@ -106,7 +107,7 @@ struct RichMessageContentView: View {
     @ViewBuilder
     private var caption: some View {
         if let caption = message.content?.caption?.trimmingCharacters(in: .whitespacesAndNewlines), !caption.isEmpty {
-            Text(MessageTextLinkifier.attributedString(from: caption))
+            Text(MessageTextLinkifier.attributedString(from: displayText))
                 .font(.body)
                 .textSelection(.enabled)
         }

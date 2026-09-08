@@ -249,14 +249,14 @@ impl MessageStore {
     }
     pub fn enqueue_translation(&self, message_id: &str) -> Result<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT OR IGNORE INTO translation_jobs(message_id) SELECT id FROM messages WHERE id=? AND source_language IS NULL AND (SELECT COUNT(*) FROM translation_jobs WHERE status IN ('pending','processing')) < 1000",
+            "INSERT OR IGNORE INTO translation_jobs(message_id) SELECT id FROM messages WHERE id=? AND source_language IS NULL",
             params![message_id],
         )?;
         Ok(())
     }
     pub fn recover_translations(&self) -> Result<()> {
         self.conn.lock().unwrap().execute(
-            "UPDATE translation_jobs SET status='pending' WHERE status='processing'",
+            "UPDATE translation_jobs SET status='pending' WHERE status IN ('processing','failed')",
             [],
         )?;
         Ok(())
@@ -272,7 +272,7 @@ impl MessageStore {
         Ok(id)
     }
     pub fn retry_translation(&self, id: &str) -> Result<()> {
-        self.conn.lock().unwrap().execute("UPDATE translation_jobs SET status=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END, retry_at=? + attempts*10 WHERE message_id=?", params![chrono::Utc::now().timestamp(),id])?;
+        self.conn.lock().unwrap().execute("UPDATE translation_jobs SET status='pending', retry_at=? + MIN(3600, 10 * (1 << MIN(attempts, 8))) WHERE message_id=?", params![chrono::Utc::now().timestamp(),id])?;
         Ok(())
     }
     pub fn finish_translation(

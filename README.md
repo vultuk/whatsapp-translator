@@ -33,9 +33,9 @@ Required for AI features:
 
 Optional:
 
-- `WA_OPENAI_DETECTION_MODEL` default: `gpt-5.4-nano`
-- `WA_OPENAI_TRANSLATION_MODEL` default: `gpt-5.4-mini`
-- `WA_OPENAI_HIGH_END_MODEL` default: `gpt-5.4`
+- `WA_OPENAI_DETECTION_MODEL` default: `gpt-6-astra`
+- `WA_OPENAI_TRANSLATION_MODEL` default: `gpt-6-astra`
+- `WA_OPENAI_HIGH_END_MODEL` default: `gpt-6-astra`
 - `WA_DEFAULT_LANGUAGE` default: `English`
 - `WA_ALLOW_LOCAL_NO_AUTH=true` permits password-free development only with an explicit loopback `WA_HOST`
 - `WA_HOST` default: `0.0.0.0`
@@ -44,6 +44,10 @@ Optional:
 - `WA_BRIDGE_PATH` path to the `wa-bridge` binary
 - `WA_VERBOSE=true` enable verbose logs
 - `WA_LOGOUT=true` clear the WhatsApp session on startup
+
+Text AI defaults to GPT-6 Astra with low reasoning. The shared OpenAI settings override environment model choices; selecting Astra with no reasoning selection uses low. Speech recognition and speech synthesis retain their dedicated audio models.
+
+Incoming text and media captions translate into `WA_DEFAULT_LANGUAGE`. Outgoing text, captions, and voice use a conversation override first, then the replied-to incoming message's language, then the predominant recent incoming language. Unknown chat language is resolved from recent incoming text before sending. Language-neutral messages stay unchanged. Translation failures prevent outgoing sends and incoming jobs retry with backoff; opening a conversation queues previously undetected text and captions.
 
 Required for native iOS push notifications:
 

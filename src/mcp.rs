@@ -827,27 +827,14 @@ impl WhatsAppMcpServer {
             .get_contact(contact_id)
             .mcp()?
             .ok_or_else(|| McpError::invalid_params("Unknown contact_id", None))?;
-        let settings = self
-            .state
-            .store
-            .get_conversation_settings(contact_id)
-            .unwrap_or_default();
         let target_language = if mode == TranslationMode::Never {
             None
         } else {
-            args.get("target_language")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .or(settings.language_override)
-                .or_else(|| {
-                    self.state
-                        .store
-                        .get_conversation_language(contact_id, 10)
-                        .ok()
-                        .flatten()
-                })
+            if let Some(target) = args.get("target_language").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()) {
+                Some(target.to_string())
+            } else {
+                crate::incoming::outgoing_language(&self.state, contact_id, args.get("reply_to_message_id").and_then(Value::as_str)).await.mcp()?
+            }
         };
 
         let translation_result = if let Some(target) = target_language.as_deref() {
