@@ -212,6 +212,7 @@ private struct UnifiedMessagesView: View {
                 }
             }
             .navigationTitle("Messages")
+            .platformChatNavigationBackground(palette.chatBackground)
             .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 composer.padding(.bottom, ComposerLayout.bottomAdjustment(for: bottomSafeArea))
@@ -309,7 +310,6 @@ private struct UnifiedMessagesView: View {
             }
             ComposerGlassGroup {
                 HStack(alignment: .bottom, spacing: 10) {
-                    ComposerKeyboardDismissButton(focused: $composerFocused)
                     TextField("Message", text: draft, axis: .vertical)
                         .lineLimit(1...5)
                         .textFieldStyle(.plain)
@@ -324,6 +324,7 @@ private struct UnifiedMessagesView: View {
                             if sending { ProgressView().tint(.white) }
                             else { Image(systemName: "arrow.up").font(.system(size: 19, weight: .semibold)) }
                         }.frame(width: 46, height: 46).foregroundStyle(.white)
+                            .contentShape(Circle())
                             .translatorGlassControl(in: Circle(), tint: palette.accent)
                     }
                     .buttonStyle(.plain)

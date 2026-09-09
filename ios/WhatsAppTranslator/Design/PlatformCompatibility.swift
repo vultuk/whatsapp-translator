@@ -208,6 +208,16 @@ extension View {
     }
 
     @ViewBuilder
+    func platformChatNavigationBackground(_ color: Color) -> some View {
+        #if os(iOS)
+        toolbarBackground(color, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder
     func platformInteractiveDismissDisabled(_ disabled: Bool) -> some View {
         #if os(iOS)
         interactiveDismissDisabled(disabled)

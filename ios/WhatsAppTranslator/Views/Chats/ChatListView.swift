@@ -23,6 +23,7 @@ struct ChatListView: View {
             )
             #endif
             .navigationTitle("Chats")
+            .platformChatNavigationBackground(palette.chatBackground)
             #if os(iOS)
             .toolbar {
                 if horizontalSizeClass == .compact {
@@ -44,12 +45,14 @@ struct ChatListView: View {
             if let id = session.selectedContactID,
                let contact = session.contacts.first(where: { $0.id == id }) {
                 ConversationView(contact: contact)
+                    .platformChatNavigationBackground(palette.chatBackground)
                     .id(id)
                     #if os(iOS)
                     .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
                     #endif
             } else {
                 EmptyConversationView()
+                    .platformChatNavigationBackground(palette.chatBackground)
                     #if os(iOS)
                     .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
                     #endif

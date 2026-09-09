@@ -244,23 +244,3 @@ enum ComposerLayout {
         #endif
     }
 }
-
-struct ComposerKeyboardDismissButton: View {
-    let focused: FocusState<Bool>.Binding
-
-    var body: some View {
-        #if os(iOS)
-        if focused.wrappedValue {
-            Button("Hide keyboard", systemImage: "keyboard.chevron.compact.down") {
-                focused.wrappedValue = false
-            }
-            .labelStyle(.iconOnly)
-            .font(.system(size: 20))
-            .frame(width: 44, height: 44)
-            .translatorGlassControl(in: Circle())
-            .buttonStyle(.plain)
-            .accessibilityLabel("Hide keyboard")
-        }
-        #endif
-    }
-}

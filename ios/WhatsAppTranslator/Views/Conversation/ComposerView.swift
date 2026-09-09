@@ -47,7 +47,6 @@ struct ComposerView: View {
 
             ComposerGlassGroup {
                 HStack(alignment: .center, spacing: 7) {
-                    ComposerKeyboardDismissButton(focused: $focused)
                     PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 30, matching: .images) {
                         addImageLabel
                     }
@@ -170,6 +169,8 @@ struct ComposerView: View {
             send()
         } label: {
             sendButtonLabel
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
@@ -189,6 +190,7 @@ struct ComposerView: View {
         } label: {
             sendButtonLabel
                 .frame(width: 46, height: 46)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(isSendDisabled ? Color.platformSecondaryLabel : .white)
