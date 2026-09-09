@@ -210,7 +210,7 @@ extension View {
     @ViewBuilder
     func platformChatNavigationBackground() -> some View {
         #if os(iOS)
-        toolbarBackground(.bar, for: .navigationBar)
+        toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
         #else
         self

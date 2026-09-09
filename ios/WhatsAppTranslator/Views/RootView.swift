@@ -193,6 +193,10 @@ private struct UnifiedMessagesView: View {
                         .frame(maxWidth: 900)
                         .frame(maxWidth: .infinity)
                     }
+                    #if os(iOS)
+                    // Keep scrolled messages behind the native navigation-bar material.
+                    .scrollClipDisabled()
+                    #endif
                     .platformDismissesKeyboard()
                     .platformSwipeDownDismissesKeyboard()
                     .defaultScrollAnchor(.bottom)
