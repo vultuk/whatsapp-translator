@@ -30,6 +30,14 @@ enum AppColorMode: String, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
+enum AppWallpaper: String, CaseIterable, Codable, Identifiable, Sendable {
+    case classic, botanical, celestial, ocean, geometric, mountains, travel, cafe, music, origami, garden
+
+    var id: String { rawValue }
+    var title: String { self == .cafe ? "Café" : rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+    var assetName: String? { self == .classic ? nil : "Wallpaper-\(rawValue)" }
+}
+
 struct ConversationPresentationPreferences: Codable, Equatable, Sendable {
     var nickname: String?
     var timezoneIdentifier: String?
@@ -44,6 +52,7 @@ final class AppPreferencesStore {
         var conversations: [String: ConversationPresentationPreferences] = [:]
         var theme: AppTheme = .whatsapp
         var colorMode: AppColorMode = .system
+        var wallpaper: AppWallpaper? = nil
     }
 
     private let defaults: UserDefaults
@@ -53,6 +62,7 @@ final class AppPreferencesStore {
 
     var theme: AppTheme { didSet { persist() } }
     var colorMode: AppColorMode { didSet { persist() } }
+    var wallpaper: AppWallpaper { didSet { persist() } }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -63,6 +73,7 @@ final class AppPreferencesStore {
         conversations = state.conversations
         theme = state.theme
         colorMode = state.colorMode
+        wallpaper = state.wallpaper ?? .classic
     }
 
     func isStarred(messageID: String, contactID: String) -> Bool {
@@ -94,7 +105,8 @@ final class AppPreferencesStore {
             starredMessageIDs: starredMessageIDs,
             conversations: conversations,
             theme: theme,
-            colorMode: colorMode
+            colorMode: colorMode,
+            wallpaper: wallpaper
         )
         guard let data = try? JSONEncoder().encode(state) else { return }
         defaults.set(data, forKey: storageKey)

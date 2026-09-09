@@ -217,6 +217,7 @@ struct FocusedReplyOverlay<Content: View>: View {
                     content()
                         .padding(.vertical, 4)
                 }
+                .platformDismissesKeyboard()
                 .defaultScrollAnchor(.bottom)
                 .frame(maxHeight: max(80, geometry.size.height * 0.7))
             }
@@ -225,6 +226,7 @@ struct FocusedReplyOverlay<Content: View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(.black.opacity(0.06))
+        .platformSwipeDownDismissesKeyboard()
         .accessibilityElement(children: .contain)
     }
 }
@@ -239,6 +241,26 @@ enum ComposerLayout {
         return -min(16, max(0, safeAreaBottom - 18))
         #else
         return 0
+        #endif
+    }
+}
+
+struct ComposerKeyboardDismissButton: View {
+    let focused: FocusState<Bool>.Binding
+
+    var body: some View {
+        #if os(iOS)
+        if focused.wrappedValue {
+            Button("Hide keyboard", systemImage: "keyboard.chevron.compact.down") {
+                focused.wrappedValue = false
+            }
+            .labelStyle(.iconOnly)
+            .font(.system(size: 20))
+            .frame(width: 44, height: 44)
+            .translatorGlassControl(in: Circle())
+            .buttonStyle(.plain)
+            .accessibilityLabel("Hide keyboard")
+        }
         #endif
     }
 }

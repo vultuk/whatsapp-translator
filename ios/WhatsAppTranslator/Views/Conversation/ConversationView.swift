@@ -237,6 +237,7 @@ struct ConversationView: View {
                 #endif
             }
             .platformDismissesKeyboard()
+            .platformSwipeDownDismissesKeyboard()
             .defaultScrollAnchor(.bottom)
             .onChange(of: messages.count) {
                 guard messageSearch.isEmpty, !starredOnly, let id = messages.last?.id else { return }
@@ -414,10 +415,41 @@ private struct PhotoSendProgressView: View {
 }
 
 struct ChatWallpaper: View {
+    @Environment(AppSession.self) private var session
     @Environment(\.translatorPalette) private var palette
+
     var body: some View {
         palette.chatBackground
-            .overlay {
+            .overlay { WallpaperPattern(wallpaper: session.preferences.wallpaper) }
+            .ignoresSafeArea()
+    }
+}
+
+struct WallpaperPattern: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let wallpaper: AppWallpaper
+    var tileSize: CGFloat = 360
+
+    var body: some View {
+        Group {
+            if let asset = wallpaper.assetName {
+                // White source pixels become transparent; only the fine artwork is tinted.
+                // One mask therefore follows every palette in both light and dark appearance.
+                (colorScheme == .dark ? Color.white : Color.black)
+                    .opacity(colorScheme == .dark ? 0.17 : 0.12)
+                    .mask {
+                        Canvas { context, size in
+                            let pattern = context.resolve(Image(asset))
+                            for row in 0..<max(1, Int(ceil(size.height / tileSize))) {
+                                for column in 0..<max(1, Int(ceil(size.width / tileSize))) {
+                                    context.draw(pattern, in: CGRect(x: CGFloat(column) * tileSize, y: CGFloat(row) * tileSize, width: tileSize, height: tileSize))
+                                }
+                            }
+                        }
+                        .colorInvert()
+                        .luminanceToAlpha()
+                    }
+            } else {
                 Canvas { context, size in
                     for row in 0..<max(0, Int(size.height / 64 + 1)) {
                         for column in 0..<max(0, Int(size.width / 64 + 1)) {
@@ -438,9 +470,11 @@ struct ChatWallpaper: View {
                             .tag(index)
                     }
                 }
-                .accessibilityHidden(true)
+
             }
-            .ignoresSafeArea()
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

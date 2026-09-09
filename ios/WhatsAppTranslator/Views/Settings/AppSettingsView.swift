@@ -59,6 +59,11 @@ struct AppSettingsView: View {
                         ForEach(AppColorMode.allCases) { mode in Text(mode.title).tag(mode) }
                     }
                     .platformCompactControlTypography()
+                    NavigationLink {
+                        WallpaperPickerView()
+                    } label: {
+                        LabeledContent("Chat wallpaper", value: session.preferences.wallpaper.title)
+                    }
                     ThemePreview(theme: session.preferences.theme)
                 } header: {
                     Text("Appearance")
@@ -170,5 +175,59 @@ private struct ThemePreview: View {
         .background(palette.chatBackground, in: RoundedRectangle(cornerRadius: 14))
         .platformCompactControlTypography()
         .animation(.snappy, value: theme)
+    }
+}
+
+private struct WallpaperPickerView: View {
+    @Environment(AppSession.self) private var session
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var previewDark = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Picker("Preview appearance", selection: $previewDark) {
+                    Text("Light").tag(false)
+                    Text("Dark").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Text("Choose a background for all chats. Each design automatically adapts to your appearance.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 14)], spacing: 14) {
+                    ForEach(AppWallpaper.allCases) { wallpaper in
+                        Button {
+                            session.preferences.wallpaper = wallpaper
+                        } label: {
+                            VStack(alignment: .leading, spacing: 0) {
+                                TranslatorPalette.make(session.preferences.theme).chatBackground
+                                    .overlay { WallpaperPattern(wallpaper: wallpaper, tileSize: 180) }
+                                    .environment(\.colorScheme, previewDark ? .dark : .light)
+                                    .frame(height: 156)
+                                HStack {
+                                    Text(wallpaper.title).font(.subheadline.weight(.medium))
+                                    Spacer(minLength: 4)
+                                    Image(systemName: session.preferences.wallpaper == wallpaper ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(session.preferences.wallpaper == wallpaper ? Color.accentColor : Color.secondary)
+                                }
+                                .padding(12)
+                            }
+                            .background(.background)
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 16)
+                                    .stroke(session.preferences.wallpaper == wallpaper ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: session.preferences.wallpaper == wallpaper ? 2 : 1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(wallpaper.title)
+                        .accessibilityAddTraits(session.preferences.wallpaper == wallpaper ? .isSelected : [])
+                    }
+                }
+            }
+            .padding(20)
+        }
+        .navigationTitle("Chat wallpaper")
+        .platformInlineNavigationTitle()
+        .onAppear { previewDark = colorScheme == .dark }
     }
 }

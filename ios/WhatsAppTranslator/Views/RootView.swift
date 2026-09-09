@@ -193,6 +193,8 @@ private struct UnifiedMessagesView: View {
                         .frame(maxWidth: 900)
                         .frame(maxWidth: .infinity)
                     }
+                    .platformDismissesKeyboard()
+                    .platformSwipeDownDismissesKeyboard()
                     .defaultScrollAnchor(.bottom)
                     .refreshable { await session.loadFeed() }
                     .onChange(of: session.unifiedMessages.last?.id) { _, _ in
@@ -301,12 +303,13 @@ private struct UnifiedMessagesView: View {
                 }.fixedSize(horizontal: false, vertical: true)
                     .padding(12)
                     .translatorGlass(in: RoundedRectangle(cornerRadius: 20))
-            } else if replyDraft.selected == nil {
-                Text(session.unifiedMessages.isEmpty ? "Waiting for messages" : "Type to reply to the latest message, or swipe to choose another")
+            } else if replyDraft.selected == nil && session.unifiedMessages.isEmpty {
+                Text("Waiting for messages")
                     .font(.caption).foregroundStyle(.secondary)
             }
             ComposerGlassGroup {
                 HStack(alignment: .bottom, spacing: 10) {
+                    ComposerKeyboardDismissButton(focused: $composerFocused)
                     TextField("Message", text: draft, axis: .vertical)
                         .lineLimit(1...5)
                         .textFieldStyle(.plain)

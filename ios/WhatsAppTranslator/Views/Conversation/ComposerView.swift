@@ -47,6 +47,7 @@ struct ComposerView: View {
 
             ComposerGlassGroup {
                 HStack(alignment: .center, spacing: 7) {
+                    ComposerKeyboardDismissButton(focused: $focused)
                     PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 30, matching: .images) {
                         addImageLabel
                     }

@@ -5,6 +5,33 @@ import UserNotifications
 @testable import WhatsAppTranslator
 
 final class WhatsAppTranslatorTests: XCTestCase {
+    @MainActor
+    func testWallpaperUpgradePreservesExistingPreferencesAndPersistsSelection() throws {
+        let suite = "WallpaperMigration-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let legacy = Data(#"{"starredMessageIDs":{"chat":["message"]},"conversations":{"chat":{"nickname":"Friend","timezoneIdentifier":"Europe/London"}},"theme":"ocean","colorMode":"dark"}"#.utf8)
+        defaults.set(legacy, forKey: "whatsapp-translator-ios-preferences-v1")
+        let store = AppPreferencesStore(defaults: defaults)
+        XCTAssertEqual(store.wallpaper, .classic)
+        XCTAssertEqual(store.theme, .ocean)
+        XCTAssertEqual(store.colorMode, .dark)
+        XCTAssertTrue(store.isStarred(messageID: "message", contactID: "chat"))
+        XCTAssertEqual(store.nickname(for: "chat"), "Friend")
+        store.wallpaper = .celestial
+        let restored = AppPreferencesStore(defaults: defaults)
+        XCTAssertEqual(restored.wallpaper, .celestial)
+        XCTAssertEqual(restored.theme, .ocean)
+        XCTAssertTrue(restored.isStarred(messageID: "message", contactID: "chat"))
+    }
+
+    func testAllTenGeneratedWallpaperAssetsAreBundled() throws {
+        let assets = AppWallpaper.allCases.compactMap(\.assetName)
+        XCTAssertEqual(assets.count, 10)
+        XCTAssertEqual(Set(assets).count, 10)
+        for asset in assets { XCTAssertNotNil(UIImage(named: asset), asset) }
+    }
+
     func testOversizedPhotoIsAutomaticallyReducedBelowUploadLimit() throws {
         let image = DemoImageFactory.landscape(size: CGSize(width: 1_200, height: 900))
         var oversizedData = try XCTUnwrap(image.platformJPEGData(compressionQuality: 0.95))

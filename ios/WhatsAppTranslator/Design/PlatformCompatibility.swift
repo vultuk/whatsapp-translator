@@ -192,6 +192,22 @@ extension View {
     }
 
     @ViewBuilder
+    func platformSwipeDownDismissesKeyboard() -> some View {
+        #if os(iOS)
+        simultaneousGesture(
+            DragGesture(minimumDistance: 30).onEnded { gesture in
+                // Short timelines may not scroll far enough for interactive dismissal.
+                guard gesture.translation.height > 60,
+                      gesture.translation.height > abs(gesture.translation.width) * 1.5 else { return }
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+        )
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder
     func platformInteractiveDismissDisabled(_ disabled: Bool) -> some View {
         #if os(iOS)
         interactiveDismissDisabled(disabled)
