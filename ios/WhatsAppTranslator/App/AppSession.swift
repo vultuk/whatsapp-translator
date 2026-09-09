@@ -186,13 +186,14 @@ final class AppSession {
         try await api.translateVoice(messageID: messageID)
     }
 
-    func prepareVoice(data: Data, contactID: String, reply: MessageReplyTarget?) async throws -> TranslatedVoiceNote {
-        try await api.prepareVoice(data: data, contactID: contactID, reply: reply)
+    func prepareVoice(data: Data, contactID: String, reply: MessageReplyTarget?, replyOnlyIfNotLatest: Bool = false) async throws -> TranslatedVoiceNote {
+        try await api.prepareVoice(data: data, contactID: contactID, reply: reply, replyOnlyIfNotLatest: replyOnlyIfNotLatest)
     }
 
     func sendVoice(_ note: TranslatedVoiceNote) async throws -> VoiceSendResult {
         let result = try await api.sendVoice(preparationID: note.id)
         await loadMessages(for: note.contactId)
+        await loadFeed()
         await refresh()
         return result
     }
@@ -388,6 +389,45 @@ final class AppSession {
         }
     }
 
+    func sendAttachment(_ attachment: OutgoingAttachment, caption: String?, to contactID: String, reply: MessageReplyTarget?, replyOnlyIfNotLatest: Bool = false) async -> Bool {
+        guard !attachment.data.isEmpty, attachment.data.count <= OutgoingAttachment.maximumBytes,
+              !sendingContactIDs.contains(contactID) else { return false }
+        sendingContactIDs.insert(contactID)
+        defer { sendingContactIDs.remove(contactID) }
+        if demoMode {
+            let quote = replyOnlyIfNotLatest ? conditionalDemoReply(reply, contactID: contactID) : reply
+            let message = demoAttachmentMessage(kind: attachment.kind, data: attachment.data, mimeType: attachment.mimeType, fileName: attachment.fileName, caption: caption, contactID: contactID, reply: quote)
+            messages[contactID, default: []].append(message)
+            feedByID[message.id] = message
+            await storeMedia(attachment.data, mimeType: attachment.mimeType, for: message)
+            return true
+        }
+        do {
+            _ = try await api.sendAttachment(attachment, contactID: contactID, caption: caption, reply: reply, replyOnlyIfNotLatest: replyOnlyIfNotLatest)
+            await loadMessages(for: contactID)
+            await loadFeed()
+            await refresh()
+            return true
+        } catch {
+            presentError("Couldn’t send attachment", error)
+            return false
+        }
+    }
+
+    private func conditionalDemoReply(_ reply: MessageReplyTarget?, contactID: String) -> MessageReplyTarget? {
+        guard let reply, let target = unifiedMessages.first(where: { $0.id == reply.messageID && $0.contactId == contactID }) else { return nil }
+        return feedReplyNeedsQuote(target) ? reply : nil
+    }
+
+    private func demoAttachmentMessage(kind: String, data: Data, mimeType: String, fileName: String?, caption: String?, contactID: String, reply: MessageReplyTarget?) -> ChatMessage {
+        var content: [String: Any] = ["type": kind, "mime_type": mimeType, "media_data": data.base64EncodedString(), "file_size": data.count]
+        content["file_name"] = fileName
+        content["caption"] = caption
+        if let reply { content["reply_context"] = ["messageId": reply.messageID, "senderName": reply.senderName, "text": reply.text] }
+        let json: [String: Any] = ["id": UUID().uuidString, "contactId": contactID, "timestamp": Int64(Date().timeIntervalSince1970 * 1000), "isFromMe": true, "isForwarded": false, "chatType": "private", "contentType": kind.capitalized, "isTranslated": false, "deliveryStatus": "sent", "content": content]
+        return try! JSONDecoder().decode(ChatMessage.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
     func sendImage(
         data: Data,
         mimeType: String,
@@ -449,8 +489,10 @@ final class AppSession {
         _ images: [OutgoingImage],
         caption: String? = nil,
         to contactID: String,
-        reply: MessageReplyTarget? = nil
+        reply: MessageReplyTarget? = nil,
+        replyOnlyIfNotLatest: Bool = false
     ) -> Bool {
+        guard !sendingContactIDs.contains(contactID) else { return false }
         guard !images.isEmpty, images.count <= 30 else {
             presentError("Couldn’t send photos", "Choose between 1 and 30 photos.")
             return false
@@ -465,7 +507,7 @@ final class AppSession {
         PhotoSendActivityCoordinator.shared.start(photoSendProgress[id]!)
         #endif
         sendingContactIDs.insert(contactID)
-        Task { await runPhotoSend(id: id, rawImages: images, caption: caption, contactID: contactID, reply: reply) }
+        Task { await runPhotoSend(id: id, rawImages: images, caption: caption, contactID: contactID, reply: reply, replyOnlyIfNotLatest: replyOnlyIfNotLatest) }
         return true
     }
 
@@ -474,7 +516,8 @@ final class AppSession {
         rawImages: [OutgoingImage],
         caption: String?,
         contactID: String,
-        reply: MessageReplyTarget?
+        reply: MessageReplyTarget?,
+        replyOnlyIfNotLatest: Bool
     ) async {
         #if os(iOS)
         let backgroundLease = PhotoSendBackgroundLease(name: "Prepare photo album")
@@ -500,9 +543,11 @@ final class AppSession {
 
         updatePhotoSend(id: id, stage: .transferring, completed: 0)
         if demoMode {
+            let quoted = replyOnlyIfNotLatest ? conditionalDemoReply(reply, contactID: contactID) : reply
             for (index, image) in prepared.enumerated() {
-                let message = ChatMessage.demoImage(contactID: contactID)
+                let message = demoAttachmentMessage(kind: "image", data: image.data, mimeType: image.mimeType, fileName: nil, caption: caption, contactID: contactID, reply: quoted)
                 messages[contactID, default: []].append(message)
+                feedByID[message.id] = message
                 await storeMedia(image.data, mimeType: image.mimeType, for: message)
                 updatePhotoSend(id: id, stage: .sending, completed: index + 1)
             }
@@ -513,13 +558,14 @@ final class AppSession {
         do {
             _ = try await api.sendImages(
                 contactID: contactID, images: prepared, progressID: id,
-                caption: caption, reply: reply,
+                caption: caption, reply: reply, replyOnlyIfNotLatest: replyOnlyIfNotLatest,
                 transferProgress: { [weak self] completed, _ in
                     await self?.updatePhotoSend(id: id, stage: .transferring, completed: completed)
                 }
             )
             completePhotoSend(id: id)
             await loadMessages(for: contactID)
+            await loadFeed()
             await refresh()
         } catch {
             failPhotoSend(id: id, message: error.localizedDescription)

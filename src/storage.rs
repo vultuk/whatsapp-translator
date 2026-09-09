@@ -215,6 +215,14 @@ impl MessageStore {
         Ok(())
     }
 
+    pub fn claim_voice_send_with_payload(&self, id: &str, payload: &str) -> Result<bool> {
+        Ok(self.conn.lock().unwrap().execute(
+            "UPDATE voice_notes SET status='sending', payload=? WHERE id=? AND status='prepared'",
+            params![payload, id],
+        )? == 1)
+    }
+
+    #[cfg(test)]
     pub fn claim_voice_send(&self, id: &str) -> Result<bool> {
         Ok(self.conn.lock().unwrap().execute(
             "UPDATE voice_notes SET status='sending' WHERE id=? AND status='prepared'",

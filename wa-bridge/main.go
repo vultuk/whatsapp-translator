@@ -176,6 +176,14 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			SendEvent(NewSendResultEvent(cmd.RequestID, true, messageID, timestamp, ""))
 		}
 
+	case "send_media":
+		messageID, timestamp, err := client.SendMediaMessage(ctx, cmd)
+		if err != nil {
+			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, err.Error()))
+		} else {
+			SendEvent(NewSendResultEvent(cmd.RequestID, true, messageID, timestamp, ""))
+		}
+
 	case "send_image":
 		if cmd.To == "" || cmd.MediaData == "" {
 			SendEvent(NewSendResultEvent(cmd.RequestID, false, "", 0, "missing 'to' or 'media_data' field"))

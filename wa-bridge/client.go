@@ -1396,3 +1396,57 @@ func (c *Client) GetProfilePicture(ctx context.Context, jidStr string) (string, 
 
 	return pic.URL, pic.ID, nil
 }
+
+// SendMediaMessage sends a video or file using the same confirmed-send protocol as photos.
+func (c *Client) SendMediaMessage(ctx context.Context, cmd Command) (string, int64, error) {
+	jid, err := types.ParseJID(cmd.To)
+	if err != nil || cmd.To == "" {
+		return "", 0, fmt.Errorf("invalid recipient")
+	}
+	data, err := base64.StdEncoding.DecodeString(cmd.MediaData)
+	if err != nil || len(data) == 0 || len(data) > 64*1024*1024 {
+		return "", 0, fmt.Errorf("invalid attachment data or size")
+	}
+	mediaType := whatsmeow.MediaDocument
+	switch cmd.MediaKind {
+	case "video":
+		if cmd.MimeType != "video/mp4" || len(data) < 8 || string(data[4:8]) != "ftyp" {
+			return "", 0, fmt.Errorf("invalid MP4 video")
+		}
+		mediaType = whatsmeow.MediaVideo
+	case "document":
+		if cmd.FileName == "" || strings.ContainsAny(cmd.FileName, "/\\\r\n") {
+			return "", 0, fmt.Errorf("invalid file name")
+		}
+	default:
+		return "", 0, fmt.Errorf("unsupported attachment type")
+	}
+	uploaded, err := c.client.Upload(ctx, data, mediaType)
+	if err != nil {
+		return "", 0, fmt.Errorf("attachment upload failed: %w", err)
+	}
+	msg := buildMediaMessage(cmd, jid, uploaded)
+	resp, err := c.client.SendMessage(ctx, jid, msg)
+	if err != nil {
+		return "", 0, fmt.Errorf("attachment send failed: %w", err)
+	}
+	return resp.ID, resp.Timestamp.Unix(), nil
+}
+
+func buildMediaMessage(cmd Command, jid types.JID, uploaded whatsmeow.UploadResponse) *waE2E.Message {
+	context := buildReplyContext(jid, cmd.ReplyTo, cmd.ReplyToSender, cmd.ReplyToText)
+	if cmd.MediaKind == "video" {
+		return &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
+			Mimetype: proto.String(cmd.MimeType), Caption: proto.String(cmd.Caption),
+			URL: &uploaded.URL, DirectPath: &uploaded.DirectPath, MediaKey: uploaded.MediaKey,
+			FileEncSHA256: uploaded.FileEncSHA256, FileSHA256: uploaded.FileSHA256,
+			FileLength: &uploaded.FileLength, ContextInfo: context,
+		}}
+	}
+	return &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
+		Mimetype: proto.String(cmd.MimeType), FileName: proto.String(cmd.FileName), Caption: proto.String(cmd.Caption),
+		URL: &uploaded.URL, DirectPath: &uploaded.DirectPath, MediaKey: uploaded.MediaKey,
+		FileEncSHA256: uploaded.FileEncSHA256, FileSHA256: uploaded.FileSHA256,
+		FileLength: &uploaded.FileLength, ContextInfo: context,
+	}}
+}

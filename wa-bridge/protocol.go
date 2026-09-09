@@ -196,6 +196,8 @@ type Command struct {
 	Text       string `json:"text,omitempty"`
 	// For send_image command
 	MediaData       string         `json:"media_data,omitempty"` // Base64 encoded image
+	MediaKind       string         `json:"media_kind,omitempty"`
+	FileName        string         `json:"file_name,omitempty"`
 	MimeType        string         `json:"mime_type,omitempty"`
 	Caption         string         `json:"caption,omitempty"`
 	DurationSeconds uint32         `json:"duration_seconds,omitempty"`

@@ -13,7 +13,7 @@ actor SendRecoveryStore {
     }
 
     static func isSend(path: String, method: String) -> Bool {
-        method == "POST" && (["/api/send", "/api/send-image", "/api/send-images", "/api/react", "/api/voice/send"].contains(path)
+        method == "POST" && (["/api/send", "/api/send-image", "/api/send-media", "/api/send-images", "/api/react", "/api/voice/send"].contains(path)
             || (path.hasPrefix("/api/photo-albums/") && path.hasSuffix("/send")))
     }
 

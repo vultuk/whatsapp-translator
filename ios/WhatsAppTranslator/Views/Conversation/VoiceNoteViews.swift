@@ -168,6 +168,8 @@ struct VoiceComposerView: View {
     @Environment(\.dismiss) private var dismiss
     let contactID: String
     let reply: MessageReplyTarget?
+    var replyOnlyIfNotLatest = false
+    var destination: String? = nil
     let onSent: () -> Void
     @State private var recorder: AVAudioRecorder?
     @State private var recordingURL: URL?
@@ -183,6 +185,12 @@ struct VoiceComposerView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let destination {
+                    Section {
+                        Text("To: \(destination)")
+                        if let reply { Text(reply.text).font(.caption).lineLimit(2) }
+                    }
+                }
                 VoicePreferenceSection(scope: "outgoing")
                 Section {
                     if let note {
@@ -215,12 +223,15 @@ struct VoiceComposerView: View {
                     Text("The translation uses an AI-generated voice. Listen before sending. Changing the voice applies to the next preparation.")
                 }
             }
+            #if os(macOS)
+            .formStyle(.grouped)
+            #endif
             .navigationTitle("Translated voice note")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(sent ? "Done" : "Close") { dismiss() }.disabled(busy) } }
         }
         .interactiveDismissDisabled(busy)
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 460)
+        .frame(minWidth: 520, minHeight: 560)
         #endif
         .onDisappear { cleanup() }
         .task {
@@ -267,7 +278,7 @@ struct VoiceComposerView: View {
         busy = true
         Task {
             defer { busy = false }
-            do { note = try await session.prepareVoice(data: Data(contentsOf: url), contactID: contactID, reply: reply) }
+            do { note = try await session.prepareVoice(data: Data(contentsOf: url), contactID: contactID, reply: reply, replyOnlyIfNotLatest: replyOnlyIfNotLatest) }
             catch { self.error = error.localizedDescription }
         }
     }

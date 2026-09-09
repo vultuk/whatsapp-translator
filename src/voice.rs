@@ -100,6 +100,8 @@ pub async fn sample(
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct VoiceNote {
+    #[serde(default)]
+    reply_only_if_not_latest: bool,
     id: String,
     contact_id: String,
     transcript: String,
@@ -130,6 +132,8 @@ impl VoiceNote {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepareRequest {
+    #[serde(default)]
+    reply_only_if_not_latest: bool,
     contact_id: String,
     media_data: String,
     reply_to: Option<String>,
@@ -488,6 +492,7 @@ async fn build_note(
         send_audio: B64.encode(send_audio),
         send_original: B64.encode(send_original),
         original_follow_up: follow_up,
+        reply_only_if_not_latest: req.reply_only_if_not_latest,
         reply_to: req.reply_to,
         reply_to_sender: req.reply_to_sender,
         reply_to_text: req.reply_to_text,
@@ -588,6 +593,7 @@ async fn translate_received_inner(state: &AppState, message_id: &str) -> Result<
         PrepareRequest {
             contact_id: message.contact_id,
             media_data: data,
+            reply_only_if_not_latest: false,
             reply_to: None,
             reply_to_sender: None,
             reply_to_text: None,
@@ -645,8 +651,15 @@ pub async fn send(State(state): State<Arc<AppState>>, Json(req): Json<SendReques
         if status != "prepared" { bail!("Delivery is awaiting confirmation. Check the conversation before recording again; this note will not be sent twice."); }
         if chrono::Utc::now().timestamp() - created > 15 * 60 { bail!("Recording preview expired. Please prepare it again."); }
         if !*state.connected.read().await { bail!("WhatsApp is disconnected. Reconnect before sending."); }
-        let note: VoiceNote = serde_json::from_str(&payload)?;
-        if !state.store.claim_voice_send(&note.id)? { bail!("This recording is already sending."); }
+        let mut note: VoiceNote = serde_json::from_str(&payload)?;
+        if note.reply_only_if_not_latest {
+            let id = note.reply_to.as_deref().context("Select a message before recording a reply")?;
+            if state.store.reply_is_latest(&note.contact_id, id)? {
+                note.reply_to = None; note.reply_to_sender = None; note.reply_to_text = None;
+            }
+        }
+        note.reply_only_if_not_latest = false;
+        if !state.store.claim_voice_send_with_payload(&note.id, &serde_json::to_string(&note)?)? { bail!("This recording is already sending."); }
         // Sending belongs to the server, not the HTTP connection: losing a client must not cancel delivery.
         let send_state = state.clone();
         let operation = crate::outbox::OPERATION_ID.try_with(Clone::clone).unwrap_or_default();
@@ -771,7 +784,8 @@ fn store_audio_message(
         .store
         .get_contact(&note.contact_id)?
         .context("Conversation not found")?;
-    let content = json!({"type":"audio","isVoiceNote":true,"durationSeconds":duration,"mime_type":"audio/mpeg", "media_data":if original {&note.original_data} else {&note.audio_data},"aiGenerated":!original});
+    let content = json!({"type":"audio","isVoiceNote":true,"durationSeconds":duration,"mime_type":"audio/mpeg", "media_data":if original {&note.original_data} else {&note.audio_data},"aiGenerated":!original,
+        "reply_context": note.reply_to.as_ref().map(|id| json!({"messageId":id,"senderName":note.reply_to_sender,"text":note.reply_to_text}))});
     let stored = StoredMessage {
         id: message_id.clone(),
         contact_id: note.contact_id.clone(),
@@ -928,6 +942,7 @@ mod integration_tests {
             send_audio: B64.encode("OggS translated fixture"),
             send_original: B64.encode("OggS original fixture"),
             original_follow_up: true,
+            reply_only_if_not_latest: false,
             reply_to: None,
             reply_to_sender: None,
             reply_to_text: None,
@@ -1081,6 +1096,131 @@ mod integration_tests {
             .unwrap()
             .is_some());
     }
+    #[tokio::test]
+    async fn unified_recording_rechecks_reply_at_send_time_and_persists_quote() {
+        for newer_arrived in [false, true] {
+            let dir = TestDirectory::new();
+            let state = state(&dir.0, None);
+            *state.connected.write().await = true;
+            let mut note = note(uuid::Uuid::new_v4().to_string());
+            note.original_follow_up = false;
+            // Create a stored chat message as the selected target before recording.
+            store_audio_message(
+                &state,
+                &note,
+                false,
+                BridgeSendResult {
+                    request_id: 0,
+                    success: true,
+                    message_id: Some("selected".into()),
+                    timestamp: Some(100),
+                    message_ids: vec![],
+                    timestamps: vec![],
+                    error: None,
+                },
+                "sent",
+            )
+            .unwrap();
+            note.reply_to = Some("selected".into());
+            note.reply_to_sender = Some("sam@s.whatsapp.net".into());
+            note.reply_to_text = Some("Original".into());
+            note.reply_only_if_not_latest = true;
+            state
+                .store
+                .save_voice_note(&note.id, &serde_json::to_string(&note).unwrap())
+                .unwrap();
+            if newer_arrived {
+                store_audio_message(
+                    &state,
+                    &note,
+                    false,
+                    BridgeSendResult {
+                        request_id: 0,
+                        success: true,
+                        message_id: Some("newer".into()),
+                        timestamp: Some(200),
+                        message_ids: vec![],
+                        timestamps: vec![],
+                        error: None,
+                    },
+                    "sent",
+                )
+                .unwrap();
+            }
+            let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+            state.set_command_tx(tx).await;
+            let bridge_state = state.clone();
+            let preparation = note.id.clone();
+            let bridge = tokio::spawn(async move {
+                let cmd = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let BridgeCommand::SendAudio {
+                    request_id: Some(id),
+                    reply_to,
+                    reply_to_sender,
+                    to,
+                    ..
+                } = cmd
+                else {
+                    panic!("Expected audio")
+                };
+                assert_eq!(to, "test@s.whatsapp.net");
+                assert_eq!(
+                    reply_to.as_deref(),
+                    if newer_arrived {
+                        Some("selected")
+                    } else {
+                        None
+                    }
+                );
+                assert_eq!(reply_to_sender.is_some(), newer_arrived);
+                let (payload, status, _, _) = bridge_state
+                    .store
+                    .voice_note(&preparation)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(status, "sending");
+                let persisted: VoiceNote = serde_json::from_str(&payload).unwrap();
+                assert_eq!(persisted.reply_to, reply_to);
+                bridge_state
+                    .handle_send_result(BridgeSendResult {
+                        request_id: id,
+                        success: true,
+                        message_id: Some("confirmed".into()),
+                        timestamp: Some(1_700_000_000),
+                        message_ids: vec![],
+                        timestamps: vec![],
+                        error: None,
+                    })
+                    .await;
+            });
+            let result = json_response(
+                send(
+                    State(state.clone()),
+                    Json(SendRequest {
+                        preparation_id: note.id,
+                    }),
+                )
+                .await,
+            )
+            .await;
+            bridge.await.unwrap();
+            assert_eq!(result["success"], true);
+            let stored = state.store.get_message_by_id("confirmed").unwrap().unwrap();
+            let content: Value = serde_json::from_str(&stored.content_json).unwrap();
+            assert_eq!(
+                content["reply_context"]["messageId"].as_str(),
+                if newer_arrived {
+                    Some("selected")
+                } else {
+                    None
+                }
+            );
+        }
+    }
+
     #[tokio::test]
     async fn incoming_assets_cannot_be_used_as_send_preparations() {
         let dir = TestDirectory::new();
@@ -1275,6 +1415,7 @@ mod integration_tests {
         let request = || PrepareRequest {
             contact_id: "test@s.whatsapp.net".into(),
             media_data: translated.original_data.clone(),
+            reply_only_if_not_latest: false,
             reply_to: None,
             reply_to_sender: None,
             reply_to_text: None,

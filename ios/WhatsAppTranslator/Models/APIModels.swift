@@ -402,7 +402,19 @@ struct SendMessageResponse: Decodable, Sendable {
     let originalFollowUpError: String?
 }
 
+struct PrepareVoiceRequest: Encodable, Sendable {
+    let contactId: String
+    let mediaData: String
+    let replyTo: String?
+    let replyToSender: String?
+    let replyToText: String?
+    let replyOnlyIfNotLatest: Bool
+}
+
 struct SendImageRequest: Encodable, Sendable {
+    var mediaKind: String? = nil
+    var fileName: String? = nil
+    var replyOnlyIfNotLatest: Bool? = nil
     let contactId: String
     let mediaData: String
     let mimeType: String
@@ -411,6 +423,14 @@ struct SendImageRequest: Encodable, Sendable {
     let replyToSender: String?
     let replyToText: String?
     let replyToSenderName: String?
+}
+
+struct OutgoingAttachment: Sendable {
+    let data: Data
+    let mimeType: String
+    let fileName: String
+    let kind: String
+    static let maximumBytes = 64 * 1_024 * 1_024
 }
 
 struct OutgoingImage: Sendable {
@@ -424,6 +444,7 @@ struct SendImageItemRequest: Encodable, Sendable {
 }
 
 struct SendImagesRequest: Encodable, Sendable {
+    var replyOnlyIfNotLatest: Bool? = nil
     let contactId: String
     let progressId: String?
     let images: [SendImageItemRequest]
@@ -435,6 +456,7 @@ struct SendImagesRequest: Encodable, Sendable {
 }
 
 struct CreatePhotoAlbumRequest: Encodable, Sendable {
+    var replyOnlyIfNotLatest: Bool? = nil
     let jobId: String
     let contactId: String
     let photoCount: Int
@@ -451,6 +473,7 @@ struct StagePhotoAlbumItemRequest: Encodable, Sendable {
 }
 
 struct PhotoSendProgress: Identifiable, Equatable, Sendable {
+    let startedAt = Date()
     enum Stage: String, Sendable { case preparing, transferring, uploading, sending, complete, failed }
     let id: String
     let contactID: String

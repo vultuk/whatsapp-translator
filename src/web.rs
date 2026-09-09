@@ -64,6 +64,7 @@ struct ValidatedImagePayload {
 
 #[derive(Debug)]
 pub struct PendingPhotoAlbum {
+    reply_only_if_not_latest: bool,
     contact_id: String,
     caption: Option<String>,
     reply_to: Option<String>,
@@ -282,6 +283,10 @@ pub struct SendMessageResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendImageRequest {
+    pub media_kind: Option<String>,
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub reply_only_if_not_latest: bool,
     pub contact_id: String,
     /// Base64 encoded image data
     pub media_data: String,
@@ -307,6 +312,8 @@ pub struct SendImageItemRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePhotoAlbumRequest {
+    #[serde(default)]
+    pub reply_only_if_not_latest: bool,
     pub job_id: String,
     pub contact_id: String,
     pub photo_count: usize,
@@ -320,6 +327,8 @@ pub struct CreatePhotoAlbumRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendImagesRequest {
+    #[serde(default)]
+    pub reply_only_if_not_latest: bool,
     pub contact_id: String,
     pub progress_id: Option<String>,
     pub images: Vec<SendImageItemRequest>,
@@ -655,6 +664,7 @@ impl AppState {
         let send_id = match &cmd {
             BridgeCommand::Send { request_id, .. }
             | BridgeCommand::SendImage { request_id, .. }
+            | BridgeCommand::SendMedia { request_id, .. }
             | BridgeCommand::SendImages { request_id, .. }
             | BridgeCommand::SendAudio { request_id, .. }
             | BridgeCommand::SendReaction { request_id, .. } => *request_id,
@@ -1178,6 +1188,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/voice/send", post(crate::voice::send))
         .route("/api/voice/sample/:voice", post(crate::voice::sample))
+        .route(
+            "/api/send-media",
+            post(send_image).layer(DefaultBodyLimit::max(MAX_ALBUM_REQUEST_BYTES)),
+        )
         .route(
             "/api/send-image",
             post(send_image).layer(DefaultBodyLimit::max(MAX_IMAGE_REQUEST_BYTES)),
@@ -2535,9 +2549,79 @@ async fn translate_caption(
     Ok((Some(translated), language))
 }
 
+fn media_reply_needs_quote(
+    state: &AppState,
+    contact: &str,
+    reply: Option<&str>,
+    conditional: bool,
+) -> Result<bool, String> {
+    if !conditional {
+        return Ok(reply.is_some());
+    }
+    let id = reply.ok_or("Select a message in the destination conversation before replying")?;
+    state
+        .store
+        .reply_is_latest(contact, id)
+        .map(|latest| !latest)
+        .map_err(|e| e.to_string())
+}
+
+fn validate_attachment_payload(
+    data: &str,
+    mime: &str,
+    kind: &str,
+    filename: Option<&str>,
+) -> Result<ValidatedImagePayload, String> {
+    if kind == "image" {
+        return validate_image_payload(data, mime);
+    }
+    if !matches!(kind, "video" | "document") {
+        return Err("Unsupported attachment type".into());
+    }
+    let mime = mime.trim().to_ascii_lowercase();
+    if mime.len() > 128
+        || !mime.contains('/')
+        || !mime
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/.-+".contains(&b))
+    {
+        return Err("Invalid attachment MIME type".into());
+    }
+    if kind == "video" && mime != "video/mp4" {
+        return Err("Choose an MP4 video".into());
+    }
+    if kind == "document"
+        && !filename.is_some_and(|name| {
+            !name.trim().is_empty()
+                && name.len() <= 255
+                && !name
+                    .chars()
+                    .any(|c| c.is_control() || c == '/' || c == '\\')
+        })
+    {
+        return Err("A valid file name is required".into());
+    }
+    if data.len() > MAX_ALBUM_BASE64_BYTES {
+        return Err("Attachments must be smaller than 64 MB".into());
+    }
+    let decoded = BASE64_STANDARD
+        .decode(data)
+        .map_err(|_| "Invalid attachment data")?;
+    if decoded.is_empty() || decoded.len() > MAX_ALBUM_BYTES {
+        return Err("Choose a nonempty attachment smaller than 64 MB".into());
+    }
+    if kind == "video" && decoded.get(4..8) != Some(b"ftyp".as_slice()) {
+        return Err("The video is not an MP4 file".into());
+    }
+    Ok(ValidatedImagePayload {
+        mime_type: mime,
+        decoded_size: decoded.len(),
+    })
+}
+
 async fn send_image(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<SendImageRequest>,
+    Json(mut req): Json<SendImageRequest>,
 ) -> impl IntoResponse {
     // Validate input
     if req.contact_id.is_empty() || req.media_data.is_empty() {
@@ -2550,7 +2634,18 @@ async fn send_image(
             .into_response();
     }
 
-    let validated_image = match validate_image_payload(&req.media_data, &req.mime_type) {
+    let kind = req.media_kind.as_deref().unwrap_or("image");
+    let content_type = match kind {
+        "video" => "Video",
+        "document" => "Document",
+        _ => "Image",
+    };
+    let validated_image = match validate_attachment_payload(
+        &req.media_data,
+        &req.mime_type,
+        kind,
+        req.file_name.as_deref(),
+    ) {
         Ok(payload) => payload,
         Err(error) => {
             return (
@@ -2576,6 +2671,19 @@ async fn send_image(
             .into_response();
     }
 
+    if let Err(error) = media_reply_needs_quote(
+        &state,
+        &req.contact_id,
+        req.reply_to.as_deref(),
+        req.reply_only_if_not_latest,
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response();
+    }
+
     let (translated_caption, caption_language) = match translate_caption(
         &state,
         &req.contact_id,
@@ -2594,6 +2702,27 @@ async fn send_image(
         }
     };
     let caption_changed = translated_caption != req.caption;
+    match media_reply_needs_quote(
+        &state,
+        &req.contact_id,
+        req.reply_to.as_deref(),
+        req.reply_only_if_not_latest,
+    ) {
+        Ok(false) => {
+            req.reply_to = None;
+            req.reply_to_sender = None;
+            req.reply_to_text = None;
+            req.reply_to_sender_name = None;
+        }
+        Ok(true) => {}
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error})),
+            )
+                .into_response()
+        }
+    }
 
     let request_id = state.next_request_id();
     let timestamp = chrono::Utc::now().timestamp_millis();
@@ -2620,9 +2749,10 @@ async fn send_image(
         contact_name,
         contact_phone,
         chat_type,
-        content_type: "Image".to_string(),
+        content_type: content_type.to_string(),
         content_json: serde_json::json!({
-            "type": "image",
+            "type": kind,
+            "file_name": req.file_name,
             "mime_type": validated_mime_type.clone(),
             "caption": translated_caption,
             "media_data": req.media_data,
@@ -2637,7 +2767,8 @@ async fn send_image(
         })
         .to_string(),
         content: Some(serde_json::json!({
-            "type": "image",
+            "type": kind,
+            "file_name": req.file_name,
             "mime_type": validated_mime_type.clone(),
             "caption": translated_caption,
             "media_data": req.media_data,
@@ -2667,7 +2798,7 @@ async fn send_image(
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({
-                "error": format!("Failed to store pending image: {}", e)
+                "error": format!("Failed to store pending attachment: {}", e)
             })),
         )
             .into_response();
@@ -2696,36 +2827,54 @@ async fn send_image(
         .register_pending_send(request_id, Some(temp_message_id.clone()))
         .await;
 
-    let cmd = BridgeCommand::SendImage {
-        request_id: Some(request_id),
-        to: req.contact_id.clone(),
-        media_data: req.media_data.clone(),
-        mime_type: validated_mime_type,
-        caption: translated_caption.clone(),
-        reply_to: req.reply_to.clone(),
-        reply_to_sender: req.reply_to_sender.clone(),
-        reply_to_text: req.reply_to_text.clone(),
+    let cmd = if kind == "image" {
+        BridgeCommand::SendImage {
+            request_id: Some(request_id),
+            to: req.contact_id.clone(),
+            media_data: req.media_data.clone(),
+            mime_type: validated_mime_type,
+            caption: translated_caption.clone(),
+            reply_to: req.reply_to.clone(),
+            reply_to_sender: req.reply_to_sender.clone(),
+            reply_to_text: req.reply_to_text.clone(),
+        }
+    } else {
+        BridgeCommand::SendMedia {
+            request_id: Some(request_id),
+            to: req.contact_id.clone(),
+            media_data: req.media_data.clone(),
+            mime_type: validated_mime_type,
+            media_kind: kind.to_string(),
+            file_name: req.file_name.clone(),
+            caption: translated_caption.clone(),
+            reply_to: req.reply_to.clone(),
+            reply_to_sender: req.reply_to_sender.clone(),
+            reply_to_text: req.reply_to_text.clone(),
+        }
     };
 
     if let Err(e) = state.send_bridge_command(cmd).await {
-        error!("Failed to send image: {}", e);
+        error!("Failed to send attachment: {}", e);
         state.cancel_pending_send(request_id).await;
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({
-                "error": format!("Failed to send image: {}", e)
+                "error": format!("Failed to send attachment: {}", e)
             })),
         )
             .into_response();
     }
 
-    let send_result = match state.wait_for_send_result(request_id, rx).await {
+    let send_result = match state
+        .wait_for_send_result_with_timeout(request_id, rx, ALBUM_SEND_RESULT_TIMEOUT)
+        .await
+    {
         Ok(result) => result,
         Err(SendConfirmationError::Timeout) => {
             return (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(serde_json::json!({
-                    "error": "Timed out waiting for WhatsApp image send confirmation"
+                    "error": "Timed out waiting for WhatsApp attachment send confirmation"
                 })),
             )
                 .into_response();
@@ -2734,7 +2883,7 @@ async fn send_image(
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({
-                    "error": "WhatsApp image send confirmation channel closed"
+                    "error": "WhatsApp attachment send confirmation channel closed"
                 })),
             )
                 .into_response();
@@ -2745,7 +2894,7 @@ async fn send_image(
         return (
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({
-                "error": send_result.error.unwrap_or_else(|| "WhatsApp rejected the image".to_string())
+                "error": send_result.error.unwrap_or_else(|| "WhatsApp rejected the attachment".to_string())
             })),
         )
             .into_response();
@@ -2763,7 +2912,7 @@ async fn send_image(
 
 async fn send_images(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<SendImagesRequest>,
+    Json(mut req): Json<SendImagesRequest>,
 ) -> impl IntoResponse {
     if req.contact_id.is_empty() {
         return (
@@ -2792,6 +2941,19 @@ async fn send_images(
             .into_response();
     }
 
+    if let Err(error) = media_reply_needs_quote(
+        &state,
+        &req.contact_id,
+        req.reply_to.as_deref(),
+        req.reply_only_if_not_latest,
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response();
+    }
+
     let (translated_caption, caption_language) = match translate_caption(
         &state,
         &req.contact_id,
@@ -2810,6 +2972,27 @@ async fn send_images(
         }
     };
     let caption_changed = translated_caption != req.caption;
+    match media_reply_needs_quote(
+        &state,
+        &req.contact_id,
+        req.reply_to.as_deref(),
+        req.reply_only_if_not_latest,
+    ) {
+        Ok(false) => {
+            req.reply_to = None;
+            req.reply_to_sender = None;
+            req.reply_to_text = None;
+            req.reply_to_sender_name = None;
+        }
+        Ok(true) => {}
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error})),
+            )
+                .into_response()
+        }
+    }
 
     let request_id = state.next_request_id();
     let rx = state.register_pending_send(request_id, None).await;
@@ -3039,6 +3222,7 @@ async fn create_photo_album(
     albums.insert(
         req.job_id,
         PendingPhotoAlbum {
+            reply_only_if_not_latest: req.reply_only_if_not_latest,
             contact_id: req.contact_id,
             caption: req.caption,
             reply_to: req.reply_to,
@@ -3130,6 +3314,7 @@ async fn send_staged_photo_album(
             .into_response();
     }
     let req = SendImagesRequest {
+        reply_only_if_not_latest: album.reply_only_if_not_latest,
         contact_id: album.contact_id,
         progress_id: Some(job_id),
         images: album.images.into_iter().flatten().collect(),
@@ -5007,6 +5192,250 @@ mod tests {
             assert_eq!(sending.await.unwrap().unwrap().status(), StatusCode::OK);
             let _ = std::fs::remove_dir_all(dir);
         }
+    }
+
+    #[tokio::test]
+    async fn unified_media_routes_to_captured_chat_and_conditionally_quotes() {
+        for kind in ["image", "video", "document", "album"] {
+            for (selected, quote) in [("a", Some("a")), ("b", None)] {
+                let (state, dir) = test_state(None);
+                for (id, contact, time) in [
+                    ("a", "one@g.us", 100),
+                    ("b", "one@g.us", 200),
+                    ("c", "two@g.us", 300),
+                ] {
+                    state
+                        .store
+                        .upsert_contact(contact, None, None, Some("group"), time)
+                        .unwrap();
+                    state
+                        .store
+                        .add_message(&feed_test_message(id, contact, time))
+                        .unwrap();
+                }
+                state.set_connected(true, None, None).await;
+                let (sender, mut receiver) = mpsc::channel(8);
+                state.set_command_tx(sender).await;
+                let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+                let mut body = serde_json::json!({"contactId":"one@g.us", "replyTo":selected, "replyToSender":"sam@s.whatsapp.net", "replyToText":"Original", "replyOnlyIfNotLatest":true});
+                let path = if kind == "album" {
+                    body["images"] = serde_json::json!([{"mediaData":png,"mimeType":"image/png"},{"mediaData":png,"mimeType":"image/png"}]);
+                    "/api/send-images"
+                } else {
+                    body["mediaKind"] = serde_json::json!(kind);
+                    body["fileName"] = serde_json::json!("Fixture.txt");
+                    body["mimeType"] = serde_json::json!(match kind {
+                        "image" => "image/png",
+                        "video" => "video/mp4",
+                        _ => "text/plain",
+                    });
+                    body["mediaData"] = serde_json::json!(match kind {
+                        "image" => png.to_string(),
+                        "video" => BASE64_STANDARD.encode(b"\x00\x00\x00\x18ftypisomfixture"),
+                        _ => BASE64_STANDARD.encode(b"Test document"),
+                    });
+                    if kind == "image" {
+                        "/api/send-image"
+                    } else {
+                        "/api/send-media"
+                    }
+                };
+                let request = HttpRequest::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap();
+                let sending = tokio::spawn(create_router(state.clone()).oneshot(request));
+                let command = tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let (id, to, reply, sender) = match command {
+                    BridgeCommand::SendImage {
+                        request_id: Some(id),
+                        to,
+                        reply_to,
+                        reply_to_sender,
+                        ..
+                    }
+                    | BridgeCommand::SendMedia {
+                        request_id: Some(id),
+                        to,
+                        reply_to,
+                        reply_to_sender,
+                        ..
+                    }
+                    | BridgeCommand::SendImages {
+                        request_id: Some(id),
+                        to,
+                        reply_to,
+                        reply_to_sender,
+                        ..
+                    } => (id, to, reply_to, reply_to_sender),
+                    _ => panic!("Expected a media send"),
+                };
+                assert_eq!(to, "one@g.us");
+                assert_eq!(reply.as_deref(), quote, "{kind}");
+                assert_eq!(sender.is_some(), quote.is_some());
+                state
+                    .handle_send_result(BridgeSendResult {
+                        request_id: id,
+                        success: true,
+                        message_id: Some("sent".into()),
+                        timestamp: Some(1_700_000_000),
+                        message_ids: if kind == "album" {
+                            vec!["sent".into(), "sent2".into()]
+                        } else {
+                            vec![]
+                        },
+                        timestamps: if kind == "album" {
+                            vec![1_700_000_000, 1_700_000_001]
+                        } else {
+                            vec![]
+                        },
+                        error: None,
+                    })
+                    .await;
+                assert_eq!(sending.await.unwrap().unwrap().status(), StatusCode::OK);
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unified_album_retains_reply_while_photos_transfer() {
+        let (state, dir) = test_state(None);
+        state
+            .store
+            .upsert_contact("one@g.us", None, None, Some("group"), 100)
+            .unwrap();
+        state
+            .store
+            .add_message(&feed_test_message("selected", "one@g.us", 100))
+            .unwrap();
+        state.set_connected(true, None, None).await;
+        let app = create_router(state.clone());
+        let post = |path: &str, body: serde_json::Value| {
+            HttpRequest::builder()
+                .method("POST")
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let response = app.clone().oneshot(post("/api/photo-albums", serde_json::json!({"jobId":"staged-reply","contactId":"one@g.us","photoCount":2,"replyTo":"selected","replyToSender":"sam@s.whatsapp.net","replyOnlyIfNotLatest":true}))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+        for index in 0..2 {
+            let request = HttpRequest::builder()
+                .method("PUT")
+                .uri(format!("/api/photo-albums/staged-reply/images/{index}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"mediaData":png,"mimeType":"image/png"}).to_string(),
+                ))
+                .unwrap();
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::OK
+            );
+        }
+        // A message arrives after selection and while the album is being prepared.
+        state
+            .store
+            .add_message(&feed_test_message("newer", "one@g.us", 200))
+            .unwrap();
+        let (sender, mut receiver) = mpsc::channel(4);
+        state.set_command_tx(sender).await;
+        let sending = tokio::spawn(app.oneshot(post(
+            "/api/photo-albums/staged-reply/send",
+            serde_json::json!({}),
+        )));
+        let command = tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let BridgeCommand::SendImages {
+            request_id: Some(id),
+            to,
+            reply_to,
+            ..
+        } = command
+        else {
+            panic!("Expected album")
+        };
+        assert_eq!(to, "one@g.us");
+        assert_eq!(reply_to.as_deref(), Some("selected"));
+        state
+            .handle_send_result(BridgeSendResult {
+                request_id: id,
+                success: true,
+                message_id: Some("album".into()),
+                timestamp: Some(1_700_000_000),
+                message_ids: vec!["photo1".into(), "photo2".into()],
+                timestamps: vec![1_700_000_000, 1_700_000_001],
+                error: None,
+            })
+            .await;
+        assert_eq!(sending.await.unwrap().unwrap().status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn unified_media_rejects_missing_and_wrong_chat_targets() {
+        let (state, dir) = test_state(None);
+        state
+            .store
+            .upsert_contact("two@g.us", None, None, Some("group"), 100)
+            .unwrap();
+        state
+            .store
+            .add_message(&feed_test_message("other", "two@g.us", 100))
+            .unwrap();
+        state.set_connected(true, None, None).await;
+        let (sender, mut receiver) = mpsc::channel(4);
+        state.set_command_tx(sender).await;
+        for selected in [None, Some("other"), Some("deleted")] {
+            let body = serde_json::json!({"contactId":"one@g.us","replyTo":selected,"replyOnlyIfNotLatest":true,"mediaKind":"document","fileName":"Note.txt","mimeType":"text/plain","mediaData":BASE64_STANDARD.encode(b"hello")});
+            let request = HttpRequest::builder()
+                .method("POST")
+                .uri("/api/send-media")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            assert_eq!(
+                create_router(state.clone())
+                    .oneshot(request)
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+            assert!(receiver.try_recv().is_err());
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn attachment_validation_rejects_invalid_kind_video_and_filename() {
+        let data = BASE64_STANDARD.encode(b"file");
+        assert!(
+            validate_attachment_payload(&data, "text/plain", "document", Some("Note.txt")).is_ok()
+        );
+        assert!(validate_attachment_payload(&data, "video/mp4", "video", None).is_err());
+        assert!(
+            validate_attachment_payload(&data, "text/plain", "document", Some("../Note.txt"))
+                .is_err()
+        );
+        assert!(validate_attachment_payload(&data, "text/plain", "document", None).is_err());
+        assert!(validate_attachment_payload(&data, "text/plain", "unknown", None).is_err());
+        assert!(
+            validate_attachment_payload("", "text/plain", "document", Some("Note.txt")).is_err()
+        );
+        assert!(
+            validate_attachment_payload(&data, "bad\nvalue", "document", Some("Note.txt")).is_err()
+        );
     }
 
     #[test]

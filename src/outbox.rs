@@ -16,7 +16,12 @@ tokio::task_local! { pub static OPERATION_ID: String; }
 pub fn is_send(path: &str) -> bool {
     matches!(
         path,
-        "/api/send" | "/api/send-image" | "/api/send-images" | "/api/react" | "/api/voice/send"
+        "/api/send"
+            | "/api/send-media"
+            | "/api/send-image"
+            | "/api/send-images"
+            | "/api/react"
+            | "/api/voice/send"
     ) || (path.starts_with("/api/photo-albums/") && path.ends_with("/send"))
 }
 

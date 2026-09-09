@@ -389,7 +389,7 @@ struct ConversationView: View {
     }
 }
 
-private struct PhotoSendProgressView: View {
+struct PhotoSendProgressView: View {
     @Environment(\.translatorPalette) private var palette
     let progress: PhotoSendProgress
 

@@ -300,6 +300,18 @@ pub enum BridgeCommand {
     },
 
     /// Send an image message
+    SendMedia {
+        request_id: Option<i32>,
+        to: String,
+        media_data: String,
+        mime_type: String,
+        media_kind: String,
+        file_name: Option<String>,
+        caption: Option<String>,
+        reply_to: Option<String>,
+        reply_to_sender: Option<String>,
+        reply_to_text: Option<String>,
+    },
     SendImage {
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<i32>,

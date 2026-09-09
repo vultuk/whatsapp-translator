@@ -64,13 +64,12 @@ actor APIClient {
         try await authorizedRequest("/api/voice/translate/\(messageID.urlPathEncoded)", method: "POST", timeoutInterval: 300)
     }
 
-    func prepareVoice(data: Data, contactID: String, reply: MessageReplyTarget?) async throws -> TranslatedVoiceNote {
-        var payload = ["contactId": contactID, "mediaData": data.base64EncodedString()]
-        if let reply {
-            payload["replyTo"] = reply.messageID
-            payload["replyToSender"] = reply.senderJID
-            payload["replyToText"] = reply.text
-        }
+    func prepareVoice(data: Data, contactID: String, reply: MessageReplyTarget?, replyOnlyIfNotLatest: Bool = false) async throws -> TranslatedVoiceNote {
+        let payload = PrepareVoiceRequest(
+            contactId: contactID, mediaData: data.base64EncodedString(),
+            replyTo: reply?.messageID, replyToSender: reply?.senderJID,
+            replyToText: reply?.text, replyOnlyIfNotLatest: replyOnlyIfNotLatest
+        )
         return try await authorizedRequest("/api/voice/prepare", method: "POST", body: JSONEncoder.backend.encode(payload), timeoutInterval: 300)
     }
 
@@ -154,14 +153,28 @@ actor APIClient {
         )
     }
 
+    func sendAttachment(_ attachment: OutgoingAttachment, contactID: String, caption: String?, reply: MessageReplyTarget?, replyOnlyIfNotLatest: Bool) async throws -> SendImageResponse {
+        let payload = SendImageRequest(
+            mediaKind: attachment.kind, fileName: attachment.fileName,
+            replyOnlyIfNotLatest: replyOnlyIfNotLatest ? true : nil,
+            contactId: contactID, mediaData: attachment.data.base64EncodedString(),
+            mimeType: attachment.mimeType, caption: caption,
+            replyTo: reply?.messageID, replyToSender: reply?.senderJID,
+            replyToText: reply?.text, replyToSenderName: reply?.senderName
+        )
+        return try await authorizedRequest("/api/send-media", method: "POST", body: JSONEncoder.backend.encode(payload), timeoutInterval: 240)
+    }
+
     func sendImage(
         contactID: String,
         data: Data,
         mimeType: String,
         caption: String? = nil,
-        reply: MessageReplyTarget? = nil
+        reply: MessageReplyTarget? = nil,
+        replyOnlyIfNotLatest: Bool = false
     ) async throws -> SendImageResponse {
         let payload = SendImageRequest(
+            replyOnlyIfNotLatest: replyOnlyIfNotLatest ? true : nil,
             contactId: contactID,
             mediaData: data.base64EncodedString(),
             mimeType: mimeType,
@@ -184,6 +197,7 @@ actor APIClient {
         progressID: String? = nil,
         caption: String? = nil,
         reply: MessageReplyTarget? = nil,
+        replyOnlyIfNotLatest: Bool = false,
         transferProgress: (@Sendable (Int, Int) async -> Void)? = nil
     ) async throws -> SendImageResponse {
         if images.count == 1, let image = images.first {
@@ -192,11 +206,12 @@ actor APIClient {
                 data: image.data,
                 mimeType: image.mimeType,
                 caption: caption,
-                reply: reply
+                reply: reply, replyOnlyIfNotLatest: replyOnlyIfNotLatest
             )
         }
         let jobID = progressID ?? UUID().uuidString
         let createPayload = CreatePhotoAlbumRequest(
+            replyOnlyIfNotLatest: replyOnlyIfNotLatest ? true : nil,
             jobId: jobID,
             contactId: contactID,
             photoCount: images.count,

@@ -82,6 +82,18 @@ struct UnifiedReplyDraft {
         if let selected { drafts[selected.contactId] = value }
     }
 
+    @discardableResult
+    mutating func beginAttachment(latestMessage: ChatMessage?) -> ChatMessage? {
+        if selected == nil { selected = latestMessage }
+        isFocused = selected != nil
+        return selected
+    }
+
+    mutating func finishMediaSending(to target: ChatMessage) {
+        // A separate photo caption or recording must not erase a text draft.
+        if selected?.id == target.id { cancelSelection() }
+    }
+
     mutating func select(_ message: ChatMessage) {
         selected = message
         isFocused = true
@@ -312,8 +324,20 @@ private struct UnifiedMessagesView: View {
                 Text("Waiting for messages")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if let progress = session.photoSendProgress.values.max(by: { $0.startedAt < $1.startedAt }) {
+                PhotoSendProgressView(progress: progress)
+            }
             ComposerGlassGroup {
-                HStack(alignment: .bottom, spacing: 10) {
+                HStack(alignment: .bottom, spacing: 7) {
+                    UnifiedMediaControls(
+                        disabled: sending || session.sendingContactIDs.contains((replyDraft.selected ?? session.unifiedMessages.last)?.contactId ?? "") || (replyDraft.selected == nil && session.unifiedMessages.isEmpty),
+                        begin: {
+                            guard let target = replyDraft.beginAttachment(latestMessage: session.unifiedMessages.last) else { return nil }
+                            composerFocused = false
+                            return UnifiedMediaContext(message: target, reply: session.replyTarget(for: target), destination: name(target))
+                        },
+                        onSent: { target in replyDraft.finishMediaSending(to: target); composerFocused = false }
+                    )
                     TextField("Message", text: draft, axis: .vertical)
                         .lineLimit(1...5)
                         .textFieldStyle(.plain)

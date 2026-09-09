@@ -82,3 +82,11 @@ the user has force-quit the app.
 Run either app scheme with the `-demo` launch argument to preview populated
 chats without a backend. Add `-demoConversation` to select a populated
 conversation immediately.
+
+## Unified feed attachments
+
+The Messages composer supports photo albums (up to 30 photos), videos, files, and translated voice notes on iOS, iPadOS, and macOS. Tapping **+** or the microphone captures the selected message, or the latest message in the feed when no reply is selected, before opening the picker or recorder. The destination and message remain fixed while media is prepared. Cancel the reply to choose a different destination.
+
+Photos use the existing optimization and album progress flow. Videos are prepared as MP4; videos and files are limited to 64 MB per attachment. Captions and voice notes use the captured conversation's translation settings. Sending media preserves any separate text draft.
+
+Deploy the matching backend before updating native clients: `/api/send-media` adds confirmed video/file sends, and `replyOnlyIfNotLatest` now applies to photos, staged albums, and prepared voice notes. The server rechecks the captured message in its destination chat immediately before preparing the send; only older messages receive a quote. The existing duplicate-safe delivery tracking also covers video/file sends.
