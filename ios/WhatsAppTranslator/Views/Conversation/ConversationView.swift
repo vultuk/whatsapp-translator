@@ -166,15 +166,14 @@ struct ConversationView: View {
         }
         .platformInlineNavigationTitle()
         #if os(iOS)
-        .toolbarBackground(palette.chatBackground, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .platformChatNavigationBackground()
         .safeAreaInset(edge: .top, spacing: 0) {
             if horizontalSizeClass == .compact {
                 conversationTitleButton
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(palette.chatBackground)
+                    .background(.bar)
             }
         }
         #endif

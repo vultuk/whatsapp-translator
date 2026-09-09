@@ -208,9 +208,9 @@ extension View {
     }
 
     @ViewBuilder
-    func platformChatNavigationBackground(_ color: Color) -> some View {
+    func platformChatNavigationBackground() -> some View {
         #if os(iOS)
-        toolbarBackground(color, for: .navigationBar)
+        toolbarBackground(.bar, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
         #else
         self

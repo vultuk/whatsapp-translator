@@ -212,7 +212,7 @@ private struct UnifiedMessagesView: View {
                 }
             }
             .navigationTitle("Messages")
-            .platformChatNavigationBackground(palette.chatBackground)
+            .platformChatNavigationBackground()
             .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 composer.padding(.bottom, ComposerLayout.bottomAdjustment(for: bottomSafeArea))
