@@ -17,6 +17,7 @@ enum PhotoViewerZoom {
 struct PhotoViewer: View {
     let image: PlatformImage
     let close: () -> Void
+    var onSwipe: (Int) -> Void = { _ in }
 
     @State private var scale = PhotoViewerZoom.minimumScale
     @State private var settledScale = PhotoViewerZoom.minimumScale
@@ -67,7 +68,12 @@ struct PhotoViewer: View {
                         height: settledOffset.height + value.translation.height
                     )
                 }
-                .onEnded { _ in
+                .onEnded { value in
+                    if scale == PhotoViewerZoom.minimumScale,
+                       abs(value.translation.width) > 50,
+                       abs(value.translation.width) > abs(value.translation.height) {
+                        onSwipe(value.translation.width < 0 ? 1 : -1)
+                    }
                     settledOffset = offset
                 }
         )
@@ -168,14 +174,14 @@ private struct PhotoViewerPresentationModifier: ViewModifier {
         #if os(macOS)
         content.sheet(isPresented: $isPresented) {
             if let image {
-                PhotoViewer(image: image) { isPresented = false }
+                PhotoViewer(image: image, close: { isPresented = false })
                     .frame(minWidth: 900, minHeight: 650)
             }
         }
         #else
         content.fullScreenCover(isPresented: $isPresented) {
             if let image {
-                PhotoViewer(image: image) { isPresented = false }
+                PhotoViewer(image: image, close: { isPresented = false })
             }
         }
         #endif
@@ -194,5 +200,137 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+// Use the same zoom surface for every page while keeping actions tied to its message.
+struct PhotoGalleryViewer: View {
+    @Environment(AppSession.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    let messages: [ChatMessage]
+    let initialPhotoID: String
+    let reply: (ChatMessage) -> Void
+    let aiReply: (ChatMessage) -> Void
+    @State private var selectedIndex: Int?
+    @State private var showOriginal = false
+
+    private var index: Int {
+        PhotoGalleryLayout.page(after: 0, current: selectedIndex ?? messages.firstIndex(where: { $0.id == initialPhotoID }) ?? 0, count: messages.count)
+    }
+    private var message: ChatMessage {
+        let original = messages[index]
+        return session.messages[original.contactId]?.first(where: { $0.id == original.id })
+            ?? session.unifiedMessages.first(where: { $0.id == original.id && $0.contactId == original.contactId })
+            ?? original
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let image = session.messageImages[message.id] {
+                PhotoViewer(image: image, close: { dismiss() }, onSwipe: move)
+                    .id(message.id)
+            } else {
+                ZStack(alignment: .topLeading) {
+                    Color.black
+                    Button("Close", systemImage: "xmark") { dismiss() }.padding()
+                    VStack(spacing: 12) {
+                        if session.mediaLoadingIDs.contains(message.id) {
+                            ProgressView().tint(.white)
+                            Text("Loading photo…")
+                        } else {
+                            Image(systemName: "photo").font(.largeTitle)
+                            Button("Retry photo") {
+                                let selected = message
+                                Task { await session.retryMedia(for: selected) }
+                            }
+                        }
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            details
+        }
+        .background(.black).foregroundStyle(.white).preferredColorScheme(.dark)
+        .task(id: message.id) { [message] in await session.loadMedia(for: message) }
+        .photoViewerExitCommand { dismiss() }
+    }
+
+    private var details: some View {
+        VStack(spacing: 10) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let context = message.content?.replyContext {
+                        Text("\(context.senderName ?? "Reply"): \(context.text ?? "")")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if message.contentText != nil {
+                        Text(MessageTextLinkifier.attributedString(from: showOriginal ? (message.alternateText ?? message.displayText) : message.displayText))
+                            .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if let reactions = message.reactions, !reactions.isEmpty {
+                        Text(reactions.keys.sorted().map { "\($0) \(reactions[$0]?.count ?? 0)" }.joined(separator: "  "))
+                            .font(.caption)
+                    }
+                }
+            }.frame(maxHeight: message.contentText == nil && message.content?.replyContext == nil && (message.reactions?.isEmpty ?? true) ? 0 : 84)
+            HStack {
+                Button("Previous photo", systemImage: "chevron.left") { move(-1) }
+                    .labelStyle(.iconOnly).disabled(index == 0)
+                Spacer()
+                Text("\(index + 1) of \(messages.count)").monospacedDigit()
+                    .accessibilityLabel("Photo \(index + 1) of \(messages.count)")
+                Spacer()
+                Button("Next photo", systemImage: "chevron.right") { move(1) }
+                    .labelStyle(.iconOnly).disabled(index == messages.count - 1)
+            }.buttonStyle(.bordered)
+            HStack {
+                Button("Reply", systemImage: "arrowshape.turn.up.left") {
+                    let selected = message
+                    dismiss()
+                    reply(selected)
+                }
+                Spacer()
+                Text(message.date, format: .dateTime.hour().minute()).font(.caption).foregroundStyle(.secondary)
+                Menu("Photo actions", systemImage: "ellipsis.circle") {
+                    if message.canTranslate {
+                        Button("Translate", systemImage: "translate") {
+                            let selected = message
+                            Task { await session.translate(selected) }
+                        }
+                    }
+                    if message.alternateText != nil {
+                        Button(showOriginal ? "Show translated" : "Show original") { showOriginal.toggle() }
+                    }
+                    if message.canGenerateAIReply {
+                        Button("AI reply", systemImage: "sparkles") {
+                            let selected = message
+                            dismiss()
+                            aiReply(selected)
+                        }
+                    }
+                    Button(session.preferences.isStarred(messageID: message.id, contactID: message.contactId) ? "Unstar" : "Star", systemImage: "star") {
+                        session.preferences.toggleStar(messageID: message.id, contactID: message.contactId)
+                    }
+                    Menu("React") {
+                        ForEach(["👍", "❤️", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
+                            Button(emoji) {
+                                let selected = message
+                                Task { await session.react(to: selected, emoji: emoji) }
+                            }
+                        }
+                        Button("Remove reaction") {
+                            let selected = message
+                            Task { await session.react(to: selected, emoji: "") }
+                        }
+                    }
+                }.labelStyle(.iconOnly).disabled(session.activeMessageActionIDs.contains(message.id))
+            }
+        }
+        .padding(.horizontal, 18).padding(.vertical, 12)
+        .frame(maxWidth: 800).background(.black)
+    }
+
+    private func move(_ offset: Int) {
+        selectedIndex = PhotoGalleryLayout.page(after: offset, current: index, count: messages.count)
+        showOriginal = false
     }
 }

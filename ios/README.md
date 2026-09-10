@@ -43,6 +43,19 @@ The feed uses authenticated `GET /api/feed?limit=50&before=…&before_id=…` an
 their existing explicit quote behavior. Use `-demo -demoUnifiedFeed` in Xcode's
 Run arguments to inspect a synthetic mixed-chat example.
 
+## Compact photo galleries
+
+Consecutive photos from the same sender in the same conversation share a compact
+gallery in both Messages and Chats, including photos without WhatsApp album metadata.
+A different sender, chat, non-photo message, or calendar day starts a new run.
+Search and starred filters retain the original conversation boundaries.
+
+The feed shows at most four thumbnails and a remaining-photo count. Open any tile
+to browse every image with swipe or Previous/Next controls, zoom, translated and
+original captions, reactions, and actions for the selected photo. Only preview
+images load in the timeline; the viewer loads other photos as they are selected.
+Use `-demo -demoPhotoGallery` for a synthetic 12-photo group example.
+
 ## Native Mac app
 
 The Mac app provides a resizable two-column conversation window, native menu

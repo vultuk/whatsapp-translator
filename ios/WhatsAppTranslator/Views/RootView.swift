@@ -159,7 +159,7 @@ private struct UnifiedMessagesView: View {
     }
 
     private func messagesContent(bottomSafeArea: CGFloat) -> some View {
-        let messages = session.unifiedMessages
+        let items = ConversationTimelineBuilder.items(from: session.unifiedMessages)
         return NavigationStack {
             ZStack {
                 ChatWallpaper()
@@ -186,21 +186,24 @@ private struct UnifiedMessagesView: View {
                             if session.unifiedMessages.isEmpty && !session.feedLoading && session.feedError == nil {
                                 ContentUnavailableView("All your messages, together", systemImage: "text.bubble", description: Text("Messages from your chats will appear here. Swipe a message to choose where your reply goes."))
                             }
-                            ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                                let message = item.primaryMessage
                                 let startsConversation = index == 0
-                                    || messages[index - 1].contactId != message.contactId
-                                    || !Calendar.current.isDate(messages[index - 1].date, inSameDayAs: message.date)
+                                    || items[index - 1].primaryMessage.contactId != message.contactId
+                                    || !Calendar.current.isDate(items[index - 1].date, inSameDayAs: message.date)
                                 VStack(alignment: .leading, spacing: 5) {
                                     if startsConversation {
                                         source(message)
                                             .padding(.top, index == 0 ? 0 : 10)
                                     }
-                                    bubble(message)
+                                    bubble(message, albumMessages: item.messages.count > 1 ? item.messages : [])
                                 }
-                                .id(message.id)
-                                .task {
-                                    await session.loadMedia(for: message)
-                                    for url in message.extractedURLs { await session.loadLinkPreview(for: url) }
+                                .id(item.id)
+                                .task(id: item.messages.map(\.id)) {
+                                    for photo in item.messages.prefix(PhotoGalleryLayout.previewLimit) {
+                                        await session.loadMedia(for: photo)
+                                        for url in photo.extractedURLs { await session.loadLinkPreview(for: url) }
+                                    }
                                 }
                             }
                             Color.clear.frame(height: 1).id("feed-bottom")
@@ -289,7 +292,7 @@ private struct UnifiedMessagesView: View {
         composerFocused = true
     }
 
-    private func bubble(_ message: ChatMessage) -> some View {
+    private func bubble(_ message: ChatMessage, albumMessages: [ChatMessage] = []) -> some View {
         MessageBubble(
             message: message,
             isStarred: session.preferences.isStarred(messageID: message.id, contactID: message.contactId),
@@ -312,8 +315,18 @@ private struct UnifiedMessagesView: View {
             toggleStar: { session.preferences.toggleStar(messageID: message.id, contactID: message.contactId) },
             react: { emoji in Task { await session.react(to: message, emoji: emoji) } },
             retryMedia: { Task { await session.retryMedia(for: message) } },
-            albumMessages: [], albumImages: [:], albumLoadingIDs: [], albumFailedIDs: [],
-            retryAlbumMedia: { message in Task { await session.retryMedia(for: message) } }
+            albumMessages: albumMessages, albumImages: session.messageImages,
+            albumLoadingIDs: session.mediaLoadingIDs, albumFailedIDs: session.mediaErrorIDs,
+            retryAlbumMedia: { message in Task { await session.retryMedia(for: message) } },
+            albumReply: select,
+            albumAIReply: { photo in
+                select(photo)
+                Task {
+                    if let suggestion = await session.generateAIReply(to: photo), replyDraft.selected?.id == photo.id, !sending {
+                        replyDraft.drafts[photo.contactId] = suggestion
+                    }
+                }
+            }
         )
     }
 

@@ -126,6 +126,8 @@ struct MessageBubble: View {
     let albumLoadingIDs: Set<String>
     let albumFailedIDs: Set<String>
     let retryAlbumMedia: (ChatMessage) -> Void
+    var albumReply: ((ChatMessage) -> Void)? = nil
+    var albumAIReply: ((ChatMessage) -> Void)? = nil
     @State private var showAlternate = false
     @State private var showActions = false
     @State private var demoSwipeOffset: CGFloat = 0
@@ -203,7 +205,9 @@ struct MessageBubble: View {
                             images: albumImages,
                             loadingIDs: albumLoadingIDs,
                             failedIDs: albumFailedIDs,
-                            retry: retryAlbumMedia
+                            retry: retryAlbumMedia,
+                            reply: albumReply ?? { _ in reply() },
+                            aiReply: albumAIReply ?? { _ in aiReply() }
                         )
                     } else {
                         RichMessageContentView(
@@ -547,79 +551,62 @@ private struct PhotoAlbumGrid: View {
     let loadingIDs: Set<String>
     let failedIDs: Set<String>
     let retry: (ChatMessage) -> Void
-    private let columns = [
-        GridItem(.flexible(), spacing: 3),
-        GridItem(.flexible(), spacing: 3),
-    ]
+    let reply: (ChatMessage) -> Void
+    let aiReply: (ChatMessage) -> Void
+    @State private var selectedPhoto: ChatMessage?
+    private let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             LazyVGrid(columns: columns, spacing: 3) {
-                ForEach(messages) { message in
-                    AlbumPhotoTile(
-                        message: message,
-                        image: images[message.id],
-                        isLoading: loadingIDs.contains(message.id),
-                        failed: failedIDs.contains(message.id),
-                        retry: { retry(message) }
-                    )
-                    .id(message.id)
-                }
-            }
-            .frame(width: 280)
-
-            if let caption = messages.compactMap({ message -> String? in
-                guard let caption = message.content?.caption?.trimmingCharacters(in: .whitespacesAndNewlines),
-                      !caption.isEmpty else { return nil }
-                return showAlternate ? (message.alternateText ?? message.displayText) : message.displayText
-            }).first {
-                Text(MessageTextLinkifier.attributedString(from: caption))
-                    .font(.body)
-                    .textSelection(.enabled)
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Photo album, \(messages.count) photos")
-    }
-}
-
-private struct AlbumPhotoTile: View {
-    let message: ChatMessage
-    let image: PlatformImage?
-    let isLoading: Bool
-    let failed: Bool
-    let retry: () -> Void
-    @State private var showPhotoViewer = false
-
-    var body: some View {
-        Group {
-            if let image {
-                Image(platformImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .contentShape(Rectangle())
-                    .onTapGesture { showPhotoViewer = true }
-                    .photoViewer(isPresented: $showPhotoViewer, image: image)
-            } else if isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.primary.opacity(0.05))
-            } else {
-                Button(action: retry) {
-                    VStack(spacing: 5) {
-                        Image(systemName: failed ? "arrow.clockwise" : "photo.fill")
-                        Text(failed ? "Retry" : "Load")
-                            .font(.caption2)
+                ForEach(Array(messages.prefix(PhotoGalleryLayout.previewLimit).enumerated()), id: \.element.id) { index, message in
+                    Button { selectedPhoto = message } label: {
+                        ZStack {
+                            Color.primary.opacity(0.05)
+                            if let image = images[message.id] {
+                                GeometryReader { geometry in
+                                    Image(platformImage: image).resizable().scaledToFill()
+                                        .frame(width: geometry.size.width, height: geometry.size.height)
+                                        .clipped()
+                                }
+                            } else if loadingIDs.contains(message.id) {
+                                ProgressView()
+                            } else {
+                                Image(systemName: failedIDs.contains(message.id) ? "arrow.clockwise" : "photo.fill")
+                            }
+                            if index == PhotoGalleryLayout.previewLimit - 1, PhotoGalleryLayout.hiddenCount(total: messages.count) > 0 {
+                                Color.black.opacity(0.45)
+                                Text("+\(PhotoGalleryLayout.hiddenCount(total: messages.count))")
+                                    .font(.largeTitle.weight(.semibold)).foregroundStyle(.white)
+                            }
+                        }
+                        .frame(height: 126)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.primary.opacity(0.05))
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open photo \(index + 1) of \(messages.count)")
+                    .accessibilityHint(index == PhotoGalleryLayout.previewLimit - 1 ? "Opens the gallery with all photos" : "View photo and browse the gallery")
                 }
-                .buttonStyle(.plain)
+            }
+            Text("\(messages.count) photos").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            if let caption = messages.first(where: { !($0.content?.caption?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }) {
+                Text(MessageTextLinkifier.attributedString(from: showAlternate ? (caption.alternateText ?? caption.displayText) : caption.displayText))
+                    .font(.body).lineLimit(2)
             }
         }
-        .frame(height: 136)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .accessibilityLabel("Photo \((message.albumIndex ?? 0) + 1) of album")
+        .frame(maxWidth: 260)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Photo gallery, \(messages.count) photos")
+        #if os(macOS)
+        .sheet(item: $selectedPhoto) { photo in
+            PhotoGalleryViewer(messages: messages, initialPhotoID: photo.id, reply: reply, aiReply: aiReply)
+                .frame(minWidth: 800, minHeight: 650)
+        }
+        #else
+        .fullScreenCover(item: $selectedPhoto) { photo in
+            PhotoGalleryViewer(messages: messages, initialPhotoID: photo.id, reply: reply, aiReply: aiReply)
+        }
+        #endif
     }
 }
 

@@ -187,17 +187,32 @@ struct PhotoAlbumTimeline: Identifiable {
     var date: Date { messages.map(\.date).min() ?? primaryMessage.date }
 }
 
+enum PhotoGalleryLayout {
+    static let previewLimit = 4
+    static func hiddenCount(total: Int) -> Int { max(0, total - previewLimit) }
+    static func page(after offset: Int, current: Int, count: Int) -> Int {
+        min(max(0, count - 1), max(0, current + offset))
+    }
+}
+
 enum ConversationTimelineItem: Identifiable {
     case message(ChatMessage)
     case photoAlbum(PhotoAlbumTimeline)
 
+    // The first message remains a scroll anchor when a live photo extends a run.
     var id: String {
         switch self {
         case let .message(message): message.id
-        case let .photoAlbum(album): "album:\(album.id)"
+        case let .photoAlbum(album): album.id
         }
     }
-
+    var messages: [ChatMessage] {
+        switch self {
+        case let .message(message): [message]
+        case let .photoAlbum(album): album.messages
+        }
+    }
+    var primaryMessage: ChatMessage { messages[0] }
     var date: Date {
         switch self {
         case let .message(message): message.date
@@ -208,28 +223,55 @@ enum ConversationTimelineItem: Identifiable {
 
 enum ConversationTimelineBuilder {
     static func items(from messages: [ChatMessage]) -> [ConversationTimelineItem] {
-        let grouped = Dictionary(grouping: messages.compactMap { message -> (String, ChatMessage)? in
-            guard message.isImage, let albumID = message.albumID else { return nil }
-            return (albumID, message)
-        }, by: \.0).mapValues { $0.map(\.1) }
-        var emittedAlbumIDs = Set<String>()
-
-        return messages.compactMap { message in
-            guard let albumID = message.albumID,
-                  let albumMessages = grouped[albumID],
-                  albumMessages.count > 1 else {
-                return .message(message)
+        var result: [ConversationTimelineItem] = []
+        var run: [ChatMessage] = []
+        func flush() {
+            guard let first = run.first else { return }
+            if run.count == 1 {
+                result.append(.message(first))
+            } else {
+                // Preserve order within each explicit album even when one run
+                // joins several albums and ordinary image messages.
+                var ordered: [ChatMessage] = []
+                var start = 0
+                while start < run.count {
+                    var end = start + 1
+                    if let albumID = run[start].albumID {
+                        while end < run.count && run[end].albumID == albumID { end += 1 }
+                    }
+                    ordered += run[start..<end].sorted {
+                        if $0.albumIndex != $1.albumIndex { return ($0.albumIndex ?? Int.max) < ($1.albumIndex ?? Int.max) }
+                        return $0.timestamp == $1.timestamp ? $0.id < $1.id : $0.timestamp < $1.timestamp
+                    }
+                    start = end
+                }
+                result.append(.photoAlbum(PhotoAlbumTimeline(id: first.id, messages: ordered)))
             }
-            guard emittedAlbumIDs.insert(albumID).inserted else { return nil }
-            let ordered = albumMessages.sorted {
-                let leftIndex = $0.albumIndex ?? Int.max
-                let rightIndex = $1.albumIndex ?? Int.max
-                if leftIndex != rightIndex { return leftIndex < rightIndex }
-                if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
-                return $0.id < $1.id
-            }
-            return .photoAlbum(PhotoAlbumTimeline(id: albumID, messages: ordered))
+            run.removeAll(keepingCapacity: true)
         }
+        for message in messages {
+            if let previous = run.last, !canGroup(previous, message) { flush() }
+            if message.isImage {
+                run.append(message)
+            } else {
+                result.append(.message(message))
+            }
+        }
+        flush()
+        return result
+    }
+
+    private static func canGroup(_ left: ChatMessage, _ right: ChatMessage) -> Bool {
+        guard left.isImage, right.isImage, left.contactId == right.contactId,
+              left.isFromMe == right.isFromMe,
+              Calendar.current.isDate(left.date, inSameDayAs: right.date) else { return false }
+        if left.isFromMe { return true }
+        if !left.contactId.contains("@g.us"), left.chatType.lowercased() != "group" { return true }
+        if left.senderJID != nil || right.senderJID != nil {
+            return left.senderJID != nil && left.senderJID == right.senderJID
+        }
+        // A display name alone cannot distinguish two group participants.
+        return left.albumID != nil && left.albumID == right.albumID
     }
 }
 

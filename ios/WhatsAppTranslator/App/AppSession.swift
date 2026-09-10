@@ -1222,6 +1222,9 @@ final class AppSession {
         }
         phase = .ready
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-demoPhotoGallery") {
+            loadPhotoGalleryDemo()
+        }
         if ProcessInfo.processInfo.arguments.contains("-demoLiveReactions") {
             startLiveReactionDemo()
         }
@@ -1229,6 +1232,33 @@ final class AppSession {
     }
 
     #if DEBUG
+    private func loadPhotoGalleryDemo() {
+        let contactID = "gallery-preview@g.us"
+        let base = Int64(Date().timeIntervalSince1970 * 1_000) - 120_000
+        contacts = [Contact(id: contactID, name: "Weekend photos", phone: nil, type: "group", lastMessageTime: base + 40_000, unreadCount: 0, pinnedAt: nil, lastMessagePreview: "Alex: 12 photos")]
+        var photos: [ChatMessage] = []
+        for index in 0..<12 {
+            let payload: [String: Any] = [
+                "id": "gallery-preview-\(index)", "contactId": contactID,
+                "timestamp": base + Int64(index) * 1_000, "isFromMe": false,
+                "isForwarded": false, "senderName": "Alex", "senderPhone": "447700900123",
+                "contactName": "Weekend photos", "chatType": "group", "contentType": "Image",
+                "content": ["type": "image", "caption": "Photo \(index + 1) from our afternoon walk.", "has_media": true],
+                "isTranslated": false,
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                  var photo = try? JSONDecoder().decode(ChatMessage.self, from: data) else { continue }
+            if index == 7 { photo.reactions = ["❤️": ["447700900456"]] }
+            photos.append(photo)
+            messageImages[photo.id] = DemoImageFactory.landscape(size: CGSize(width: 640, height: index.isMultiple(of: 2) ? 420 : 800))
+        }
+        messages = [contactID: photos]
+        feedByID = Dictionary(uniqueKeysWithValues: photos.map { ($0.id, $0) })
+        feedHasLoaded = true
+        mainTab = .messages
+        selectedContactID = contactID
+    }
+
     private func startLiveReactionDemo() {
         let contactID = "reaction-preview@g.us"
         let timestamp = Int64(Date().timeIntervalSince1970 * 1_000)

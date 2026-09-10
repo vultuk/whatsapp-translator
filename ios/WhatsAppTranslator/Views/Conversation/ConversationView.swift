@@ -290,13 +290,16 @@ struct ConversationView: View {
             case let .photoAlbum(album):
                 messageBubble(message: album.primaryMessage, albumMessages: album.messages)
                     .id(item.id)
-                    .task { await loadTimelineMedia(for: album.messages) }
+                    .task(id: album.messages.map(\.id)) { await loadTimelineMedia(for: Array(album.messages.prefix(PhotoGalleryLayout.previewLimit))) }
             }
         }
     }
 
     private var timelineItems: [ConversationTimelineItem] {
-        ConversationTimelineBuilder.items(from: visibleMessages)
+        let visibleIDs = Set(visibleMessages.map(\.id))
+        return ConversationTimelineBuilder.items(from: messages).flatMap { item in
+            ConversationTimelineBuilder.items(from: item.messages.filter { visibleIDs.contains($0.id) })
+        }
     }
 
     private func messageBubble(message: ChatMessage, albumMessages: [ChatMessage] = []) -> some View {
@@ -319,7 +322,9 @@ struct ConversationView: View {
                 albumImages: session.messageImages,
                 albumLoadingIDs: session.mediaLoadingIDs,
                 albumFailedIDs: session.mediaErrorIDs,
-                retryAlbumMedia: { albumMessage in Task { await session.retryMedia(for: albumMessage) } }
+                retryAlbumMedia: { albumMessage in Task { await session.retryMedia(for: albumMessage) } },
+                albumReply: selectReply,
+                albumAIReply: generateAIReply
             )
     }
 
