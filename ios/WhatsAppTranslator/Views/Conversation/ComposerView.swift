@@ -402,36 +402,21 @@ struct UnifiedMediaControls: View {
     }
 
     var body: some View {
-        HStack(spacing: 2) {
-            Button {
-                guard let captured = begin() else { return }
-                context = captured
-                choices = true
-            } label: {
-                Group {
-                    if loading { ProgressView().controlSize(.small) }
-                    else { Image(systemName: "plus").font(.system(size: 23)) }
-                }.frame(width: 44, height: 46)
-                    .translatorGlassControl(in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Add attachment")
-            .help("Send photos, videos, files, or a voice note")
-            .disabled(unavailable)
-
-            Button {
-                guard let captured = begin() else { return }
-                context = captured
-                voicePresented = true
-            } label: {
-                Image(systemName: "mic.fill").font(.system(size: 21))
-                    .frame(width: 44, height: 46)
-                    .translatorGlassControl(in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Record voice note")
-            .disabled(unavailable)
+        Button {
+            guard let captured = begin() else { return }
+            context = captured
+            choices = true
+        } label: {
+            Group {
+                if loading { ProgressView().controlSize(.small) }
+                else { Image(systemName: "plus").font(.system(size: 23)) }
+            }.frame(width: 44, height: 46)
+                .translatorGlassControl(in: Circle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add attachment")
+        .help("Send photos, videos, files, or a voice note")
+        .disabled(unavailable)
         #if os(macOS)
         .popover(isPresented: $choices, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 12) {
