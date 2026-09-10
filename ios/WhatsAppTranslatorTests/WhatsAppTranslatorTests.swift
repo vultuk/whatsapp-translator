@@ -208,6 +208,29 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertEqual(appIdentity.suggestionType, .instantMessageAddress)
     }
 
+    func testGroupNotificationKeepsNameInCompactAndFallbackBody() throws {
+        let content = UNMutableNotificationContent()
+        content.title = "Judit"
+        content.body = "Szia"
+        content.userInfo = [
+            "contactId": "family@g.us", "senderName": "Judit",
+            "conversationName": "Family",
+            "messageBody": "[Family] Hello"
+        ]
+        let prepared = NotificationMessagePresentation.preparedContent(content)
+        let communication = NotificationMessagePresentation.messagingContent(content, avatarData: nil, donate: false)
+        XCTAssertEqual(communication.body, "[Family] Hello")
+        XCTAssertEqual(prepared.title, "Judit")
+        XCTAssertEqual(prepared.body, "[Family] Hello")
+        XCTAssertEqual(NotificationMessagePresentation.preparedContent(prepared).body, "[Family] Hello")
+
+        content.userInfo["messageBody"] = "Hello"
+        XCTAssertEqual(NotificationMessagePresentation.preparedContent(content).body, "[Family] Hello")
+
+        content.userInfo["contactId"] = "friend@s.whatsapp.net"
+        XCTAssertEqual(NotificationMessagePresentation.preparedContent(content).body, "Hello")
+    }
+
     func testAccessibilityLayoutUsesStackedRowsAndCompactMessageChrome() {
         XCTAssertFalse(NativeLayoutPolicy.usesStackedChatRow(for: .large))
         XCTAssertFalse(NativeLayoutPolicy.usesCompactMessageChrome(for: .large))

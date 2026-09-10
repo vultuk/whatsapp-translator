@@ -83,6 +83,16 @@ Run either app scheme with the `-demo` launch argument to preview populated
 chats without a backend. Add `-demoConversation` to select a populated
 conversation immediately.
 
+Add `-demoNotification` to an iOS Debug run to preview a synthetic translated
+group alert using the same communication-notification formatter as incoming
+pushes. Enter each launch argument on its own row in Xcode. Allow notifications when prompted. It fires after five seconds and
+does not contact the backend or send a WhatsApp message.
+
+Live text and caption alerts are persisted on the server until language detection
+and any required translation finish. Translation retries and server restarts
+retain pending alerts; imported history does not create alerts. Compact group
+alerts include `[Group name]` in the body because iOS can omit the group subtitle.
+
 ## Unified feed attachments
 
 The Messages composer supports photo albums (up to 30 photos), videos, files, and translated voice notes on iOS, iPadOS, and macOS. Tapping **+** or the microphone captures the selected message, or the latest message in the feed when no reply is selected, before opening the picker or recorder. The destination and message remain fixed while media is prepared. Cancel the reply to choose a different destination.

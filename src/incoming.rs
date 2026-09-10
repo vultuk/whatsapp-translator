@@ -7,6 +7,7 @@ use std::{
 
 pub fn start(state: Arc<AppState>) -> anyhow::Result<()> {
     state.store.recover_translations()?;
+    start_notifications(state.clone());
     if state.translator.is_none() {
         return Ok(());
     }
@@ -33,6 +34,34 @@ pub fn start(state: Arc<AppState>) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn start_notifications(state: Arc<AppState>) {
+    // One consumer reloads the saved message; never use the original bridge
+    // snapshot, which predates the asynchronous translation.
+    tokio::spawn(async move {
+        loop {
+            match state.store.ready_notification_ids() {
+                Ok(ids) => {
+                    for id in ids {
+                        match state.store.get_message_by_id(&id) {
+                            Ok(Some(message)) => state.send_push_notification(&message).await,
+                            Ok(None) => {}
+                            Err(error) => {
+                                tracing::warn!("Unable to load queued notification: {error}");
+                                continue;
+                            }
+                        }
+                        if let Err(error) = state.store.finish_notification(&id) {
+                            tracing::warn!("Unable to complete queued notification: {error}");
+                        }
+                    }
+                }
+                Err(error) => tracing::warn!("Notification queue failed: {error}"),
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    });
+}
+
 async fn translate(state: &AppState, id: &str) -> anyhow::Result<()> {
     use anyhow::Context;
     let epoch = state.voice_epoch.load(Ordering::SeqCst);
@@ -57,6 +86,14 @@ async fn translate(state: &AppState, id: &str) -> anyhow::Result<()> {
         ),
     )
     .await??;
+    anyhow::ensure!(
+        !result.needs_translation
+            || result
+                .translated_text
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty()),
+        "Translation returned no translated text"
+    );
     if epoch != state.voice_epoch.load(Ordering::SeqCst) {
         return Ok(());
     }

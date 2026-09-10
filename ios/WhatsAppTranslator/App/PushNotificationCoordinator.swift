@@ -247,6 +247,40 @@ final class NotificationAppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         UNUserNotificationCenter.current().delegate = self
         BackgroundPhotoUploadSession.cancelLegacyMonolithicUploads()
         PushNotificationCoordinator.shared.registerMessagingCategory()
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-demoNotification") {
+            Task {
+                let center = UNUserNotificationCenter.current()
+                guard (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) == true else {
+                    print("Notification preview requires notification permission in Settings.")
+                    return
+                }
+                let content = UNMutableNotificationContent()
+                content.title = "Alex"
+                content.subtitle = "Family group"
+                content.body = "[Family group] It’s lovely to see everyone together!"
+                content.sound = .default
+                content.categoryIdentifier = MessagingNotificationContract.categoryIdentifier
+                content.threadIdentifier = "notification-demo@g.us"
+                content.userInfo = [
+                    "contactId": "notification-demo@g.us", "messageId": "notification-demo",
+                    "senderId": "447700900123", "senderName": "Alex",
+                    "conversationName": "Family group", "chatType": "group",
+                    "messageBody": content.body
+                ]
+                let displayed = NotificationMessagePresentation.messagingContent(content, avatarData: nil, donate: false)
+                do {
+                    try await center.add(UNNotificationRequest(
+                        identifier: "translated-group-notification-preview", content: displayed,
+                        trigger: UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
+                    ))
+                    print("Translated group notification preview scheduled.")
+                } catch {
+                    print("Notification preview failed: \(error.localizedDescription)")
+                }
+            }
+        }
+        #endif
         return true
     }
 

@@ -132,6 +132,7 @@ impl ApnsClient {
             client: reqwest::Client::builder()
                 .http2_prior_knowledge()
                 .http2_adaptive_window(true)
+                .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .context("Failed to create APNs HTTP client")?,
             key_id,
@@ -286,7 +287,7 @@ impl PushNotification {
         avatar_url: Option<&str>,
         reaction_target: Option<&StoredMessage>,
     ) -> Self {
-        let is_group = message.chat_type == "group";
+        let is_group = message.chat_type == "group" || message.contact_id.ends_with("@g.us");
         let conversation_name = message
             .contact_name
             .as_deref()
@@ -312,7 +313,17 @@ impl PushNotification {
         } else {
             None
         };
-        let body = truncate(&notification_body(message, reaction_target), 500);
+        let message_text = notification_body(message, reaction_target);
+        // Compact communication banners can omit the subtitle/group intent.
+        // Keep the conversation visible in their body as well as in metadata.
+        let body = truncate(
+            &if is_group {
+                format!("[{}] {}", truncate(conversation_name, 100), message_text)
+            } else {
+                message_text.clone()
+            },
+            500,
+        );
 
         let mut alert = json!({
             "title": title,
@@ -564,7 +575,10 @@ mod tests {
             notification.payload["aps"]["alert"]["subtitle"],
             "The Skinners"
         );
-        assert_eq!(notification.payload["aps"]["alert"]["body"], "Hello");
+        assert_eq!(
+            notification.payload["aps"]["alert"]["body"],
+            "[The Skinners] Hello"
+        );
         assert_eq!(notification.payload["aps"]["badge"], 7);
         assert_eq!(notification.payload["aps"]["content-available"], 1);
         assert_eq!(notification.payload["aps"]["mutable-content"], 1);
@@ -575,7 +589,7 @@ mod tests {
         assert_eq!(notification.payload["senderName"], "Virág");
         assert_eq!(notification.payload["conversationName"], "The Skinners");
         assert_eq!(notification.payload["chatType"], "group");
-        assert_eq!(notification.payload["messageBody"], "Hello");
+        assert_eq!(notification.payload["messageBody"], "[The Skinners] Hello");
         assert_eq!(
             notification.payload["avatarUrl"],
             "https://cdn.example.com/avatar.jpg"
@@ -623,7 +637,7 @@ mod tests {
 
         assert_eq!(
             notification.payload["aps"]["alert"]["body"],
-            "Reacted 😂 to “Mother... slow down!”"
+            "[The Skinners] Reacted 😂 to “Mother... slow down!”"
         );
     }
 

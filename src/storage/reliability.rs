@@ -14,6 +14,35 @@ pub struct OutboxEntry {
 }
 
 impl MessageStore {
+    /// Only release an alert after language detection has finished and, when
+    /// needed, a nonempty translation has been saved. AI failures stay queued.
+    pub fn ready_notification_ids(&self) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM pending_notifications WHERE message_id NOT IN (SELECT id FROM messages)",
+            [],
+        )?;
+        let mut query = conn.prepare(
+            "SELECT n.message_id FROM pending_notifications n JOIN messages m ON m.id=n.message_id
+             WHERE n.requires_translation=0 OR
+               (m.source_language IS NOT NULL AND
+                 (m.is_translated=0 OR LENGTH(TRIM(COALESCE(m.translated_text,'')))>0))
+             ORDER BY m.timestamp, n.rowid LIMIT 20",
+        )?;
+        let ids = query
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(ids)
+    }
+
+    pub fn finish_notification(&self, id: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "DELETE FROM pending_notifications WHERE message_id=?",
+            params![id],
+        )?;
+        Ok(())
+    }
+
     pub fn unfinished_outbox_ids(&self) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
         let mut query = conn.prepare("SELECT id FROM outbox WHERE state='uncertain'")?;

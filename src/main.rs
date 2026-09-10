@@ -340,7 +340,9 @@ async fn handle_web_event(
 
             // Store message
             if !already_stored {
-                store.add_message(&stored_msg)?;
+                let notification = (!stored_msg.is_from_me && !is_history)
+                    .then_some(translator.is_some() && stored_msg.original_text.is_some());
+                store.add_message_with_notification(&stored_msg, notification)?;
             }
 
             if !stored_msg.is_from_me
@@ -353,14 +355,6 @@ async fn handle_web_event(
 
             if !stored_msg.is_from_me && !is_history && stored_msg.is_audio() {
                 voice::queue_incoming(state.clone(), stored_msg.id.clone());
-            }
-
-            if !stored_msg.is_from_me && !is_history && !already_stored {
-                let push_state = Arc::clone(state);
-                let push_message = stored_msg.clone();
-                tokio::spawn(async move {
-                    push_state.send_push_notification(&push_message).await;
-                });
             }
 
             // Broadcast to WebSocket clients

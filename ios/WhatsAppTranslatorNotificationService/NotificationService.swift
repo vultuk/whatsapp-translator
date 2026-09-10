@@ -5,15 +5,17 @@ import Intents
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
     private var contentHandler: ((UNNotificationContent) -> Void)?
     private var fallbackContent: UNNotificationContent?
+    private let completionLock = NSLock()
 
     override func didReceive(
         _ request: UNNotificationRequest,
         withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void
     ) {
+        let content = NotificationMessagePresentation.preparedContent(request.content)
+        completionLock.lock()
         self.contentHandler = contentHandler
-        fallbackContent = request.content
-
-        let content = request.content
+        fallbackContent = content
+        completionLock.unlock()
         let userInfo = content.userInfo
         guard let contactID = userInfo["contactId"] as? String,
               let senderName = userInfo["senderName"] as? String,
@@ -46,62 +48,22 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     }
 
     private func deliverMessagingContent(_ content: UNNotificationContent, avatarData: Data?) {
-        let userInfo = content.userInfo
-        guard let contactID = userInfo["contactId"] as? String,
-              let senderName = userInfo["senderName"] as? String else {
-            finish(with: content)
-            return
-        }
-        let senderID = (userInfo["senderId"] as? String)?.nilIfBlank
-        let conversationName = (userInfo["conversationName"] as? String)?.nilIfBlank
-        let isGroup = (userInfo["chatType"] as? String) == "group" || contactID.contains("@g.us")
-        let body = (userInfo["messageBody"] as? String)?.nilIfBlank ?? content.body
-        let speakableGroupName = isGroup
-            ? conversationName.map(INSpeakableString.init(spokenPhrase:))
-            : nil
-        let identity = NotificationPersonIdentity.sender(senderID: senderID, senderName: senderName)
-        let sender = INPerson(
-            personHandle: INPersonHandle(value: identity.handleValue, type: identity.handleType),
-            nameComponents: nil,
-            displayName: senderName,
-            image: avatarData.map(INImage.init(imageData:)),
-            contactIdentifier: nil,
-            customIdentifier: senderID ?? senderName,
-            isContactSuggestion: identity.isContactSuggestion,
-            suggestionType: identity.suggestionType
-        )
-        let intent = INSendMessageIntent(
-            recipients: nil,
-            outgoingMessageType: .outgoingMessageText,
-            content: body,
-            speakableGroupName: speakableGroupName,
-            conversationIdentifier: contactID,
-            serviceName: "Babel Bridge",
-            sender: sender,
-            attachments: nil
-        )
-
-        let interaction = INInteraction(intent: intent, response: nil)
-        interaction.direction = .incoming
-        interaction.donate { _ in }
-
-        do {
-            let messagingContent = try content.updating(from: intent)
-            fallbackContent = messagingContent
-            finish(with: messagingContent)
-        } catch {
-            finish(with: content)
-        }
+        finish(with: NotificationMessagePresentation.messagingContent(content, avatarData: avatarData))
     }
 
     private func finish(with content: UNNotificationContent) {
+        completionLock.lock()
         let handler = contentHandler
         contentHandler = nil
+        completionLock.unlock()
         handler?(content)
     }
 
     override func serviceExtensionTimeWillExpire() {
-        if let fallbackContent {
+        completionLock.lock()
+        let fallback = fallbackContent
+        completionLock.unlock()
+        if let fallbackContent = fallback {
             finish(with: fallbackContent)
         }
     }

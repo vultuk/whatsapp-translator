@@ -4,7 +4,7 @@
     "alert": {
       "title": "Eileen Skinner",
       "subtitle": "The Skinners",
-      "body": "Last train is delayed, but only by twenty minutes or so. Xx"
+      "body": "[The Skinners] Last train is delayed, but only by twenty minutes or so. Xx"
     },
     "sound": "default",
     "badge": 3,
@@ -18,5 +18,5 @@
   "senderName": "Eileen Skinner",
   "conversationName": "The Skinners",
   "chatType": "group",
-  "messageBody": "Last train is delayed, but only by twenty minutes or so. Xx"
+  "messageBody": "[The Skinners] Last train is delayed, but only by twenty minutes or so. Xx"
 }

@@ -277,6 +277,10 @@ impl MessageStore {
                 attempts INTEGER NOT NULL DEFAULT 0,
                 retry_at INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS pending_notifications (
+                message_id TEXT PRIMARY KEY,
+                requires_translation INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS outbox (
                 id TEXT PRIMARY KEY,
                 fingerprint TEXT NOT NULL,
@@ -978,7 +982,18 @@ impl MessageStore {
 
     /// Add a message to the store
     pub fn add_message(&self, msg: &StoredMessage) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        self.add_message_with_notification(msg, None)
+    }
+
+    /// Persist live notification eligibility with the message so a restart cannot
+    /// lose an alert while translation is pending. History never opts in.
+    pub fn add_message_with_notification(
+        &self,
+        msg: &StoredMessage,
+        notification_requires_translation: Option<bool>,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
         let preview = Self::generate_message_preview(
             Some(&msg.content_json),
             Some(&msg.content_type),
@@ -986,7 +1001,7 @@ impl MessageStore {
             msg.translated_text.as_deref(),
         );
 
-        conn.execute(
+        let inserted = tx.execute(
             r#"
             INSERT OR IGNORE INTO messages 
             (id, contact_id, timestamp, is_from_me, is_forwarded, sender_name, sender_phone, 
@@ -1013,7 +1028,7 @@ impl MessageStore {
             ],
         )?;
 
-        conn.execute(
+        tx.execute(
             r#"
             UPDATE contacts
             SET last_message_time = MAX(last_message_time, ?2),
@@ -1022,7 +1037,21 @@ impl MessageStore {
             "#,
             params![msg.contact_id, msg.timestamp, preview],
         )?;
-
+        if inserted > 0 && !msg.is_from_me {
+            if let Some(requires_translation) = notification_requires_translation {
+                tx.execute(
+                    "INSERT INTO pending_notifications(message_id, requires_translation) VALUES (?, ?)",
+                    params![msg.id, requires_translation],
+                )?;
+                if requires_translation && msg.source_language.is_none() {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO translation_jobs(message_id) VALUES (?)",
+                        params![msg.id],
+                    )?;
+                }
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1951,6 +1980,7 @@ impl MessageStore {
             DELETE FROM link_previews;
             DELETE FROM voice_notes;
             DELETE FROM translation_jobs;
+            DELETE FROM pending_notifications;
             DELETE FROM outbox_attempts;
             DELETE FROM outbox;
             DELETE FROM mcp_send_records;
@@ -2826,6 +2856,83 @@ mod tests {
             is_translated: false,
             delivery_status: None,
         }
+    }
+
+    #[test]
+    fn live_notifications_wait_for_translation_through_retry_and_restart() {
+        let (store, dir) = test_store();
+        store
+            .upsert_contact("chat@example.test", Some("Test Chat"), None, None, 1)
+            .unwrap();
+        store
+            .add_message_with_notification(&test_message("Szia", 1), Some(true))
+            .unwrap();
+        assert!(store.ready_notification_ids().unwrap().is_empty());
+        assert_eq!(store.claim_translation().unwrap().as_deref(), Some("Szia"));
+        store.retry_translation("Szia").unwrap();
+        assert!(store.ready_notification_ids().unwrap().is_empty());
+        drop(store);
+
+        let store = MessageStore::new(&dir).unwrap();
+        assert!(store.ready_notification_ids().unwrap().is_empty());
+        store
+            .finish_translation("Szia", Some("Hello"), "Hungarian", true)
+            .unwrap();
+        assert_eq!(store.ready_notification_ids().unwrap(), vec!["Szia"]);
+        let saved = store.get_message_by_id("Szia").unwrap().unwrap();
+        assert_eq!(saved.translated_text.as_deref(), Some("Hello"));
+        store.finish_notification("Szia").unwrap();
+        // Replayed bridge events must not create a second alert.
+        store
+            .add_message_with_notification(&test_message("Szia", 1), Some(true))
+            .unwrap();
+        assert!(store.ready_notification_ids().unwrap().is_empty());
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn notification_queue_excludes_history_and_outgoing_and_allows_detected_target_language() {
+        let (store, dir) = test_store();
+        store
+            .upsert_contact("chat@example.test", None, None, None, 1)
+            .unwrap();
+        store.add_message(&test_message("history", 1)).unwrap();
+        store.enqueue_translation("history").unwrap();
+        store
+            .finish_translation("history", Some("Old message"), "Hungarian", true)
+            .unwrap();
+        let mut outgoing = test_message("outgoing", 2);
+        outgoing.is_from_me = true;
+        store
+            .add_message_with_notification(&outgoing, Some(false))
+            .unwrap();
+        store
+            .add_message_with_notification(&test_message("English", 3), Some(true))
+            .unwrap();
+        store
+            .add_message_with_notification(&test_message("empty-result", 4), Some(true))
+            .unwrap();
+        store
+            .finish_translation("empty-result", Some(" "), "Hungarian", true)
+            .unwrap();
+        assert!(store.ready_notification_ids().unwrap().is_empty());
+        store
+            .finish_translation("English", None, "English", false)
+            .unwrap();
+        assert_eq!(store.ready_notification_ids().unwrap(), vec!["English"]);
+        store.finish_notification("English").unwrap();
+        let mut photo = test_message("photo", 5);
+        photo.original_text = None;
+        photo.content_type = "Image".into();
+        store
+            .add_message_with_notification(&photo, Some(false))
+            .unwrap();
+        assert_eq!(store.ready_notification_ids().unwrap(), vec!["photo"]);
+        store.delete_message("photo").unwrap();
+        assert!(store.ready_notification_ids().unwrap().is_empty());
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
