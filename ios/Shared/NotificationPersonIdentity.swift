@@ -9,11 +9,16 @@ enum NotificationMessagePresentation {
             || (info["contactId"] as? String)?.hasSuffix("@g.us") == true
         let text = (info["messageBody"] as? String) ?? content.body
         let group = (info["conversationName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        copy.body = text
         if isGroup, let group, !group.isEmpty {
-            let prefix = "[\(String(group.prefix(100)))] "
-            copy.body = text.hasPrefix(prefix) ? text : prefix + text
-        } else {
-            copy.body = text
+            copy.subtitle = String(group.prefix(100))
+            // Accept payloads from the previous server without repeating the group.
+            let legacyPrefix = "[\(copy.subtitle)] "
+            if (info["messageBodyIncludesGroup"] as? Bool) != false, text.hasPrefix(legacyPrefix) {
+                copy.body = String(text.dropFirst(legacyPrefix.count))
+            }
+        } else if !isGroup {
+            copy.subtitle = ""
         }
         copy.body = String(copy.body.prefix(500))
         return copy
@@ -28,7 +33,11 @@ enum NotificationMessagePresentation {
         }
         let senderID = (userInfo["senderId"] as? String)?.notificationValue
         let conversationName = (userInfo["conversationName"] as? String)?.notificationValue
-        let isGroup = (userInfo["chatType"] as? String) == "group" || contactID.contains("@g.us")
+        let isGroup = (userInfo["chatType"] as? String) == "group" || contactID.hasSuffix("@g.us")
+        let recipientCount = userInfo["recipientCount"] as? Int
+        // Without a known group count iOS chooses a direct-message presentation and
+        // hides the group line. The standard notification preserves all three fields.
+        if isGroup && (recipientCount ?? 0) < 2 { return content }
         let body = content.body
         let speakableGroupName = isGroup
             ? conversationName.map(INSpeakableString.init(spokenPhrase:))
@@ -55,13 +64,26 @@ enum NotificationMessagePresentation {
             attachments: nil
         )
 
+        if isGroup, let recipientCount {
+            let metadata = INSendMessageIntentDonationMetadata()
+            metadata.recipientCount = recipientCount
+            intent.donationMetadata = metadata
+        }
+
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .incoming
         if donate { interaction.donate { _ in } }
 
         do {
             let messagingContent = try content.updating(from: intent)
-            return messagingContent
+            guard let displayed = messagingContent.mutableCopy() as? UNMutableNotificationContent else {
+                return content
+            }
+            // The intent updater clears a subtitle when recipient details are absent.
+            // Restore the explicit group line while retaining its sender/avatar context.
+            displayed.subtitle = content.subtitle
+            displayed.body = content.body
+            return displayed
         } catch {
             return content
         }

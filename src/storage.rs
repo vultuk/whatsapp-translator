@@ -477,6 +477,12 @@ impl MessageStore {
 
         // Add pinned_at column for pinning contacts
         self.migrate_add_pinned_column(&conn)?;
+        if !conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('contacts') WHERE name = 'participant_count')",
+            [], |row| row.get::<_, bool>(0),
+        )? {
+            conn.execute("ALTER TABLE contacts ADD COLUMN participant_count INTEGER", [])?;
+        }
 
         self.migrate_add_query_indexes(&conn)?;
 
@@ -849,6 +855,38 @@ impl MessageStore {
         }
 
         Ok(())
+    }
+
+    /// WhatsApp supplies the full group membership count with live messages.
+    pub fn set_group_participant_count(&self, contact_id: &str, count: u32) -> Result<()> {
+        if contact_id.ends_with("@g.us") && count > 0 {
+            self.conn.lock().unwrap().execute(
+                "UPDATE contacts SET participant_count = ? WHERE id = ?",
+                params![count, contact_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Incoming recipients include this account and exclude the message's sender.
+    pub fn notification_recipient_count(&self, contact_id: &str) -> Result<Option<u32>> {
+        if !contact_id.ends_with("@g.us") {
+            return Ok(None);
+        }
+        let count: Option<u32> = self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT participant_count FROM contacts WHERE id = ?",
+                [contact_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(count
+            .and_then(|value| value.checked_sub(1))
+            .filter(|value| *value > 0))
     }
 
     /// Add or update a contact
@@ -2785,6 +2823,52 @@ mod tests {
         ));
         let store = MessageStore::new(&data_dir).expect("test store");
         (store, data_dir)
+    }
+
+    #[test]
+    fn group_notification_recipient_count_survives_restart_and_clears_on_logout() {
+        let (store, dir) = test_store();
+        store
+            .upsert_contact("family@g.us", Some("Family"), None, Some("group"), 1)
+            .unwrap();
+        assert_eq!(
+            store.notification_recipient_count("family@g.us").unwrap(),
+            None
+        );
+        store.set_group_participant_count("family@g.us", 4).unwrap();
+        assert_eq!(
+            store.notification_recipient_count("family@g.us").unwrap(),
+            Some(3)
+        );
+        store.set_group_participant_count("family@g.us", 0).unwrap();
+        assert_eq!(
+            store.notification_recipient_count("family@g.us").unwrap(),
+            Some(3)
+        );
+        drop(store);
+        let store = MessageStore::new(&dir).unwrap();
+        assert_eq!(
+            store.notification_recipient_count("family@g.us").unwrap(),
+            Some(3)
+        );
+        store.set_group_participant_count("family@g.us", 3).unwrap();
+        assert_eq!(
+            store.notification_recipient_count("family@g.us").unwrap(),
+            Some(2)
+        );
+        assert_eq!(
+            store
+                .notification_recipient_count("friend@s.whatsapp.net")
+                .unwrap(),
+            None
+        );
+        store.clear_all().unwrap();
+        assert_eq!(
+            store.notification_recipient_count("family@g.us").unwrap(),
+            None
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

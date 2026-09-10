@@ -313,6 +313,12 @@ async fn handle_web_event(
             // Extract unread count before moving msg
             let unread_count = msg.unread_count;
             let is_history = msg.is_history;
+            let participant_count = match &msg.chat {
+                bridge::Chat::Group {
+                    participant_count, ..
+                } => *participant_count,
+                _ => None,
+            };
             let already_stored = store.get_message_by_id(&msg.id)?.is_some();
 
             // Process and store the message
@@ -328,6 +334,12 @@ async fn handle_web_event(
                 Some(&stored_msg.chat_type),
                 stored_msg.timestamp,
             )?;
+
+            if !is_history {
+                if let Some(count) = participant_count {
+                    store.set_group_participant_count(&stored_msg.contact_id, count)?;
+                }
+            }
 
             // Handle unread counts
             if let Some(unread) = unread_count {

@@ -60,7 +60,9 @@ After authentication, the app asks for notification, announcement, and Siri
 permission, registers its APNs token with the backend, and displays incoming
 translated messages even when the app is not open. The notification service
 extension presents them as communication notifications with the sender, group
-name, and contact avatar. Tapping one opens the matching chat; its Reply action
+name on a separate line, translated body, and contact avatar. The server carries
+the real group recipient count into the communication intent; when that count is
+unavailable, a standard alert preserves sender, group, and message as separate fields. Tapping one opens the matching chat; its Reply action
 sends through the normal `/api/send` route, so the conversation's translation
 and send-original settings are applied. The same action is mirrored to Apple
 Watch for dictated or typed replies. A Debug build registers against the APNs
@@ -88,10 +90,19 @@ group alert using the same communication-notification formatter as incoming
 pushes. Enter each launch argument on its own row in Xcode. Allow notifications when prompted. It fires after five seconds and
 does not contact the backend or send a WhatsApp message.
 
+Add `-demoLiveReactions` alongside `-demo` to preview a reaction arriving after
+20 seconds, changing emoji, being removed, and returning without navigation.
+The fixture decodes the same live-event payloads as the WebSocket handler.
+Reaction state is retained per conversation, target, and actor, so translation
+updates, refreshes, history pages, and older event replays cannot erase a newer
+reaction. Reaction events remain hidden from message lists.
+
 Live text and caption alerts are persisted on the server until language detection
 and any required translation finish. Translation retries and server restarts
-retain pending alerts; imported history does not create alerts. Compact group
-alerts include `[Group name]` in the body because iOS can omit the group subtitle.
+retain pending alerts; imported history does not create alerts. Group alerts carry
+separate sender, group subtitle, and translated body fields. Their communication
+intent uses the actual recipient count from WhatsApp to select the group layout;
+older prefixed payloads remain supported.
 
 ## Unified feed attachments
 

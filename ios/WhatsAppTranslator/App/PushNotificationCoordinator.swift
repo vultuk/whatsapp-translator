@@ -258,14 +258,14 @@ final class NotificationAppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
                 let content = UNMutableNotificationContent()
                 content.title = "Alex"
                 content.subtitle = "Family group"
-                content.body = "[Family group] It’s lovely to see everyone together!"
+                content.body = "It’s lovely to see everyone together!"
                 content.sound = .default
                 content.categoryIdentifier = MessagingNotificationContract.categoryIdentifier
                 content.threadIdentifier = "notification-demo@g.us"
                 content.userInfo = [
                     "contactId": "notification-demo@g.us", "messageId": "notification-demo",
                     "senderId": "447700900123", "senderName": "Alex",
-                    "conversationName": "Family group", "chatType": "group",
+                    "conversationName": "Family group", "chatType": "group", "recipientCount": 3,
                     "messageBody": content.body
                 ]
                 let displayed = NotificationMessagePresentation.messagingContent(content, avatarData: nil, donate: false)

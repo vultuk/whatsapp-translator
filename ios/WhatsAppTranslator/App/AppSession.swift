@@ -28,6 +28,12 @@ final class AppSession {
     private var feedGeneration = UUID()
     private var feedEventsDuringLoad: Set<String> = []
     var messages: [String: [ChatMessage]] = [:]
+    private struct ReactionTarget: Hashable {
+        let contactID: String
+        let messageID: String
+    }
+    // Keep removals too: an older page or replay must not restore an old emoji.
+    private var reactionEvents: [ReactionTarget: [String: ChatMessage]] = [:]
 
     var unifiedMessages: [ChatMessage] {
         var result = feedByID
@@ -64,7 +70,7 @@ final class AppSession {
             guard generation == feedGeneration else { return }
             // Refresh starts a contiguous window; older pages extend only this server cursor.
             var next = older ? feedByID : [:]
-            for message in response.messages { next[message.id] = message }
+            for message in normalizeMessages(response.messages) { next[message.id] = message }
             // Events received while the request was in flight are newer than its snapshot.
             for id in feedEventsDuringLoad {
                 if let live = feedByID[id] { next[id] = live }
@@ -770,6 +776,7 @@ final class AppSession {
         mediaErrorIDs = []
         linkPreviews = [:]
         messages = [:]
+        reactionEvents = [:]
         feedByID = [:]
         feedCursor = nil
         feedHasMore = false
@@ -857,18 +864,29 @@ final class AppSession {
         }
     }
 
-    private func handle(_ event: LiveEvent) {
+    func handle(_ event: LiveEvent) {
         guard phase == .ready else { return }
         switch event.type {
         case "message", "reaction", "message_updated":
             if recoveryTask != nil { recoveryNeedsAnotherPass = true }
             guard let message = event.message else { return }
-            messages[message.contactId] = normalizeMessages((messages[message.contactId] ?? []) + [message])
+            let affectedID = message.isReaction ? message.content?.targetMessageId : message.id
+            var conversation = messages[message.contactId] ?? []
+            // A feed message can be outside the conversation's currently loaded page.
+            if let affectedID, let target = feedByID[affectedID],
+               target.contactId == message.contactId,
+               !conversation.contains(where: { $0.id == affectedID }) {
+                conversation.append(target)
+            }
+            let normalized = normalizeMessages(conversation + [message])
+            messages[message.contactId] = normalized
+            if let affectedID,
+               let updated = normalized.first(where: { $0.id == affectedID }),
+               (!message.isReaction && event.type == "message") || feedByID[affectedID] != nil {
+                feedByID[affectedID] = updated
+                if feedLoading { feedEventsDuringLoad.insert(affectedID) }
+            }
             if !message.isReaction {
-                if event.type == "message" || feedByID[message.id] != nil {
-                    feedByID[message.id] = message
-                    if feedLoading { feedEventsDuringLoad.insert(message.id) }
-                }
                 updateContactPreview(
                     contactID: message.contactId,
                     preview: message.displayText,
@@ -1050,26 +1068,41 @@ final class AppSession {
     }
 
     func normalizeMessages(_ values: [ChatMessage]) -> [ChatMessage] {
-        let sorted = Array(Dictionary(grouping: values, by: \ChatMessage.id).compactMap { $0.value.last })
-            .sorted { ($0.timestamp, $0.id) < ($1.timestamp, $1.id) }
-        let reactionMessages = sorted.filter(\.isReaction)
-        var displayMessages = sorted.filter { !$0.isReaction }
-
-        for reaction in reactionMessages {
-            guard let targetID = reaction.content?.targetMessageId,
-                  let index = displayMessages.firstIndex(where: { $0.id == targetID }) else { continue }
+        for reaction in values where reaction.isReaction {
+            guard let targetID = reaction.content?.targetMessageId else { continue }
+            let key = ReactionTarget(contactID: reaction.contactId, messageID: targetID)
             let actor = reaction.isFromMe ? "me" : (reaction.senderPhone ?? reaction.senderName ?? "unknown")
-            var values = displayMessages[index].reactions ?? [:]
-            for emoji in values.keys {
-                values[emoji]?.removeAll { $0 == actor }
-                if values[emoji]?.isEmpty == true { values.removeValue(forKey: emoji) }
-            }
-            if let emoji = reaction.content?.emoji, !emoji.isEmpty {
-                values[emoji, default: []].append(actor)
-            }
-            displayMessages[index].reactions = values
+            if let previous = reactionEvents[key]?[actor],
+               (previous.timestamp, previous.id) >= (reaction.timestamp, reaction.id) { continue }
+            reactionEvents[key, default: [:]][actor] = reaction
         }
-        return displayMessages
+
+        var display: [ReactionTarget: ChatMessage] = [:]
+        for var message in values where !message.isReaction {
+            let key = ReactionTarget(contactID: message.contactId, messageID: message.id)
+            // Message updates and feed pages contain message fields, not reaction events.
+            // Preserve cached aggregates before applying the newest per-person changes.
+            if message.reactions == nil {
+                message.reactions = display[key]?.reactions
+                    ?? messages[message.contactId]?.first(where: { $0.id == message.id })?.reactions
+                    ?? feedByID[message.id].flatMap { $0.contactId == message.contactId ? $0.reactions : nil }
+            }
+            if let events = reactionEvents[key] {
+                var reactions = message.reactions ?? [:]
+                for actor in events.keys.sorted() {
+                    for emoji in Array(reactions.keys) {
+                        reactions[emoji]?.removeAll { $0 == actor }
+                        if reactions[emoji]?.isEmpty == true { reactions.removeValue(forKey: emoji) }
+                    }
+                    if let emoji = events[actor]?.content?.emoji, !emoji.isEmpty {
+                        reactions[emoji, default: []].append(actor)
+                    }
+                }
+                message.reactions = reactions
+            }
+            display[key] = message
+        }
+        return display.values.sorted { ($0.timestamp, $0.id) < ($1.timestamp, $1.id) }
     }
 
     private func replaceMessage(
@@ -1188,7 +1221,41 @@ final class AppSession {
             }
         }
         phase = .ready
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-demoLiveReactions") {
+            startLiveReactionDemo()
+        }
+        #endif
     }
+
+    #if DEBUG
+    private func startLiveReactionDemo() {
+        let contactID = "reaction-preview@g.us"
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1_000)
+        contacts = [Contact(id: contactID, name: "Weekend plans", phone: nil, type: "group", lastMessageTime: timestamp, unreadCount: 0, pinnedAt: nil, lastMessagePreview: "You: I’ll be there at six.")]
+        let target = ChatMessage.demo(id: "reaction-preview-target", contactID: contactID, timestamp: timestamp, fromMe: true, body: "I’ll be there at six.", translated: nil, sender: nil, deliveryStatus: "read", chatType: "group")
+        messages = [contactID: [target]]
+        feedByID = [target.id: target]
+        Task { [weak self] in
+            for (index, emoji) in ["❤️", "👍", "", "❤️"].enumerated() {
+                try? await Task.sleep(for: .seconds(index == 0 ? 20 : 10))
+                guard let self, !Task.isCancelled else { return }
+                let payload: [String: Any] = ["type": "reaction", "message": [
+                    "id": "reaction-preview-\(index)", "contactId": contactID,
+                    "timestamp": timestamp + Int64(index + 1), "isFromMe": false,
+                    "isForwarded": false, "senderName": "Alex", "senderPhone": "447700900123",
+                    "chatType": "group", "contentType": "Reaction", "isTranslated": false,
+                    "content": ["type": "reaction", "target_message_id": target.id, "emoji": emoji]
+                ]]
+                if let data = try? JSONSerialization.data(withJSONObject: payload),
+                   let event = try? JSONDecoder().decode(LiveEvent.self, from: data) {
+                    handle(event)
+                    print("Live reaction preview step \(index + 1)")
+                }
+            }
+        }
+    }
+    #endif
 
     private func demoPhoto() -> PlatformImage {
         DemoImageFactory.landscape(size: CGSize(width: 640, height: ProcessInfo.processInfo.arguments.contains("-demoWhatsAppLayout") ? 1400 : 420))

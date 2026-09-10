@@ -313,17 +313,7 @@ impl PushNotification {
         } else {
             None
         };
-        let message_text = notification_body(message, reaction_target);
-        // Compact communication banners can omit the subtitle/group intent.
-        // Keep the conversation visible in their body as well as in metadata.
-        let body = truncate(
-            &if is_group {
-                format!("[{}] {}", truncate(conversation_name, 100), message_text)
-            } else {
-                message_text.clone()
-            },
-            500,
-        );
+        let body = truncate(&notification_body(message, reaction_target), 500);
 
         let mut alert = json!({
             "title": title,
@@ -351,11 +341,25 @@ impl PushNotification {
             "conversationName": conversation_name,
             "chatType": message.chat_type,
             "messageBody": body,
+            "messageBodyIncludesGroup": false,
         });
         if let Some(avatar_url) = avatar_url.filter(|value| !value.trim().is_empty()) {
             payload["avatarUrl"] = Value::String(avatar_url.to_string());
         }
         Self { payload }
+    }
+
+    pub fn with_recipient_count(mut self, recipient_count: Option<u32>) -> Self {
+        let is_group = self.payload["chatType"] == "group"
+            || self.payload["contactId"]
+                .as_str()
+                .is_some_and(|id| id.ends_with("@g.us"));
+        if is_group {
+            if let Some(count) = recipient_count.filter(|value| *value > 0) {
+                self.payload["recipientCount"] = json!(count);
+            }
+        }
+        self
     }
 }
 
@@ -568,17 +572,15 @@ mod tests {
             &message,
             7,
             Some("https://cdn.example.com/avatar.jpg"),
-        );
+        )
+        .with_recipient_count(Some(3));
 
         assert_eq!(notification.payload["aps"]["alert"]["title"], "Virág");
         assert_eq!(
             notification.payload["aps"]["alert"]["subtitle"],
             "The Skinners"
         );
-        assert_eq!(
-            notification.payload["aps"]["alert"]["body"],
-            "[The Skinners] Hello"
-        );
+        assert_eq!(notification.payload["aps"]["alert"]["body"], "Hello");
         assert_eq!(notification.payload["aps"]["badge"], 7);
         assert_eq!(notification.payload["aps"]["content-available"], 1);
         assert_eq!(notification.payload["aps"]["mutable-content"], 1);
@@ -589,11 +591,19 @@ mod tests {
         assert_eq!(notification.payload["senderName"], "Virág");
         assert_eq!(notification.payload["conversationName"], "The Skinners");
         assert_eq!(notification.payload["chatType"], "group");
-        assert_eq!(notification.payload["messageBody"], "[The Skinners] Hello");
+        assert_eq!(notification.payload["messageBody"], "Hello");
+        assert_eq!(notification.payload["recipientCount"], 3);
         assert_eq!(
             notification.payload["avatarUrl"],
             "https://cdn.example.com/avatar.jpg"
         );
+        let mut direct = message;
+        direct.chat_type = "private".into();
+        direct.contact_id = "friend@s.whatsapp.net".into();
+        let direct = PushNotification::from_message_with_avatar(&direct, 0, None)
+            .with_recipient_count(Some(3));
+        assert!(direct.payload.get("recipientCount").is_none());
+        assert!(direct.payload["aps"]["alert"].get("subtitle").is_none());
     }
 
     #[test]
@@ -637,7 +647,7 @@ mod tests {
 
         assert_eq!(
             notification.payload["aps"]["alert"]["body"],
-            "[The Skinners] Reacted 😂 to “Mother... slow down!”"
+            "Reacted 😂 to “Mother... slow down!”"
         );
     }
 

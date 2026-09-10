@@ -799,6 +799,14 @@ impl AppState {
             badge,
             avatar_url.as_deref(),
             reaction_target.as_ref(),
+        )
+        .with_recipient_count(
+            self.store
+                .notification_recipient_count(&message.contact_id)
+                .unwrap_or_else(|error| {
+                    warn!("Unable to load group notification context: {error}");
+                    None
+                }),
         );
         for device in devices {
             match client.send(&device, &notification).await {
