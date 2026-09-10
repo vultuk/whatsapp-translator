@@ -159,13 +159,14 @@ private struct UnifiedMessagesView: View {
     }
 
     private func messagesContent(bottomSafeArea: CGFloat) -> some View {
-        NavigationStack {
+        let messages = session.unifiedMessages
+        return NavigationStack {
             ZStack {
                 ChatWallpaper()
                     .blur(radius: replyDraft.isFocused ? 8 : 0)
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 12) {
+                        LazyVStack(spacing: 6) {
                             if session.feedHasMore {
                                 Button("Load earlier messages") {
                                     let anchor = session.unifiedMessages.first?.id
@@ -185,9 +186,15 @@ private struct UnifiedMessagesView: View {
                             if session.unifiedMessages.isEmpty && !session.feedLoading && session.feedError == nil {
                                 ContentUnavailableView("All your messages, together", systemImage: "text.bubble", description: Text("Messages from your chats will appear here. Swipe a message to choose where your reply goes."))
                             }
-                            ForEach(session.unifiedMessages) { message in
+                            ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                                let startsConversation = index == 0
+                                    || messages[index - 1].contactId != message.contactId
+                                    || !Calendar.current.isDate(messages[index - 1].date, inSameDayAs: message.date)
                                 VStack(alignment: .leading, spacing: 5) {
-                                    source(message)
+                                    if startsConversation {
+                                        source(message)
+                                            .padding(.top, index == 0 ? 0 : 10)
+                                    }
                                     bubble(message)
                                 }
                                 .id(message.id)
@@ -249,12 +256,18 @@ private struct UnifiedMessagesView: View {
     }
 
     private func source(_ message: ChatMessage) -> some View {
-        Button {
+        let contact = session.contacts.first(where: { $0.id == message.contactId }) ?? Contact(
+            id: message.contactId, name: name(message), phone: message.contactPhone,
+            type: message.chatType.lowercased(), lastMessageTime: message.timestamp,
+            unreadCount: 0, pinnedAt: nil, lastMessagePreview: nil
+        )
+        return Button {
             session.selectedContactID = message.contactId
             session.mainTab = .chats
         } label: {
             HStack(spacing: 7) {
-                Image(systemName: message.chatType == "Group" || message.contactId.hasSuffix("@g.us") ? "person.2.fill" : "person.fill")
+                ContactAvatar(contact: contact, url: session.avatarURLs[message.contactId], size: 30)
+                    .accessibilityHidden(true)
                 Text(name(message)).fontWeight(.semibold).lineLimit(1)
                 Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold))
                 Spacer(minLength: 8)
@@ -267,6 +280,7 @@ private struct UnifiedMessagesView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open chat: \(name(message))")
+        .task { await session.loadAvatar(for: message.contactId) }
     }
 
     private func select(_ message: ChatMessage) {
