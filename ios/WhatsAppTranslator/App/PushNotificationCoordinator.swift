@@ -279,7 +279,7 @@ final class NotificationAppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         if ProcessInfo.processInfo.arguments.contains("-demoNotification") {
             Task {
                 let center = UNUserNotificationCenter.current()
-                guard (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) == true else {
+                guard (try? await center.requestAuthorization(options: MessagingNotificationAuthorization.options)) == true else {
                     print("Notification preview requires notification permission in Settings.")
                     return
                 }

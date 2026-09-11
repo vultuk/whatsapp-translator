@@ -6,6 +6,8 @@
 	<string>$(APS_ENVIRONMENT)</string>
 	<key>com.apple.developer.siri</key>
 	<true/>
+	<key>com.apple.developer.carplay-communication</key>
+	<true/>
 	<key>com.apple.developer.usernotifications.communication</key>
 	<true/>
 	<key>keychain-access-groups</key>

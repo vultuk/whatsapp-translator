@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import Intents
+@preconcurrency import UserNotifications
 
 final class IntentHandler: INExtension, INSendMessageIntentHandling, INSearchForMessagesIntentHandling, INSetMessageAttributeIntentHandling, @unchecked Sendable {
     private let backend = MessagingIntentBackend()
@@ -13,7 +14,8 @@ final class IntentHandler: INExtension, INSendMessageIntentHandling, INSearchFor
         with completion: @escaping ([INSendMessageRecipientResolutionResult]) -> Void
     ) {
         let recipients = intent.recipients ?? []
-        guard !recipients.isEmpty else {
+        let conversationID = intent.conversationIdentifier
+        guard !recipients.isEmpty || conversationID?.isEmpty == false else {
             completion([.needsValue()])
             return
         }
@@ -23,6 +25,12 @@ final class IntentHandler: INExtension, INSendMessageIntentHandling, INSearchFor
         Task { [backend] in
             do {
                 let contacts = try await backend.contacts()
+                if let conversationID, !conversationID.isEmpty {
+                    let result: INSendMessageRecipientResolutionResult = contacts.first { $0.id == conversationID }
+                        .map { .success(with: $0.intentPerson) } ?? .unsupported()
+                    completion.call([result])
+                    return
+                }
                 let results = queries.map { query -> INSendMessageRecipientResolutionResult in
                     let matches = contacts.matching(query)
                     if matches.count == 1, let contact = matches.first {
@@ -38,6 +46,14 @@ final class IntentHandler: INExtension, INSendMessageIntentHandling, INSearchFor
                 completion.call(queries.map { _ in .unsupported() })
             }
         }
+    }
+
+    func resolveContent(for intent: INSendMessageIntent, with completion: @escaping (INStringResolutionResult) -> Void) {
+        guard let content = intent.content?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty else {
+            completion(.needsValue())
+            return
+        }
+        completion(.success(with: content))
     }
 
     func handle(
@@ -64,7 +80,7 @@ final class IntentHandler: INExtension, INSendMessageIntentHandling, INSearchFor
                 let response = INSendMessageIntentResponse(code: .success, userActivity: nil)
                 response.sentMessages = [
                     INMessage(
-                        identifier: sent.messageId,
+                        identifier: MessagingMessageIdentity(contactID: contact.id, messageID: sent.messageId).encoded,
                         conversationIdentifier: contact.id,
                         content: sent.translatedText ?? content,
                         dateSent: Date(timeIntervalSince1970: TimeInterval(sent.timestamp) / 1_000),
@@ -154,11 +170,11 @@ private actor MessagingIntentBackend {
     }
 
     private let api = APIClient()
-    private var prepared = false
+    private var configuration: ServerConfiguration?
 
     func contacts() async throws -> [Contact] {
         try await prepare()
-        return try await api.contacts()
+        return try await api.contacts().filter(\.showsInChatList)
     }
 
     func send(
@@ -171,10 +187,10 @@ private actor MessagingIntentBackend {
         if let conversationID, !conversationID.isEmpty {
             contact = contacts.first { $0.id == conversationID }
         } else {
-            contact = recipientQueries
+            let matches = recipientQueries
                 .flatMap { contacts.matching($0) }
                 .uniqued(by: \.id)
-                .first
+            contact = matches.count == 1 ? matches.first : nil
         }
         guard let contact else { throw BackendError.contactNotFound }
         let response = try await api.send(contactID: contact.id, text: content)
@@ -182,6 +198,15 @@ private actor MessagingIntentBackend {
     }
 
     func search(filter: MessageSearchFilter) async throws -> [IntentMessageResult] {
+        if !filter.notificationIdentifiers.isEmpty {
+            guard CredentialStore().load() != nil else { throw BackendError.notConfigured }
+            let notifications = await UNUserNotificationCenter.current().deliveredNotifications()
+            let snapshots = notifications.compactMap {
+                MessagingIntentNotification(identifier: $0.request.identifier, content: $0.request.content, date: $0.date)
+            }
+            return filter.notificationResults(snapshots)
+                .sorted { $0.message.timestamp < $1.message.timestamp }
+        }
         let contacts = try await contacts()
         let selected = filter.selectContacts(from: contacts).prefix(12)
         let api = self.api
@@ -191,7 +216,7 @@ private actor MessagingIntentBackend {
         ) { group in
             for contact in selected {
                 group.addTask {
-                    let response = try await api.messages(contactID: contact.id, limit: 20)
+                    let response = try await api.messages(contactID: contact.id, limit: max(50, min(contact.unreadCount, 200)))
                     return (contact, response.messages)
                 }
             }
@@ -204,16 +229,26 @@ private actor MessagingIntentBackend {
 
         return conversations
             .flatMap { contact, messages in
-                messages.map { IntentMessageResult(contact: contact, message: $0) }
+                filter.results(contact: contact, messages: messages)
             }
-            .filter(filter.includes)
             .sorted { $0.message.timestamp > $1.message.timestamp }
             .prefix(50)
+            .sorted { $0.message.timestamp < $1.message.timestamp }
             .map { $0 }
     }
 
     func markRead(messageIDs: Set<String>) async throws -> Bool {
         let contacts = try await contacts()
+        let identities = messageIDs.compactMap(MessagingMessageIdentity.decode)
+        let currentContactIDs = Set(contacts.map(\.id))
+        let directContactIDs = Set(identities.map(\.contactID))
+        guard directContactIDs.isSubset(of: currentContactIDs) else { return false }
+        let legacyIDs = messageIDs.filter { MessagingMessageIdentity.decode($0) == nil }
+        if legacyIDs.isEmpty {
+            for contactID in directContactIDs { try await api.markRead(contactID: contactID) }
+            await removeDeliveredNotifications(for: directContactIDs)
+            return !directContactIDs.isEmpty
+        }
         let api = self.api
         let matchingContactIDs = try await withThrowingTaskGroup(
             of: String?.self,
@@ -222,7 +257,7 @@ private actor MessagingIntentBackend {
             for contact in contacts.prefix(20) {
                 group.addTask {
                     let response = try await api.messages(contactID: contact.id, limit: 50)
-                    return response.messages.contains { messageIDs.contains($0.id) } ? contact.id : nil
+                    return response.messages.contains { legacyIDs.contains($0.id) } ? contact.id : nil
                 }
             }
             var result: [String] = []
@@ -231,108 +266,34 @@ private actor MessagingIntentBackend {
             }
             return result
         }
-        for contactID in matchingContactIDs {
+        let targets = Set(matchingContactIDs).union(directContactIDs)
+        for contactID in targets {
             try await api.markRead(contactID: contactID)
         }
-        return !matchingContactIDs.isEmpty
+        await removeDeliveredNotifications(for: targets)
+        return !targets.isEmpty
     }
 
     private func prepare() async throws {
-        guard !prepared else { return }
-        guard let configuration = CredentialStore().load() else {
+        guard let stored = CredentialStore().load() else {
+            configuration = nil
             throw BackendError.notConfigured
         }
-        await api.configure(configuration)
+        guard stored != configuration else { return }
+        await api.configure(stored)
         try await api.prepareAuthenticatedRequests()
-        prepared = true
-    }
-}
-
-private struct RecipientQuery: Sendable {
-    let handle: String?
-    let displayName: String
-    let customIdentifier: String?
-
-    init(_ person: INPerson) {
-        handle = person.personHandle?.value
-        displayName = person.displayName
-        customIdentifier = person.customIdentifier
+        configuration = stored
     }
 
-    var candidates: [String] {
-        [customIdentifier, handle, displayName].compactMap { value in
-            guard let normalized = value?.normalizedSearchValue, !normalized.isEmpty else { return nil }
-            return normalized
+    private func removeDeliveredNotifications(for contactIDs: Set<String>) async {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications()
+        let identifiers = delivered.compactMap { notification -> String? in
+            guard let contactID = notification.request.content.userInfo["contactId"] as? String,
+                  contactIDs.contains(contactID) else { return nil }
+            return notification.request.identifier
         }
-    }
-}
-
-private struct MessageSearchFilter: Sendable {
-    let conversationIDs: Set<String>
-    let personQueries: [String]
-    let groupNames: [String]
-    let terms: [String]
-    let identifiers: Set<String>
-    let startDate: Date?
-    let endDate: Date?
-
-    init(intent: INSearchForMessagesIntent) {
-        conversationIDs = Set(intent.conversationIdentifiers ?? [])
-        personQueries = ((intent.senders ?? []) + (intent.recipients ?? []))
-            .flatMap { RecipientQuery($0).candidates }
-        groupNames = (intent.speakableGroupNames ?? []).map { $0.spokenPhrase.normalizedSearchValue }
-        terms = (intent.searchTerms ?? []).map(\.normalizedSearchValue)
-        identifiers = Set(intent.identifiers ?? [])
-        startDate = intent.dateTimeRange?.startDateComponents?.date
-        endDate = intent.dateTimeRange?.endDateComponents?.date
-    }
-
-    func selectContacts(from contacts: [Contact]) -> [Contact] {
-        guard !conversationIDs.isEmpty || !personQueries.isEmpty || !groupNames.isEmpty else {
-            return contacts
-        }
-        return contacts.filter { contact in
-            conversationIDs.contains(contact.id)
-                || personQueries.contains(where: contact.matches)
-                || groupNames.contains(where: contact.matches)
-        }
-    }
-
-    func includes(_ result: IntentMessageResult) -> Bool {
-        let message = result.message
-        if !identifiers.isEmpty, !identifiers.contains(message.id) { return false }
-        if let startDate, message.date < startDate { return false }
-        if let endDate, message.date > endDate { return false }
-        if !terms.isEmpty {
-            let text = message.displayText.normalizedSearchValue
-            guard terms.allSatisfy(text.contains) else { return false }
-        }
-        return true
-    }
-}
-
-private struct IntentMessageResult: Sendable {
-    let contact: Contact
-    let message: ChatMessage
-
-    var intentMessage: INMessage {
-        let sender = message.isFromMe
-            ? INPerson.currentUser
-            : INPerson.messagingPerson(
-                id: message.senderPhone ?? contact.id,
-                name: message.senderName ?? contact.displayName
-            )
-        return INMessage(
-            identifier: message.id,
-            conversationIdentifier: contact.id,
-            content: message.displayText,
-            dateSent: message.date,
-            sender: sender,
-            recipients: message.isFromMe ? [contact.intentPerson] : [.currentUser],
-            groupName: contact.isGroup ? INSpeakableString(spokenPhrase: contact.displayName) : nil,
-            messageType: message.intentMessageType,
-            serviceName: "Babel Bridge"
-        )
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
     }
 }
 
@@ -345,82 +306,5 @@ private final class IntentCompletionBox<Value>: @unchecked Sendable {
 
     func call(_ value: Value) {
         completion(value)
-    }
-}
-
-private extension Contact {
-    var intentPerson: INPerson {
-        .messagingPerson(id: id, name: displayName)
-    }
-
-    func matches(_ value: String) -> Bool {
-        let candidate = value.normalizedSearchValue
-        return id.normalizedSearchValue == candidate
-            || displayName.normalizedSearchValue.contains(candidate)
-            || phone?.normalizedSearchValue.contains(candidate) == true
-    }
-}
-
-private extension Array where Element == Contact {
-    func matching(_ query: RecipientQuery) -> [Contact] {
-        filter { contact in query.candidates.contains(where: contact.matches) }
-    }
-}
-
-private extension INPerson {
-    static var currentUser: INPerson {
-        INPerson(
-            personHandle: INPersonHandle(value: "current-user", type: .unknown),
-            nameComponents: nil,
-            displayName: "You",
-            image: nil,
-            contactIdentifier: nil,
-            customIdentifier: "current-user",
-            isMe: true
-        )
-    }
-
-    static func messagingPerson(id: String, name: String) -> INPerson {
-        INPerson(
-            personHandle: INPersonHandle(value: id, type: .unknown),
-            nameComponents: nil,
-            displayName: name,
-            image: nil,
-            contactIdentifier: nil,
-            customIdentifier: id,
-            isContactSuggestion: true,
-            suggestionType: .instantMessageAddress
-        )
-    }
-}
-
-private extension ChatMessage {
-    var intentMessageType: INMessageType {
-        switch normalizedContentType {
-        case "audio": .audio
-        case "image": .mediaImage
-        case "video": .mediaVideo
-        case "location": .mediaLocation
-        case "contact": .mediaAddressCard
-        case "reaction": .reaction
-        case "sticker": .sticker
-        case "document": .file
-        default: .text
-        }
-    }
-}
-
-private extension String {
-    var normalizedSearchValue: String {
-        folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-    }
-}
-
-private extension Array {
-    func uniqued<Key: Hashable>(by keyPath: KeyPath<Element, Key>) -> [Element] {
-        var seen: Set<Key> = []
-        return filter { seen.insert($0[keyPath: keyPath]).inserted }
     }
 }

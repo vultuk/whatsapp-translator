@@ -87,10 +87,30 @@ The app also opts its message notification category into announcements and
 CarPlay, with the search/read intent handling a tapped CarPlay alert. Existing
 installations re-request the full notification option set on activation, so an
 upgrade includes CarPlay while preserving the user's existing notification choices.
-Apple must approve and assign the managed CarPlay Communication App entitlement
-(`com.apple.developer.carplay-communication`) before CarPlay message notifications
-and the app surface can be signed, distributed, and verified in a car. This
-entitlement is not currently included; notification options alone do not grant it.
+Apple assigned the managed CarPlay Communication App entitlement to this developer
+account on 11 September 2026. It is enabled for `com.vultuk.whatsapptranslator`
+and included in the iOS target as `com.apple.developer.carplay-communication`.
+The account can enable it separately for other eligible communication apps.
+
+CarPlay opens a native conversation list with unread chats first and up to 12
+conversations. Selecting an unread conversation asks Siri to read it; selecting a
+read conversation starts a dictated message. The screen shows names and unread
+counts, while Siri handles message text and confirmation. Refresh updates the
+list, and it refreshes automatically while active. Account setup stays on iPhone.
+
+Tapped alerts resolve their exact delivered notification ID and read its translated
+body. An expired alert returns no message instead of reading another conversation.
+Siri replies use the selected conversation's exact ID and the existing translation
+and durable-send API. Read receipts carry both conversation and message identity,
+so the extension can mark the correct chat read without searching recent chats.
+
+To verify on a device, update TestFlight, open Babel Bridge once, enable Show in
+CarPlay in its iPhone notification settings, then reconnect to CarPlay. Announce
+Notifications and Show Previews settings govern spoken alerts. Test a translated
+incoming alert, tap to read, and dictate and confirm a reply to the same chat.
+Xcode's iPhone simulator with I/O → External Displays → CarPlay verifies the
+conversation screen; `-demo` uses synthetic CarPlay conversations. Siri speech,
+real push delivery, and the car's audio routing still require a physical device.
 
 Apple Watch mirrors iPhone notifications. With the iPhone unlocked, Apple routes
 the alert to the iPhone. To test Watch delivery, wear and unlock the Watch, lock
