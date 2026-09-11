@@ -339,11 +339,90 @@ final class WhatsAppTranslatorTests: XCTestCase {
         XCTAssertTrue(category.options.contains(.allowInCarPlay))
         XCTAssertTrue(category.options.contains(.allowAnnouncement))
         XCTAssertTrue(category.options.contains(.hiddenPreviewsShowTitle))
-        XCTAssertTrue(category.intentIdentifiers.contains(INSendMessageIntentIdentifier))
-        XCTAssertTrue(category.intentIdentifiers.contains(INSearchForMessagesIntentIdentifier))
+        XCTAssertEqual(category.intentIdentifiers, [INSearchForMessagesIntentIdentifier])
         let reply = try XCTUnwrap(category.actions.first as? UNTextInputNotificationAction)
         XCTAssertEqual(reply.identifier, MessagingNotificationContract.replyActionIdentifier)
         XCTAssertEqual(reply.textInputButtonTitle, "Send")
+    }
+
+    @MainActor
+    func testFirstNotificationAuthorizationRequestsCarPlayAndRequiresConsent() async {
+        for granted in [true, false] {
+            var requested: UNAuthorizationOptions?
+            let authorized = await MessagingNotificationAuthorization.authorize(status: .notDetermined) {
+                requested = $0
+                return granted
+            }
+            XCTAssertEqual(authorized, granted)
+            XCTAssertTrue(requested?.contains(.carPlay) == true)
+            XCTAssertTrue(requested?.isSuperset(of: [.alert, .sound, .badge]) == true)
+            XCTAssertFalse(requested?.contains(.provisional) == true)
+        }
+    }
+
+    @MainActor
+    func testFirstAuthorizationFallsBackToStandardAlertsIfCarPlayRequestThrows() async {
+        struct AuthorizationError: Error {}
+        for granted in [true, false] {
+            var requests: [UNAuthorizationOptions] = []
+            let authorized = await MessagingNotificationAuthorization.authorize(status: .notDetermined) {
+                requests.append($0)
+                if $0.contains(.carPlay) { throw AuthorizationError() }
+                return granted
+            }
+            XCTAssertEqual(authorized, granted)
+            XCTAssertEqual(requests.count, 2)
+            XCTAssertTrue(requests.first?.contains(.carPlay) == true)
+            XCTAssertFalse(requests.last?.contains(.carPlay) == true)
+            XCTAssertTrue(requests.last?.isSuperset(of: [.alert, .sound, .badge]) == true)
+        }
+    }
+
+    @MainActor
+    func testExistingNotificationAuthorizationAlsoRequestsCarPlayOnUpgrade() async {
+        var requested: UNAuthorizationOptions?
+        let authorized = await MessagingNotificationAuthorization.authorize(status: .authorized) {
+            requested = $0
+            return true
+        }
+        XCTAssertTrue(authorized)
+        XCTAssertTrue(requested?.contains(.carPlay) == true)
+    }
+
+    @MainActor
+    func testCarPlayAuthorizationErrorPreservesExistingPhoneAndWatchRegistration() async {
+        struct AuthorizationError: Error {}
+        for status: UNAuthorizationStatus in [.authorized, .provisional] {
+            let authorized = await MessagingNotificationAuthorization.authorize(status: status) { _ in
+                throw AuthorizationError()
+            }
+            XCTAssertTrue(authorized)
+        }
+        let firstRequest = await MessagingNotificationAuthorization.authorize(status: .notDetermined) { _ in
+            throw AuthorizationError()
+        }
+        XCTAssertFalse(firstRequest)
+    }
+
+    @MainActor
+    func testProvisionalNotificationUpgradePreservesQuietAuthorization() async {
+        var requested: UNAuthorizationOptions?
+        let authorized = await MessagingNotificationAuthorization.authorize(status: .provisional) {
+            requested = $0
+            return true
+        }
+        XCTAssertTrue(authorized)
+        XCTAssertTrue(requested?.contains(.carPlay) == true)
+        XCTAssertTrue(requested?.contains(.provisional) == true)
+    }
+
+    @MainActor
+    func testDeniedNotificationsDoNotRequestAgainOrRegisterForPush() async {
+        let authorized = await MessagingNotificationAuthorization.authorize(status: .denied) { _ in
+            XCTFail("Do not re-request after the user denies notifications")
+            return true
+        }
+        XCTAssertFalse(authorized)
     }
 
     func testSiriVocabularyProvidesEnglishExamplesForEverySupportedMessagingIntent() throws {

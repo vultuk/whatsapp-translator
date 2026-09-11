@@ -69,7 +69,7 @@ through the normal translation-aware `/api/send` route. The sandboxed target
 has outbound network, communication-notification and shared-Keychain
 entitlements.
 
-After authentication, the app asks for notification, announcement, and Siri
+After authentication, the app asks for notification, announcement, CarPlay, and Siri
 permission, registers its APNs token with the backend, and displays incoming
 translated messages even when the app is not open. The notification service
 extension presents them as communication notifications with the sender, group
@@ -84,8 +84,20 @@ sandbox; an archived Release build uses the production APNs environment.
 The Siri intents extension implements sending, searching, and marking messages
 read. Those intents provide the voice-first message surface required by CarPlay.
 The app also opts its message notification category into announcements and
-CarPlay, but Apple must approve and assign the managed CarPlay Communication App
-entitlement before the full CarPlay app surface can be signed and distributed.
+CarPlay, with the search/read intent handling a tapped CarPlay alert. Existing
+installations re-request the full notification option set on activation, so an
+upgrade includes CarPlay while preserving the user's existing notification choices.
+Apple must approve and assign the managed CarPlay Communication App entitlement
+(`com.apple.developer.carplay-communication`) before CarPlay message notifications
+and the app surface can be signed, distributed, and verified in a car. This
+entitlement is not currently included; notification options alone do not grant it.
+
+Apple Watch mirrors iPhone notifications. With the iPhone unlocked, Apple routes
+the alert to the iPhone. To test Watch delivery, wear and unlock the Watch, lock
+the iPhone, and enable this app under Watch → Notifications → Mirror iPhone Alerts
+From. Focus and notification settings can still silence alerts. The app cannot
+override Apple's routing to alert both devices simultaneously. See
+[Apple's notification routing guide](https://support.apple.com/en-ie/108369).
 
 Incoming message alerts also request background execution. When iOS grants it,
 the app fetches the affected chat and writes a file-protected local cache before

@@ -17,7 +17,7 @@ enum MessagingNotificationContract {
         return UNNotificationCategory(
             identifier: categoryIdentifier,
             actions: [reply],
-            intentIdentifiers: [INSendMessageIntentIdentifier, INSearchForMessagesIntentIdentifier],
+            intentIdentifiers: [INSearchForMessagesIntentIdentifier],
             options: [
                 .allowInCarPlay,
                 .allowAnnouncement,
@@ -25,6 +25,42 @@ enum MessagingNotificationContract {
                 .hiddenPreviewsShowSubtitle,
             ]
         )
+    }
+}
+
+@MainActor
+enum MessagingNotificationAuthorization {
+    static let options: UNAuthorizationOptions = [.alert, .sound, .badge, .announcement, .carPlay]
+
+    static func authorize(
+        status: UNAuthorizationStatus,
+        request: (UNAuthorizationOptions) async throws -> Bool
+    ) async -> Bool {
+        switch status {
+        case .notDetermined:
+            do {
+                return try await request(options)
+            } catch {
+                // CarPlay needs a managed entitlement. Keep standard alerts available
+                // if the system rejects the additional option before approval.
+                return (try? await request(options.subtracting(.carPlay))) == true
+            }
+        case .authorized:
+            // Re-request the full set on upgrades, so existing installs also opt into
+            // CarPlay. iOS retains the user's choices without repeating the prompt.
+            // An optional permission failure must not break existing phone/Watch push.
+            _ = try? await request(options)
+            return true
+        case .provisional:
+            _ = try? await request(options.union(.provisional))
+            return true
+        case .ephemeral:
+            return true
+        case .denied:
+            return false
+        @unknown default:
+            return false
+        }
     }
 }
 
@@ -97,18 +133,10 @@ final class PushNotificationCoordinator {
 
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
-        let authorized: Bool
-        switch settings.authorizationStatus {
-        case .notDetermined:
-            authorized = (try? await center.requestAuthorization(
-                options: [.alert, .sound, .badge, .announcement]
-            )) == true
-        case .authorized, .provisional, .ephemeral:
-            authorized = true
-        case .denied:
-            authorized = false
-        @unknown default:
-            authorized = false
+        let authorized = await MessagingNotificationAuthorization.authorize(
+            status: settings.authorizationStatus
+        ) { options in
+            try await center.requestAuthorization(options: options)
         }
 
         guard authorized else { return }
