@@ -117,8 +117,8 @@ struct VoiceTranslationPlayer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let note {
-                VoiceAudioPreview(encoded: showOriginal ? note.originalData : note.audioData, title: showOriginal ? "original" : "translation", compact: true)
-                Menu {
+                VoiceAudioPreview(encoded: showOriginal ? note.originalData : note.audioData, title: showOriginal || !note.usesTranslation ? "original" : "translation", compact: true)
+                if note.usesTranslation { Menu {
                     Picker("Recording", selection: $showOriginal) {
                         Text("Translated · AI voice").tag(false)
                         Text("Original recording").tag(true)
@@ -130,6 +130,7 @@ struct VoiceTranslationPlayer: View {
                 }
                 DisclosureGroup("Transcript") {
                     Text(showOriginal ? note.transcript : note.translation).font(.callout).textSelection(.enabled)
+                }
                 }
             } else {
                 if let originalURL {
@@ -181,6 +182,8 @@ struct VoiceComposerView: View {
     @State private var error: String?
     @State private var warning: String?
     @State private var sent = false
+    @State private var translationEnabled = false
+    @State private var loadingSettings = true
 
     var body: some View {
         NavigationStack {
@@ -191,42 +194,47 @@ struct VoiceComposerView: View {
                         if let reply { Text(reply.text).font(.caption).lineLimit(2) }
                     }
                 }
-                VoicePreferenceSection(scope: "outgoing")
+                if translationEnabled { VoicePreferenceSection(scope: "outgoing") }
                 Section {
                     if let note {
-                        Text("Ready in \(note.targetLanguage)").font(.headline)
-                        VoiceAudioPreview(encoded: note.audioData, title: "translated voice note")
-                        VoiceAudioPreview(encoded: note.originalData, title: "original recording")
-                        DisclosureGroup("Review transcript") {
-                            Text(note.transcript).textSelection(.enabled)
-                            Divider()
-                            Text(note.translation).textSelection(.enabled)
+                        Text(note.usesTranslation ? "Ready in \(note.targetLanguage)" : "Original recording ready").font(.headline)
+                        VoiceAudioPreview(encoded: note.audioData, title: note.usesTranslation ? "translated voice note" : "original recording")
+                        if note.usesTranslation {
+                            VoiceAudioPreview(encoded: note.originalData, title: "original recording")
+                            DisclosureGroup("Review transcript") {
+                                Text(note.transcript).textSelection(.enabled)
+                                Divider()
+                                Text(note.translation).textSelection(.enabled)
+                            }
                         }
                         if note.originalFollowUp { Text("Your original recording will follow the translation.").font(.caption) }
                         if !sent {
-                            Button("Send translated voice note", systemImage: "paperplane.fill") { send() }
+                            Button(note.usesTranslation ? "Send translated voice note" : "Send voice note", systemImage: "paperplane.fill") { send() }
                                 .disabled(busy)
                             Button("Record again", role: .destructive) { self.note = nil; cleanup() }
                                 .disabled(busy || sending)
                         }
                     } else {
                         Label(recording ? "Recording · \(seconds)s / 180s" : "Record up to three minutes", systemImage: "waveform")
-                        Button(recording ? "Stop and translate" : "Start recording", systemImage: recording ? "stop.circle.fill" : "mic.circle.fill") {
+                        Button(recording ? "Stop and review" : "Start recording", systemImage: recording ? "stop.circle.fill" : "mic.circle.fill") {
                             if recording { stopAndPrepare() } else { Task { await startRecording() } }
-                        }.disabled(busy)
+                        }.disabled(busy || loadingSettings)
                     }
-                    if busy { ProgressView(sending ? "Sending voice note…" : "Preparing translated voice…") }
+                    if loadingSettings { ProgressView("Loading conversation settings…") }
+                    if busy { ProgressView(sending ? "Sending voice note…" : "Preparing voice note…") }
                     if let error { Text(error).foregroundStyle(.red) }
                     if let warning { Text(warning).foregroundStyle(.orange) }
                     if sent { Label("Voice note sent", systemImage: "checkmark.circle.fill") }
                 } header: { Text("Voice note") } footer: {
-                    Text("The translation uses an AI-generated voice. Listen before sending. Changing the voice applies to the next preparation.")
+                    Text(translationEnabled
+                         ? "The translation uses an AI-generated voice. Listen before sending. Changing the voice applies to the next preparation."
+                         : "Translation is off for this conversation. Your original recording will be sent. Listen before sending.")
                 }
             }
             #if os(macOS)
             .formStyle(.grouped)
             #endif
-            .navigationTitle("Translated voice note")
+            .navigationTitle("Voice note")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(sent ? "Done" : "Close") { dismiss() }.disabled(busy) } }
         }
         .interactiveDismissDisabled(busy)
@@ -235,6 +243,13 @@ struct VoiceComposerView: View {
         #endif
         .onDisappear { cleanup() }
         .task {
+            do {
+                translationEnabled = try await session.conversationSettings(for: contactID).translationEnabled
+                loadingSettings = false
+            } catch {
+                self.error = error.localizedDescription
+                return
+            }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 if recording {

@@ -537,7 +537,7 @@ async fn process_message(
     let (original_text, translated_text, source_language, is_translated) =
         if let Some(translator) = translator {
             if let Some(text) = extract_text_content(&msg.content) {
-                if !msg.is_from_me && !msg.is_history {
+                if !msg.is_from_me && !msg.is_history && settings.translation_enabled {
                     // Only translate incoming messages (not history sync)
                     match translator
                         .process_text(

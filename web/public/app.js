@@ -3,6 +3,7 @@ import { setupMessageTones } from './message-tones.js';
 import { createReliableFetch, reconnectDelay, mergeMessageUpdate } from './send-recovery.js';
 // WhatsApp Translator Web Client
 
+import {ConversationSettingsClient} from './conversation-settings.js';
 import {
   buildConversationBrief,
   buildConversationActionPlan,
@@ -38,7 +39,7 @@ import {
   toggleStarredMessage,
   upsertDraft,
   upsertQuickReply,
-} from './app-state.js?v=20260713-all-chats';
+} from './app-state.js?v=20260912-conversation-translation';
 import { calculateViewportLayout } from './viewport.js?v=20260616-reactions-ui';
 
 class WhatsAppClient {
@@ -83,6 +84,16 @@ class WhatsAppClient {
     this.drafts = this.loadStoredJson(this.draftsStorageKey);
     this.starredMessages = this.loadStoredJson(this.starredStorageKey);
     this.contactMetadata = this.loadStoredJson(this.contactMetadataStorageKey);
+    this.conversationSettingsClient = new ConversationSettingsClient({
+      request: (path, options) => this.apiFetch(path, options),
+      isDemo: () => this.demoMode,
+      onChange: (contactId) => {
+        if (contactId === this.currentContactId) {
+          this.updateChatHeaderNote();
+          this.renderComposerAssist();
+        }
+      },
+    });
     this.quickReplies = this.loadStoredArray(this.quickRepliesStorageKey);
     this.appearancePreferences = this.loadStoredJson(this.appearanceStorageKey);
     this.appearanceState = resolveAppearanceTheme(this.appearancePreferences, {
@@ -484,7 +495,11 @@ class WhatsAppClient {
   }
 
   getContactMetadata(contactId) {
-    return this.contactMetadata?.[contactId] || {};
+    const local = this.contactMetadata?.[contactId] || {};
+    const saved = this.conversationSettingsClient?.get(contactId);
+    return {...local, translationEnabled: false, ...saved,
+      ...(saved ? {targetLanguage: saved.languageOverride || ''} : {}),
+    };
   }
 
   getContactNotePreview(contactId, maxLength = 64) {
@@ -606,9 +621,11 @@ class WhatsAppClient {
     const readiness = document.getElementById('composer-readiness');
 
     if (kicker) kicker.textContent = state.previewLabel;
-    if (title) title.textContent = `${state.targetLanguage} · ${state.styleSummary}`;
+    if (title) title.textContent = state.translationEnabled ? `${state.targetLanguage} · ${state.styleSummary}` : 'Translation off';
     if (preview) {
-      if (state.translatedPreview) {
+      if (!state.translationEnabled) {
+        preview.textContent = 'Messages send as written. Enable translation in Conversation settings when needed.';
+      } else if (state.translatedPreview) {
         preview.textContent = state.translatedPreview;
       } else if (state.latestIncomingSnippet) {
         preview.textContent = `Latest incoming: ${state.latestIncomingSnippet}`;
@@ -641,6 +658,7 @@ class WhatsAppClient {
         <div class="composer-preset-row"><span>Language</span>${languageButtons}</div>
         <div class="composer-preset-row"><span>Tone</span>${toneButtons}</div>
       `;
+      profilePresets.querySelectorAll('button').forEach(button => { button.disabled = !state.translationEnabled; });
     }
     if (smartReplies) {
       smartReplies.innerHTML = state.smartReplies.length > 0
@@ -696,7 +714,7 @@ class WhatsAppClient {
     input.focus();
   }
 
-  applyComposerProfilePreset(updates = {}) {
+  async applyComposerProfilePreset(updates = {}) {
     if (!this.currentContactId) return;
 
     const nextUpdates = {};
@@ -709,8 +727,16 @@ class WhatsAppClient {
     }
     if (Object.keys(nextUpdates).length === 0) return;
 
-    this.updateContactMetadata(this.currentContactId, nextUpdates);
-    const contact = this.getCurrentContact();
+    const contactId = this.currentContactId;
+    try {
+      const saved = await this.conversationSettingsClient.load(contactId);
+      if (!saved.translationEnabled) return;
+      await this.conversationSettingsClient.save(contactId, {...saved, ...nextUpdates});
+    } catch (error) {
+      alert(error.message);
+      return;
+    }
+    const contact = this.contacts.find(item => item.id === contactId);
     if (contact) {
       Object.assign(contact, nextUpdates);
     }
@@ -762,9 +788,11 @@ class WhatsAppClient {
     const targetLanguage = metadata.languageOverride || contact?.languageOverride || '';
     const translationStyle = metadata.translationStyle || contact?.translationStyle || '';
 
-    pieces.push(targetLanguage ? `Translates to ${targetLanguage}` : 'Auto-translation on');
+    pieces.push(metadata.translationEnabled === true
+      ? (targetLanguage ? `Translates to ${targetLanguage}` : 'Auto-translation on')
+      : 'Translation off');
 
-    if (translationStyle) {
+    if (translationStyle && metadata.translationEnabled === true) {
       pieces.push(translationStyle);
     }
 
@@ -1838,6 +1866,9 @@ class WhatsAppClient {
   // Handle incoming WebSocket messages
   handleMessage(data) {
     switch (data.type) {
+      case 'conversation_settings_updated':
+        this.conversationSettingsClient.apply(data.chat_id, data.settings);
+        break;
       case 'status':
         void this.handleStatus(data);
         break;
@@ -2930,6 +2961,7 @@ class WhatsAppClient {
     try {
       this.closeCommandPalette();
       this.currentContactId = contactId;
+      void this.conversationSettingsClient.load(contactId).catch(error => console.warn(error.message));
       this.messageSearchQuery = '';
       this.starredOnly = false;
       
@@ -4163,7 +4195,7 @@ class WhatsAppClient {
       const replyContext = capturedReply ? { ...capturedReply } : null;
       const metadata = this.getContactMetadata(contactId);
       const targetLanguage = metadata.targetLanguage || 'Spanish';
-      const translatedText = simulateTranslation(text, targetLanguage);
+      const translatedText = metadata.translationEnabled === true ? simulateTranslation(text, targetLanguage) : null;
       const sendOriginalFollowUp = Boolean(metadata.sendOriginalFollowUp && translatedText);
       const localMessage = {
         id: `demo-out-${Date.now()}`,
@@ -4557,6 +4589,10 @@ class WhatsAppClient {
 
   async translateUntranslatedIncomingMessages() {
     if (!this.currentContactId) return;
+    if (!this.getContactMetadata(this.currentContactId).translationEnabled) {
+      alert('Translation is off for this conversation. Enable Translate messages in Conversation settings first.');
+      return;
+    }
 
     const messages = this.getUntranslatedIncomingMessagesForCurrentConversation();
     if (messages.length === 0) {
@@ -4589,6 +4625,10 @@ class WhatsAppClient {
   // Translate a message manually
   async translateMessage(messageId, options = {}) {
     const { silent = false, rerender = true } = options;
+    if (!this.getContactMetadata(this.currentContactId).translationEnabled) {
+      if (!silent) alert('Translation is off for this conversation. Enable Translate messages in Conversation settings first.');
+      return;
+    }
     const messages = this.messages.get(this.currentContactId);
     if (!messages) return;
     
@@ -5516,6 +5556,7 @@ class WhatsAppClient {
     document.getElementById('settings-save')?.addEventListener('click', () => {
       this.saveConversationSettings();
     });
+    document.getElementById('translation-enabled')?.addEventListener('change', () => this.updateTranslationSettingsControls());
 
     document.getElementById('command-palette-input')?.addEventListener('input', (event) => {
       this.commandPaletteQuery = event.target.value || '';
@@ -6306,37 +6347,19 @@ class WhatsAppClient {
     if (!modal) return;
 
     this.settingsContactId = contactId;
-    let settings = {};
-    try {
-      const response = await this.apiFetch(`/api/contacts/${encodeURIComponent(contactId)}/settings`, {
-        headers: this.getAuthHeaders()
-      });
-      if (response.ok) {
-        settings = await response.json();
-      }
-    } catch (err) {
-      console.warn('Failed to fetch conversation settings, falling back to local settings only:', err);
+    let settings;
+    try { settings = await this.conversationSettingsClient.load(contactId); }
+    catch (error) {
+      if (this.settingsContactId === contactId) { this.settingsContactId = null; alert(error.message); }
+      return;
     }
-
+    if (this.settingsContactId !== contactId) return;
     const localSettings = this.getContactMetadata(contactId);
     const contact = this.contacts.find(item => item.id === contactId);
     const mergedSettings = {
       ...settings,
-      ...localSettings,
       alias: localSettings.alias || contact?.alias || '',
       timezone: localSettings.timezone || contact?.timezone || '',
-      languageOverride:
-        localSettings.languageOverride ||
-        localSettings.targetLanguage ||
-        contact?.languageOverride ||
-        contact?.targetLanguage ||
-        settings.languageOverride ||
-        '',
-      translationStyle:
-        localSettings.translationStyle ||
-        contact?.translationStyle ||
-        settings.translationStyle ||
-        '',
     };
 
     const setFieldValue = (id, value = '') => {
@@ -6344,6 +6367,8 @@ class WhatsAppClient {
       if (field) field.value = value || '';
     };
 
+    document.getElementById('translation-enabled').checked = mergedSettings.translationEnabled === true;
+    this.updateTranslationSettingsControls();
     setFieldValue('contact-alias', mergedSettings.alias);
     setFieldValue('conversation-timezone', mergedSettings.timezone);
     setFieldValue('language-override', mergedSettings.languageOverride);
@@ -6370,8 +6395,21 @@ class WhatsAppClient {
     }
   }
 
+  updateTranslationSettingsControls() {
+    const enabled = document.getElementById('translation-enabled')?.checked === true;
+    for (const id of ['language-override', 'translation-style', 'send-original-follow-up']) {
+      const field = document.getElementById(id);
+      if (field) field.disabled = !enabled || Boolean(this.savingConversationSettings);
+    }
+    const hint = document.getElementById('translation-enabled-hint');
+    if (hint) hint.textContent = enabled
+      ? 'Translates messages, captions and voice notes for this conversation on every connected device, including Messages.'
+      : 'Off by default. Sends messages as written and uses your original voice recording, without waiting for translation.';
+  }
+
   // Close settings modal
   closeSettingsModal() {
+    if (this.savingConversationSettings) return;
     this.settingsContactId = null;
     const modal = document.getElementById('settings-modal');
     if (modal) {
@@ -6381,6 +6419,7 @@ class WhatsAppClient {
 
   // Save conversation settings
   async saveConversationSettings() {
+    if (this.savingConversationSettings) return;
     const targetContactId = this.settingsContactId || this.currentContactId;
     if (!targetContactId) return;
 
@@ -6390,52 +6429,24 @@ class WhatsAppClient {
     const alias = document.getElementById('contact-alias')?.value?.trim() || null;
     const timezone = document.getElementById('conversation-timezone')?.value?.trim() || null;
 
-    this.updateContactMetadata(targetContactId, {
-      alias,
-      languageOverride,
-      targetLanguage: languageOverride,
-      translationStyle,
-      sendOriginalFollowUp,
-      timezone,
-    });
-
-    const contact = this.contacts.find(item => item.id === targetContactId);
-    if (contact) {
-      contact.alias = alias;
-      contact.languageOverride = languageOverride;
-      contact.targetLanguage = languageOverride;
-      contact.translationStyle = translationStyle;
-      contact.sendOriginalFollowUp = sendOriginalFollowUp;
-      contact.timezone = timezone;
-    }
-
+    const translationEnabled = document.getElementById('translation-enabled')?.checked === true;
+    const modal = document.getElementById('settings-modal');
+    this.savingConversationSettings = true;
+    modal?.querySelectorAll('button, input').forEach(control => { control.disabled = true; });
     try {
-      const response = await this.apiFetch(`/api/contacts/${encodeURIComponent(targetContactId)}/settings`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...this.getAuthHeaders()
-        },
-        body: JSON.stringify({
-          languageOverride: languageOverride || null,
-          translationStyle: translationStyle || null,
-          sendOriginalFollowUp
-        })
+      await this.conversationSettingsClient.save(targetContactId, {
+        translationEnabled, languageOverride, translationStyle, sendOriginalFollowUp,
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to save settings');
-      }
-
-      if (contact) {
-        contact.languageOverride = languageOverride;
-        contact.translationStyle = translationStyle;
-        contact.sendOriginalFollowUp = sendOriginalFollowUp;
-      }
-    } catch (err) {
-      console.error('Failed to save conversation settings:', err);
-      alert('Saved local nickname and timezone, but failed to save translation settings. Please try again.');
+      this.updateContactMetadata(targetContactId, {alias, timezone});
+      const contact = this.contacts.find(item => item.id === targetContactId);
+      if (contact) Object.assign(contact, {alias, timezone});
+    } catch (error) {
+      alert(error.message);
       return;
+    } finally {
+      this.savingConversationSettings = false;
+      modal?.querySelectorAll('button, input').forEach(control => { control.disabled = false; });
+      this.updateTranslationSettingsControls();
     }
 
     this.closeSettingsModal();

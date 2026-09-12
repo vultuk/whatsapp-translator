@@ -4793,3 +4793,4 @@ select {
 .message-tone-preview:hover { background:#8882; }
 .message-tone-actions { display:flex; justify-content:flex-end; gap:10px; position:sticky; bottom:-24px; background:var(--bg-secondary); padding:12px 0; }
 .message-tone-dialog button:disabled { opacity:0.5; cursor:wait; }
+#settings-modal:has(#translation-enabled:not(:checked)) .voice-preference { display: none; }

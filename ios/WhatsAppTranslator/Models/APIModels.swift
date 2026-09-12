@@ -613,6 +613,26 @@ struct ConversationSettings: Codable, Equatable, Sendable {
     var languageOverride: String?
     var translationStyle: String?
     var sendOriginalFollowUp: Bool
+    var translationEnabled: Bool
+
+    init(languageOverride: String? = nil, translationStyle: String? = nil, sendOriginalFollowUp: Bool = false, translationEnabled: Bool = false) {
+        self.languageOverride = languageOverride
+        self.translationStyle = translationStyle
+        self.sendOriginalFollowUp = sendOriginalFollowUp
+        self.translationEnabled = translationEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case languageOverride, translationStyle, sendOriginalFollowUp, translationEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        languageOverride = try values.decodeIfPresent(String.self, forKey: .languageOverride)
+        translationStyle = try values.decodeIfPresent(String.self, forKey: .translationStyle)
+        sendOriginalFollowUp = try values.decodeIfPresent(Bool.self, forKey: .sendOriginalFollowUp) ?? false
+        translationEnabled = try values.decodeIfPresent(Bool.self, forKey: .translationEnabled) ?? false
+    }
 }
 
 struct OpenAISettings: Codable, Equatable, Sendable {
@@ -628,6 +648,7 @@ struct PushDeviceRegistration: Encodable, Sendable {
 }
 
 struct LiveEvent: Decodable, Sendable {
+    var settings: ConversationSettings? = nil
     let type: String
     let connected: Bool?
     let chatId: String?
@@ -646,6 +667,7 @@ struct LiveEvent: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case type
+        case settings
         case connected
         case message
         case status
@@ -666,6 +688,8 @@ struct VoicePreferences: Codable, Sendable {
 }
 
 struct TranslatedVoiceNote: Decodable, Sendable, Identifiable {
+    let isTranslated: Bool?
+    var usesTranslation: Bool { isTranslated ?? true }
     let id: String
     let contactId: String
     let transcript: String

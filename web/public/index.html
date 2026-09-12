@@ -52,7 +52,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="styles.css?v=20260713-compact-sidebar-header">
+  <link rel="stylesheet" href="styles.css?v=20260912-conversation-translation">
   <!-- QR Code library -->
   <script src="https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"></script>
   <!-- Prevent phone number detection on iOS -->
@@ -181,7 +181,7 @@
                 </svg>
               </div>
               <h2>Choose a chat</h2>
-              <p>Incoming messages translate automatically. Replies send in the conversation's language.</p>
+              <p>Translation is off by default. Enable Translate messages in a conversation's settings when you need it.</p>
             </div>
             <section id="visitor-dashboard" class="visitor-dashboard hidden">
               <div class="visitor-dashboard-hero">
@@ -465,6 +465,13 @@
           <section class="settings-section" aria-label="Translation settings">
             <span class="settings-section-label">Translation</span>
             <div class="form-group">
+              <label class="checkbox-row" for="translation-enabled">
+                <input type="checkbox" id="translation-enabled" aria-describedby="translation-enabled-hint">
+                <span>Translate messages</span>
+              </label>
+              <p class="form-hint" id="translation-enabled-hint">Off by default for every person and group.</p>
+            </div>
+            <div class="form-group">
               <label for="language-override">Translate this chat to</label>
               <input type="text" id="language-override" placeholder="Default: English">
               <p class="form-hint">Set a different target language for this chat.</p>
@@ -595,6 +602,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=20260715-live-reactions"></script>
+  <script type="module" src="app.js?v=20260912-conversation-translation"></script>
 </body>
 </html>

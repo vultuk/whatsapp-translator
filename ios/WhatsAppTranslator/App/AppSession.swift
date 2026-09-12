@@ -762,14 +762,18 @@ final class AppSession {
 
     func conversationSettings(for contactID: String) async throws -> ConversationSettings {
         if demoMode {
-            return ConversationSettings(languageOverride: "Spanish", translationStyle: "Friendly", sendOriginalFollowUp: true)
+            return savedConversationSettings[contactID] ?? ConversationSettings()
         }
-        return try await api.conversationSettings(contactID: contactID)
+        let settings = try await api.conversationSettings(contactID: contactID)
+        savedConversationSettings[contactID] = settings
+        return settings
     }
 
+    private(set) var savedConversationSettings: [String: ConversationSettings] = [:]
+
     func saveConversationSettings(_ settings: ConversationSettings, for contactID: String) async throws {
-        guard !demoMode else { return }
-        try await api.updateConversationSettings(contactID: contactID, settings: settings)
+        if !demoMode { try await api.updateConversationSettings(contactID: contactID, settings: settings) }
+        savedConversationSettings[contactID] = settings
     }
 
     func openAISettings() async throws -> OpenAISettings {
@@ -783,6 +787,7 @@ final class AppSession {
     }
 
     func forgetServer() {
+        savedConversationSettings = [:]
         recoveryTask?.cancel()
         liveUpdatesReconnecting = false
         Task {
@@ -892,6 +897,10 @@ final class AppSession {
     func handle(_ event: LiveEvent) {
         guard phase == .ready else { return }
         switch event.type {
+        case "conversation_settings_updated":
+            if let contactID = event.chatId, let settings = event.settings {
+                savedConversationSettings[contactID] = settings
+            }
         case "message", "reaction", "message_updated":
             if recoveryTask != nil { recoveryNeedsAnotherPass = true }
             guard let message = event.message else { return }

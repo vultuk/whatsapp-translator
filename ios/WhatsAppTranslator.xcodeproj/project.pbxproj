@@ -53,9 +53,12 @@
 		4F67653AC5FD6F57A790DB4F /* bb-aurora.wav in Resources */ = {isa = PBXBuildFile; fileRef = 9E87C9E4F398515570CD85A0 /* bb-aurora.wav */; };
 		5277F679F5387039D6EC96AB /* WhatsAppTranslatorIntents.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E0E1B6DD2CC4727A47717ED2 /* WhatsAppTranslatorIntents.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		537C5A094A8DFC2A8810F643 /* MediaCacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3E7A004408CAA0517971D44 /* MediaCacheStore.swift */; };
+		55A43370D5182EF5D8745B9E /* ConversationTranslationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06E1E8106F6E36730715B09F /* ConversationTranslationUITests.swift */; };
+		55ADA6CF1EAFCB4B29BBB612 /* ConversationTranslationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5266270E20D42FFB4373C60B /* ConversationTranslationTests.swift */; };
 		595EC32F1675EB7BEA9E603F /* SendRecoveryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD483EE27D01F8680F8CAD68 /* SendRecoveryStore.swift */; };
 		59B1A3EECD3C41CDA0F0F33A /* MacMessagingIntentDonor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57C3781009630003B44F9943 /* MacMessagingIntentDonor.swift */; };
 		59C4DC294E2C02274523985A /* bb-orbit.wav in Resources */ = {isa = PBXBuildFile; fileRef = 623E4D9D9D6EDB6EEAD02730 /* bb-orbit.wav */; };
+		5BA59E3E6234C418163D0789 /* ConversationTranslationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5266270E20D42FFB4373C60B /* ConversationTranslationTests.swift */; };
 		6308C6CE2247B7D3D589F736 /* TranslatorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4BF31391B23EBC8C173DBB4 /* TranslatorTheme.swift */; };
 		644DBFBD20B07F78BB3B4A11 /* MessageToneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78B304C0DE351D146ED39609 /* MessageToneTests.swift */; };
 		6C37C3EF729A6AA8C422BDE8 /* SendRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B94AA0053FADA3191A9C967 /* SendRecoveryTests.swift */; };
@@ -135,6 +138,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		1CC15A8256DFC4590D2FB7FB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5B8FAE79EDFC3627EE13D148 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8D381D652B7E90F95C8BC507;
+			remoteInfo = WhatsAppTranslator;
+		};
 		1F1B7AE310F32D9A9DBF2529 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 5B8FAE79EDFC3627EE13D148 /* Project object */;
@@ -189,6 +199,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		06E1E8106F6E36730715B09F /* ConversationTranslationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTranslationUITests.swift; sourceTree = "<group>"; };
 		0722A5293307242D843D4E79 /* WhatsAppTranslator.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WhatsAppTranslator.entitlements; sourceTree = "<group>"; };
 		0BBC6DBDD1A48DDCE96A9940 /* bb-glass.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "bb-glass.wav"; sourceTree = "<group>"; };
 		11C1D91E4A79E0B65279462F /* RichMessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichMessageContentView.swift; sourceTree = "<group>"; };
@@ -209,6 +220,7 @@
 		4ADA4A4AC7AE08C33BCFD42E /* WhatsAppTranslatorIntents.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WhatsAppTranslatorIntents.entitlements; sourceTree = "<group>"; };
 		4AEC105D96EBB09CD38C98D6 /* ChatListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListView.swift; sourceTree = "<group>"; };
 		519C8762FDD069963579930A /* PushNotificationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationCoordinator.swift; sourceTree = "<group>"; };
+		5266270E20D42FFB4373C60B /* ConversationTranslationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTranslationTests.swift; sourceTree = "<group>"; };
 		57C3781009630003B44F9943 /* MacMessagingIntentDonor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMessagingIntentDonor.swift; sourceTree = "<group>"; };
 		592B7D143FC3A806E452ECDB /* bb-bloom.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "bb-bloom.wav"; sourceTree = "<group>"; };
 		6010E7F3A59C4304404C23EE /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
@@ -244,6 +256,7 @@
 		B96107FB7C9C2242E21B679A /* PhotoSendActivityCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoSendActivityCoordinator.swift; sourceTree = "<group>"; };
 		BAD2CD0E43F260CE9AB24195 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		C101319254FF200F0B9CC840 /* CarPlayMessagingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlayMessagingTests.swift; sourceTree = "<group>"; };
+		C15662F0436CDF357F1D8E66 /* ConversationTranslationUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ConversationTranslationUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C2FF9435EF1375702E6017C4 /* PhotoSendActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoSendActivityAttributes.swift; sourceTree = "<group>"; };
 		C34B4E13CF3BFDA915E9AB75 /* WhatsAppTranslatorTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WhatsAppTranslatorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CAEF803559BBA8F957FAD8DC /* ContactAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactAvatar.swift; sourceTree = "<group>"; };
@@ -365,6 +378,7 @@
 		6D1447DDDD363A36EDB76ACD /* SharedTests */ = {
 			isa = PBXGroup;
 			children = (
+				5266270E20D42FFB4373C60B /* ConversationTranslationTests.swift */,
 				78B304C0DE351D146ED39609 /* MessageToneTests.swift */,
 			);
 			path = SharedTests;
@@ -405,6 +419,14 @@
 			path = ../web/public/sounds;
 			sourceTree = "<group>";
 		};
+		B5ACA539F6B713B5A2C2DD22 /* ConversationTranslationUITests */ = {
+			isa = PBXGroup;
+			children = (
+				06E1E8106F6E36730715B09F /* ConversationTranslationUITests.swift */,
+			);
+			path = ConversationTranslationUITests;
+			sourceTree = "<group>";
+		};
 		D0C2063A713CA22DBC1FF047 /* Services */ = {
 			isa = PBXGroup;
 			children = (
@@ -426,6 +448,7 @@
 			children = (
 				5A653A7D2C841EF327C87764 /* BabelBridgeMac */,
 				0BE9110C2F3E1B267B583EF3 /* BabelBridgeMacTests */,
+				B5ACA539F6B713B5A2C2DD22 /* ConversationTranslationUITests */,
 				79EDE821BD354313D43E4C34 /* Shared */,
 				6D1447DDDD363A36EDB76ACD /* SharedTests */,
 				9F605A48C8778AC93FD249A0 /* sounds */,
@@ -490,6 +513,7 @@
 			children = (
 				7AFD701213B538B835780375 /* BabelBridgeMac.app */,
 				7CA83F4E6F46DFED5F8A8152 /* BabelBridgeMacTests.xctest */,
+				C15662F0436CDF357F1D8E66 /* ConversationTranslationUITests.xctest */,
 				D522664D667A13E0C57549F8 /* WhatsAppTranslator.app */,
 				E0E1B6DD2CC4727A47717ED2 /* WhatsAppTranslatorIntents.appex */,
 				FD30FD5EDF3A40DD9E412307 /* WhatsAppTranslatorNotificationService.appex */,
@@ -558,6 +582,24 @@
 			productName = WhatsAppTranslatorNotificationService;
 			productReference = FD30FD5EDF3A40DD9E412307 /* WhatsAppTranslatorNotificationService.appex */;
 			productType = "com.apple.product-type.app-extension";
+		};
+		64456D025A9F4D09D485A63D /* ConversationTranslationUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8563315783ABDFDA82C7B24C /* Build configuration list for PBXNativeTarget "ConversationTranslationUITests" */;
+			buildPhases = (
+				89F114620DEAAA17F9A36BC4 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EE3EDD81C4BA05FEA20A97CE /* PBXTargetDependency */,
+			);
+			name = ConversationTranslationUITests;
+			packageProductDependencies = (
+			);
+			productName = ConversationTranslationUITests;
+			productReference = C15662F0436CDF357F1D8E66 /* ConversationTranslationUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 		763AB2377701E2E6CB09ED71 /* BabelBridgeMac */ = {
 			isa = PBXNativeTarget;
@@ -669,6 +711,11 @@
 						DevelopmentTeam = SUR6QUSSV6;
 						ProvisioningStyle = Automatic;
 					};
+					64456D025A9F4D09D485A63D = {
+						DevelopmentTeam = SUR6QUSSV6;
+						ProvisioningStyle = Automatic;
+						TestTargetID = 8D381D652B7E90F95C8BC507;
+					};
 					763AB2377701E2E6CB09ED71 = {
 						DevelopmentTeam = SUR6QUSSV6;
 						ProvisioningStyle = Automatic;
@@ -707,6 +754,7 @@
 			targets = (
 				763AB2377701E2E6CB09ED71 /* BabelBridgeMac */,
 				0BACAA47A21C0709F7F9C971 /* BabelBridgeMacTests */,
+				64456D025A9F4D09D485A63D /* ConversationTranslationUITests */,
 				8D381D652B7E90F95C8BC507 /* WhatsAppTranslator */,
 				AA5DE25913AAA6FF36166FB5 /* WhatsAppTranslatorIntents */,
 				1686F1E29930E619812751CD /* WhatsAppTranslatorNotificationService */,
@@ -805,11 +853,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		89F114620DEAAA17F9A36BC4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				55A43370D5182EF5D8745B9E /* ConversationTranslationUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		9A73CD029F74DB677208CD4A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				BA09BFB816208579A36ECF18 /* BabelBridgeMacTests.swift in Sources */,
+				55ADA6CF1EAFCB4B29BBB612 /* ConversationTranslationTests.swift in Sources */,
 				FD6A227DD85657B7A1B132CA /* MessageToneTests.swift in Sources */,
 				A7F844F22CE8F780B83A4464 /* SendRecoveryTests.swift in Sources */,
 				F6460EF1F222112E6EFDD85E /* VoicePlaybackTests.swift in Sources */,
@@ -919,6 +976,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				6D8BA728A9C8578E98B1F84A /* CarPlayMessagingTests.swift in Sources */,
+				5BA59E3E6234C418163D0789 /* ConversationTranslationTests.swift in Sources */,
 				644DBFBD20B07F78BB3B4A11 /* MessageToneTests.swift in Sources */,
 				6C37C3EF729A6AA8C422BDE8 /* SendRecoveryTests.swift in Sources */,
 				279B83945EECB15DE7A24F57 /* VoicePlaybackTests.swift in Sources */,
@@ -954,6 +1012,11 @@
 			target = 763AB2377701E2E6CB09ED71 /* BabelBridgeMac */;
 			targetProxy = 1F1B7AE310F32D9A9DBF2529 /* PBXContainerItemProxy */;
 		};
+		EE3EDD81C4BA05FEA20A97CE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 8D381D652B7E90F95C8BC507 /* WhatsAppTranslator */;
+			targetProxy = 1CC15A8256DFC4590D2FB7FB /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
@@ -968,6 +1031,23 @@
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
+		03789D0E63EDE5AD8C83E02C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vultuk.whatsapptranslator.conversation-ui-tests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = WhatsAppTranslator;
+			};
+			name = Release;
+		};
 		12C8B117E11603BD3FCE1EA8 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1060,7 +1140,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 55;
+				CURRENT_PROJECT_VERSION = 56;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -1162,6 +1242,23 @@
 			};
 			name = Debug;
 		};
+		796E23BD726D8995B3A23F79 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vultuk.whatsapptranslator.conversation-ui-tests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = WhatsAppTranslator;
+			};
+			name = Debug;
+		};
 		7B4DAA9BC0937A0553228397 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1214,7 +1311,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 55;
+				CURRENT_PROJECT_VERSION = 56;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1407,6 +1504,15 @@
 			buildConfigurations = (
 				E5B0A6D9B2EB48A2FAD3EB29 /* Debug */,
 				A2E289696FC0EE4073AA0AF4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		8563315783ABDFDA82C7B24C /* Build configuration list for PBXNativeTarget "ConversationTranslationUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				796E23BD726D8995B3A23F79 /* Debug */,
+				03789D0E63EDE5AD8C83E02C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

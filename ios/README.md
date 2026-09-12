@@ -1,5 +1,7 @@
 # Babel Bridge for Apple platforms
 
+Translation is off by default for every person and group. Use **Conversation settings → Translate messages** to enable a chat. The same server-saved choice applies in Chats and unified Messages on iOS, iPadOS, macOS, and web; long-press or right-click a Messages conversation heading to open its settings. Disabled chats send original text, captions, and voice recordings without waiting for translation AI. Language, style, and original-follow-up choices are preserved when switched off.
+
 Native SwiftUI clients for the Babel Bridge translation backend. The Xcode
 project contains separate iOS and macOS app targets that share the messaging,
 translation, caching and API layers while using each platform's native app

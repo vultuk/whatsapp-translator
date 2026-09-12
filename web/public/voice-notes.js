@@ -56,11 +56,15 @@ export function setupVoiceNotes(app) {
     };
   }
   function preview(container, note) {
+    if (note.isTranslated === false) {
+      container.replaceChildren(el('h4', 'Original recording ready'), audio(note.audioData, 'Original voice note'));
+      return;
+    }
     container.replaceChildren(el('h4', `Translated into ${note.targetLanguage}`), el('p', 'AI-generated voice', 'voice-hint'), audio(note.audioData, 'Translated voice'), audio(note.originalData, 'Original recording'));
     const details = el('details'); details.append(el('summary', 'Review transcript'), el('p', note.transcript), el('p', note.translation)); container.append(details);
     if (note.originalFollowUp) container.append(el('p', 'Your original recording will follow the translation.', 'voice-hint'));
   }
-  const dialog = el('dialog', null, 'voice-dialog'); dialog.setAttribute('aria-label', 'Translated voice note'); document.body.append(dialog);
+  const dialog = el('dialog', null, 'voice-dialog'); dialog.setAttribute('aria-label', 'Voice note'); document.body.append(dialog);
   let recorder, stream, timer, chunks = [], busy = false;
   const cleanRecording = () => { clearInterval(timer); if (recorder?.state === 'recording') { recorder.onstop = null; recorder.stop(); } stream?.getTracks().forEach(track => track.stop()); stream = null; recorder = null; };
   dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
@@ -69,9 +73,16 @@ export function setupVoiceNotes(app) {
     if (!app.currentContactId) return;
     const contactId = app.currentContactId;
     const reply = app.replyingTo ? {...app.replyingTo} : null;
-    dialog.replaceChildren(el('h3', 'Translated voice note'));
-    const prefs = el('div'); dialog.append(prefs); await preference(prefs, 'outgoing');
-    const status = el('p', 'Record up to three minutes. Listen to the translation before sending.'); status.setAttribute('role', 'status');
+    let settings;
+    try { settings = await app.conversationSettingsClient.load(contactId); }
+    catch (error) { alert(error.message); return; }
+    dialog.replaceChildren(el('h3', 'Voice note'));
+    if (settings.translationEnabled) {
+      const prefs = el('div'); dialog.append(prefs); await preference(prefs, 'outgoing');
+    }
+    const status = el('p', settings.translationEnabled
+      ? 'Record up to three minutes. Listen to the translation before sending.'
+      : 'Translation is off. Record up to three minutes and review your original recording before sending.'); status.setAttribute('role', 'status');
     const content = el('div', null, 'voice-preview');
     const controls = el('div', null, 'voice-actions');
     const close = button('Close', () => dialog.close());
@@ -87,15 +98,15 @@ export function setupVoiceNotes(app) {
         recorder.onerror = () => { cleanRecording(); record.textContent = 'Start recording'; status.textContent = 'Recording failed. Please try again.'; };
         recorder.onstop = async () => {
           clearInterval(timer); stream?.getTracks().forEach(track => track.stop());
-          busy = true; record.disabled = close.disabled = true; status.textContent = 'Preparing translated voice…';
+          busy = true; record.disabled = close.disabled = true; status.textContent = 'Preparing voice note…';
           try {
             const blob = new Blob(chunks, {type:recorder.mimeType});
             if (blob.size > 16*1024*1024) throw new Error('Recording is too large. Please use a shorter note.');
             const encoded = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = reject; reader.readAsDataURL(blob); });
             const note = await api('/api/voice/prepare', voicePayload(contactId, encoded, reply));
             preview(content, note); record.hidden = true;
-            status.textContent = 'Listen to the translated recording, then send when ready.';
-            const send = button('Send translated voice note', async () => {
+            status.textContent = 'Listen to the recording, then send when ready.';
+            const send = button(note.isTranslated === false ? 'Send voice note' : 'Send translated voice note', async () => {
               busy = true; send.disabled = close.disabled = true; again.disabled = true; status.textContent = 'Sending…';
               try {
                 const result = await api('/api/voice/send', {preparationId:note.id});
@@ -110,13 +121,13 @@ export function setupVoiceNotes(app) {
           } catch (error) { status.textContent = error.message; record.textContent = 'Record again'; }
           finally { busy = false; record.disabled = close.disabled = false; }
         };
-        recorder.start(); record.textContent = 'Stop and translate'; let seconds = 0; status.textContent = 'Recording · 0s / 180s';
+        recorder.start(); record.textContent = 'Stop and review'; let seconds = 0; status.textContent = 'Recording · 0s / 180s';
         timer = setInterval(() => { seconds++; status.textContent = `Recording · ${seconds}s / 180s`; if (seconds >= 180 && recorder?.state === 'recording') recorder.stop(); }, 1000);
       } catch (error) { status.textContent = error.message; cleanRecording(); }
     });
     controls.append(record, close); dialog.append(status, content, controls); dialog.showModal();
   });
-  recordButton.id = 'voice-record-button'; recordButton.title = 'Record a translated voice note'; recordButton.textContent = '🎙'; recordButton.setAttribute('aria-label', 'Record translated voice note');
+  recordButton.id = 'voice-record-button'; recordButton.title = 'Record a voice note'; recordButton.textContent = '🎙'; recordButton.setAttribute('aria-label', 'Record voice note');
   document.getElementById('message-input')?.before(recordButton);
 
   window.addEventListener('voice-preference-saved', event => {

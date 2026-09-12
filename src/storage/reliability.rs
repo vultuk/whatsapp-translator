@@ -25,6 +25,7 @@ impl MessageStore {
         let mut query = conn.prepare(
             "SELECT n.message_id FROM pending_notifications n JOIN messages m ON m.id=n.message_id
              WHERE n.requires_translation=0 OR
+               NOT EXISTS(SELECT 1 FROM contacts c WHERE c.id=m.contact_id AND c.translation_enabled=1) OR
                (m.source_language IS NOT NULL AND
                  (m.is_translated=0 OR LENGTH(TRIM(COALESCE(m.translated_text,'')))>0))
              ORDER BY m.timestamp, n.rowid LIMIT 20",
@@ -278,7 +279,7 @@ impl MessageStore {
     }
     pub fn enqueue_translation(&self, message_id: &str) -> Result<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT OR IGNORE INTO translation_jobs(message_id) SELECT id FROM messages WHERE id=? AND source_language IS NULL",
+            "INSERT OR IGNORE INTO translation_jobs(message_id) SELECT m.id FROM messages m JOIN contacts c ON c.id=m.contact_id WHERE m.id=? AND m.source_language IS NULL AND c.translation_enabled=1",
             params![message_id],
         )?;
         Ok(())
@@ -293,6 +294,7 @@ impl MessageStore {
     pub fn claim_translation(&self) -> Result<Option<String>> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        tx.execute("DELETE FROM translation_jobs WHERE NOT EXISTS(SELECT 1 FROM messages m JOIN contacts c ON c.id=m.contact_id WHERE m.id=translation_jobs.message_id AND c.translation_enabled=1)", [])?;
         let id = tx.query_row("SELECT message_id FROM translation_jobs WHERE status='pending' AND retry_at<=? ORDER BY attempts ASC, rowid DESC LIMIT 1", params![chrono::Utc::now().timestamp()], |row| row.get::<_, String>(0)).optional()?;
         if let Some(id) = &id {
             tx.execute("UPDATE translation_jobs SET status='processing', attempts=attempts+1 WHERE message_id=?", params![id])?;
@@ -314,7 +316,7 @@ impl MessageStore {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute(
-            "UPDATE messages SET translated_text=?, source_language=?, is_translated=? WHERE id=?",
+            "UPDATE messages SET translated_text=?, source_language=?, is_translated=? WHERE id=? AND EXISTS(SELECT 1 FROM contacts c WHERE c.id=messages.contact_id AND c.translation_enabled=1)",
             params![translated, language, needs_translation, id],
         )?;
         let contact: Option<String> = tx
@@ -329,6 +331,21 @@ impl MessageStore {
         }
         tx.execute(
             "DELETE FROM translation_jobs WHERE message_id=?",
+            params![id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn discard_translation(&self, id: &str) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM translation_jobs WHERE message_id=?",
+            params![id],
+        )?;
+        tx.execute(
+            "UPDATE pending_notifications SET requires_translation=0 WHERE message_id=?",
             params![id],
         )?;
         tx.commit()?;

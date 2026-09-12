@@ -105,6 +105,9 @@ pub struct StoredContact {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSettings {
+    /// Translation is opt-in for each direct chat or group.
+    #[serde(default)]
+    pub translation_enabled: bool,
     /// Override the target language for translations in this conversation
     /// e.g., "Spanish", "French", "Japanese"
     pub language_override: Option<String>,
@@ -658,6 +661,17 @@ impl MessageStore {
 
     /// Add conversation settings columns to contacts table
     fn migrate_add_conversation_settings_columns(&self, conn: &Connection) -> Result<()> {
+        let has_translation_enabled = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('contacts') WHERE name = 'translation_enabled'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+        if !has_translation_enabled {
+            conn.execute(
+                "ALTER TABLE contacts ADD COLUMN translation_enabled INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         // Check if language_override column exists
         let has_language_override: bool = conn
             .query_row(
@@ -1134,6 +1148,11 @@ impl MessageStore {
         )?;
         if inserted > 0 && !msg.is_from_me {
             if let Some(requires_translation) = notification_requires_translation {
+                let requires_translation = requires_translation && tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM contacts WHERE id=? AND translation_enabled=1)",
+                    params![msg.contact_id],
+                    |row| row.get::<_, bool>(0),
+                )?;
                 tx.execute(
                     "INSERT INTO pending_notifications(message_id, requires_translation) VALUES (?, ?)",
                     params![msg.id, requires_translation],
@@ -1511,13 +1530,14 @@ impl MessageStore {
         let conn = self.conn.lock().unwrap();
 
         let result = conn.query_row(
-            "SELECT language_override, translation_style, send_original_follow_up FROM contacts WHERE id = ?",
+            "SELECT language_override, translation_style, send_original_follow_up, translation_enabled FROM contacts WHERE id = ?",
             params![contact_id],
             |row| {
                 Ok(ConversationSettings {
                     language_override: row.get(0)?,
                     translation_style: row.get(1)?,
                     send_original_follow_up: row.get(2)?,
+                    translation_enabled: row.get(3)?,
                 })
             },
         );
@@ -1535,17 +1555,24 @@ impl MessageStore {
         contact_id: &str,
         settings: &ConversationSettings,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-
-        conn.execute(
-            "UPDATE contacts SET language_override = ?, translation_style = ?, send_original_follow_up = ? WHERE id = ?",
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let changed = tx.execute(
+            "UPDATE contacts SET language_override = ?, translation_style = ?, send_original_follow_up = ?, translation_enabled = ? WHERE id = ?",
             params![
                 settings.language_override,
                 settings.translation_style,
                 settings.send_original_follow_up,
+                settings.translation_enabled,
                 contact_id
             ],
         )?;
+        anyhow::ensure!(changed == 1, "Conversation not found");
+        if !settings.translation_enabled {
+            tx.execute("DELETE FROM translation_jobs WHERE message_id IN (SELECT id FROM messages WHERE contact_id=?)", params![contact_id])?;
+            tx.execute("UPDATE pending_notifications SET requires_translation=0 WHERE message_id IN (SELECT id FROM messages WHERE contact_id=?)", params![contact_id])?;
+        }
+        tx.commit()?;
 
         info!(
             "Updated conversation settings for {}: language={:?}, style={:?}, original_follow_up={}",
@@ -3007,6 +3034,15 @@ mod tests {
             .upsert_contact("chat@example.test", Some("Test Chat"), None, None, 1)
             .unwrap();
         store
+            .update_conversation_settings(
+                "chat@example.test",
+                &ConversationSettings {
+                    translation_enabled: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
             .add_message_with_notification(&test_message("Szia", 1), Some(true))
             .unwrap();
         assert!(store.ready_notification_ids().unwrap().is_empty());
@@ -3038,6 +3074,15 @@ mod tests {
         let (store, dir) = test_store();
         store
             .upsert_contact("chat@example.test", None, None, None, 1)
+            .unwrap();
+        store
+            .update_conversation_settings(
+                "chat@example.test",
+                &ConversationSettings {
+                    translation_enabled: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         store.add_message(&test_message("history", 1)).unwrap();
         store.enqueue_translation("history").unwrap();
@@ -3082,6 +3127,15 @@ mod tests {
         let (store, dir) = test_store();
         store
             .upsert_contact("chat@example.test", None, None, None, 0)
+            .unwrap();
+        store
+            .update_conversation_settings(
+                "chat@example.test",
+                &ConversationSettings {
+                    translation_enabled: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let mut message = test_message("legacy", 1);
         message.source_language = Some("English".into());
@@ -3181,6 +3235,15 @@ mod tests {
         store
             .upsert_contact("chat@example.test", None, None, None, 0)
             .unwrap();
+        store
+            .update_conversation_settings(
+                "chat@example.test",
+                &ConversationSettings {
+                    translation_enabled: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         for id in ["old-failure", "new-message"] {
             store.add_message(&test_message(id, 1)).unwrap();
             store.enqueue_translation(id).unwrap();
@@ -3211,6 +3274,15 @@ mod tests {
         let (store, dir) = test_store();
         store
             .upsert_contact("chat@example.test", None, None, None, 1)
+            .unwrap();
+        store
+            .update_conversation_settings(
+                "chat@example.test",
+                &ConversationSettings {
+                    translation_enabled: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         store.add_message(&test_message("queued", 1)).unwrap();
         store.enqueue_translation("queued").unwrap();
@@ -3314,6 +3386,7 @@ mod tests {
         insert_test_contact(&store);
 
         let settings = ConversationSettings {
+            translation_enabled: true,
             language_override: Some("Spanish".to_string()),
             translation_style: Some("friendly".to_string()),
             send_original_follow_up: true,
@@ -3328,6 +3401,137 @@ mod tests {
         assert!(loaded.send_original_follow_up);
 
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn translation_is_opt_in_for_existing_people_and_new_groups_and_survives_restart() {
+        let (store, dir) = test_store();
+        for (id, kind) in [
+            ("person@s.whatsapp.net", "private"),
+            ("family@g.us", "group"),
+        ] {
+            store.upsert_contact(id, None, None, Some(kind), 0).unwrap();
+            assert!(
+                !store
+                    .get_conversation_settings(id)
+                    .unwrap()
+                    .translation_enabled
+            );
+        }
+        let settings = ConversationSettings {
+            translation_enabled: true,
+            language_override: Some("Hungarian".into()),
+            translation_style: Some("friendly".into()),
+            send_original_follow_up: true,
+        };
+        store
+            .update_conversation_settings("person@s.whatsapp.net", &settings)
+            .unwrap();
+        // Simulate the pre-toggle database; adding the column must not opt an
+        // existing foreign-language conversation in implicitly.
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("ALTER TABLE contacts DROP COLUMN translation_enabled", [])
+            .unwrap();
+        drop(store);
+        let store = MessageStore::new(&dir).unwrap();
+        let migrated = store
+            .get_conversation_settings("person@s.whatsapp.net")
+            .unwrap();
+        assert!(!migrated.translation_enabled);
+        assert_eq!(migrated.language_override.as_deref(), Some("Hungarian"));
+        assert!(migrated.send_original_follow_up);
+        store
+            .update_conversation_settings("family@g.us", &settings)
+            .unwrap();
+        store
+            .upsert_contact(
+                "family@g.us",
+                Some("Refreshed family"),
+                None,
+                Some("group"),
+                5,
+            )
+            .unwrap();
+        drop(store);
+        let store = MessageStore::new(&dir).unwrap();
+        assert!(
+            store
+                .get_conversation_settings("family@g.us")
+                .unwrap()
+                .translation_enabled
+        );
+        assert!(
+            !store
+                .get_conversation_settings("person@s.whatsapp.net")
+                .unwrap()
+                .translation_enabled
+        );
+        let mut disabled = settings.clone();
+        disabled.translation_enabled = false;
+        store
+            .update_conversation_settings("family@g.us", &disabled)
+            .unwrap();
+        let saved = store.get_conversation_settings("family@g.us").unwrap();
+        assert!(!saved.translation_enabled);
+        assert_eq!(saved.language_override, settings.language_override);
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn disabling_translation_cancels_queued_work_releases_alerts_and_discards_in_flight_results() {
+        let (store, dir) = test_store();
+        insert_test_contact(&store);
+        let mut settings = ConversationSettings {
+            translation_enabled: true,
+            ..Default::default()
+        };
+        store
+            .update_conversation_settings("chat@example.test", &settings)
+            .unwrap();
+        store
+            .add_message_with_notification(&test_message("first", 1), Some(true))
+            .unwrap();
+        assert!(store.ready_notification_ids().unwrap().is_empty());
+        assert_eq!(store.claim_translation().unwrap().as_deref(), Some("first"));
+        settings.translation_enabled = false;
+        store
+            .update_conversation_settings("chat@example.test", &settings)
+            .unwrap();
+        store
+            .finish_translation("first", Some("Late translation"), "Hungarian", true)
+            .unwrap();
+        let first = store.get_message_by_id("first").unwrap().unwrap();
+        assert!(!first.is_translated);
+        assert!(
+            first.source_language.is_none(),
+            "turning it back on must permit detection later"
+        );
+        assert_eq!(store.ready_notification_ids().unwrap(), vec!["first"]);
+        store
+            .add_message_with_notification(&test_message("second", 2), Some(true))
+            .unwrap();
+        store.enqueue_translation("first").unwrap();
+        store.enqueue_translation("second").unwrap();
+        assert!(store.claim_translation().unwrap().is_none());
+        assert_eq!(
+            store.ready_notification_ids().unwrap(),
+            vec!["first", "second"]
+        );
+        settings.translation_enabled = true;
+        store
+            .update_conversation_settings("chat@example.test", &settings)
+            .unwrap();
+        store.enqueue_translation("second").unwrap();
+        assert_eq!(
+            store.claim_translation().unwrap().as_deref(),
+            Some("second")
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

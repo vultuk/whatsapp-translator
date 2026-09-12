@@ -80,6 +80,7 @@ struct ConversationView: View {
                     displayName: session.displayName(for: contact),
                     avatarURL: session.avatarURLs[contact.id],
                     localTime: session.localTimeDescription(for: contact.id),
+                    translationEnabled: session.savedConversationSettings[contact.id]?.translationEnabled == true,
                     usage: usage,
                     starredOnly: starredOnly,
                     showContactSettings: { showSettings = true },
@@ -155,6 +156,7 @@ struct ConversationView: View {
             }
         }
         .navigationTitle(platformNavigationTitle)
+        .task(id: contact.id) { _ = try? await session.conversationSettings(for: contact.id) }
         .task {
             let arguments = ProcessInfo.processInfo.arguments
             guard arguments.contains("-demoPhotoSendProgress") || arguments.contains("-demoPhotoTransferProgress") else { return }
@@ -254,7 +256,8 @@ struct ConversationView: View {
     }
 
     private var conversationHeaderSubtitle: String {
-        session.localTimeDescription(for: contact.id) ?? "Auto-translation on"
+        let translation = session.savedConversationSettings[contact.id]?.translationEnabled == true ? "Translation on" : "Translation off"
+        return session.localTimeDescription(for: contact.id).map { "\(translation) · \($0)" } ?? translation
     }
 
     @ViewBuilder

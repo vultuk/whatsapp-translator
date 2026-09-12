@@ -66,13 +66,16 @@ async fn translate(state: &AppState, id: &str) -> anyhow::Result<()> {
     use anyhow::Context;
     let epoch = state.voice_epoch.load(Ordering::SeqCst);
     let Some(message) = state.store.get_message_by_id(id)? else {
-        return state.store.finish_translation(id, None, "", false);
+        return state.store.discard_translation(id);
     };
+    let settings = state.store.get_conversation_settings(&message.contact_id)?;
+    if !settings.translation_enabled {
+        return state.store.discard_translation(id);
+    }
     let text = message
         .original_text
         .as_deref()
         .context("No text to translate")?;
-    let settings = state.store.get_conversation_settings(&message.contact_id)?;
     let translator = state
         .translator
         .as_ref()
@@ -144,6 +147,11 @@ pub async fn outgoing_language(
         None
     };
     let settings = state.store.get_conversation_settings(contact_id)?;
+    // Keep reply ownership checks above, but bypass all AI detection and
+    // translation for a conversation that has not explicitly opted in.
+    if !settings.translation_enabled {
+        return Ok(None);
+    }
     if let Some(language) = settings.language_override.filter(|s| !s.trim().is_empty()) {
         return Ok(Some(language));
     }

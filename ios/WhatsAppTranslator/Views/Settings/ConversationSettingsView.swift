@@ -7,6 +7,7 @@ struct ConversationSettingsView: View {
     @State private var settings = ConversationSettings(languageOverride: nil, translationStyle: nil, sendOriginalFollowUp: false)
     @State private var presentation = ConversationPresentationPreferences.empty
     @State private var isLoading = true
+    @State private var hasLoaded = false
     @State private var isSaving = false
     @State private var error: String?
     @State private var showTimezonePicker = ProcessInfo.processInfo.arguments.contains("-demoTimezonePicker")
@@ -14,8 +15,9 @@ struct ConversationSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                translationSection
                 Section("Notifications") { MessageToneSettingsRow(contactID: contact.id) }
-                VoicePreferenceSection(scope: contact.id)
+                if settings.translationEnabled { VoicePreferenceSection(scope: contact.id) }
 
                 Section {
                     LabeledContent("Nickname") {
@@ -52,50 +54,25 @@ struct ConversationSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Section {
-                    LabeledContent("Language") {
-                        TextField(
-                            "",
-                            text: optionalBinding(\.languageOverride),
-                            prompt: Text("Automatic")
-                        )
-                            .platformWordsInput()
-                            .multilineTextAlignment(.trailing)
-                            .accessibilityLabel("Language")
-                    }
-                    LabeledContent("Style") {
-                        TextField(
-                            "",
-                            text: optionalBinding(\.translationStyle),
-                            prompt: Text("Optional")
-                        )
-                            .multilineTextAlignment(.trailing)
-                            .accessibilityLabel("Style")
-                    }
-                    Toggle("Send original after translation", isOn: $settings.sendOriginalFollowUp)
-                } header: {
-                    Text("Translation")
-                } footer: {
-                    Text("When enabled, the translated message sends first, followed immediately by what you originally typed.")
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
             .platformGroupedFormStyle()
             .platformCompactControlTypography()
             .navigationTitle(session.displayName(for: contact))
             .platformInlineNavigationTitle()
-            .disabled(isLoading || isSaving)
+            .disabled(!hasLoaded || isLoading || isSaving)
             .overlay { if isLoading { ProgressView() } }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { dismiss() }.disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
                         .fontWeight(.semibold)
+                        .disabled(!hasLoaded || isLoading || isSaving)
                 }
             }
             .task { await load() }
+            .interactiveDismissDisabled(isSaving)
             .alert("Couldn’t save settings", isPresented: errorPresented) {
                 Button("OK") { error = nil }
             } message: { Text(error ?? "Please try again.") }
@@ -109,6 +86,34 @@ struct ConversationSettingsView: View {
             minHeight: MacChatLayoutMetrics.settingsSheetMinimumHeight
         )
         #endif
+    }
+
+    private var translationSection: some View {
+        Section {
+            Toggle("Translate messages", isOn: $settings.translationEnabled)
+                .accessibilityIdentifier("conversation-translation-enabled")
+            if settings.translationEnabled {
+                LabeledContent("Language") {
+                    TextField("", text: optionalBinding(\.languageOverride), prompt: Text("Automatic"))
+                        .platformWordsInput()
+                        .multilineTextAlignment(.trailing)
+                        .accessibilityLabel("Language")
+                }
+                LabeledContent("Style") {
+                    TextField("", text: optionalBinding(\.translationStyle), prompt: Text("Optional"))
+                        .multilineTextAlignment(.trailing)
+                        .accessibilityLabel("Style")
+                }
+                Toggle("Send original after translation", isOn: $settings.sendOriginalFollowUp)
+            }
+        } header: {
+            Text("Translation")
+        } footer: {
+            Text(settings.translationEnabled
+                 ? "Translates incoming and outgoing messages, captions and voice notes. If selected above, your original follows the translation. This also applies in Messages on every connected device."
+                 : "Messages send as written and voice notes use your original recording, without waiting for translation. Off by default for every person and group, including in Messages.")
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func optionalBinding(_ keyPath: WritableKeyPath<ConversationSettings, String?>) -> Binding<String> {
@@ -131,12 +136,16 @@ struct ConversationSettingsView: View {
 
     private func load() async {
         presentation = session.preferences.conversationPreferences(for: contact.id)
-        do { settings = try await session.conversationSettings(for: contact.id) }
+        do {
+            settings = try await session.conversationSettings(for: contact.id)
+            hasLoaded = true
+        }
         catch { self.error = error.localizedDescription }
         isLoading = false
     }
 
     private func save() {
+        guard hasLoaded, !isLoading, !isSaving else { return }
         if let identifier = presentation.timezoneIdentifier, TimeZone(identifier: identifier) == nil {
             error = "Enter a timezone such as Europe/London or Europe/Budapest."
             return

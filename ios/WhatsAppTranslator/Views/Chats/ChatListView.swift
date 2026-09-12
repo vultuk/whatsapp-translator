@@ -244,7 +244,7 @@ private struct EmptyConversationView: View {
                 TranslatorMark(size: 78)
                 Text("Choose a chat")
                     .font(.largeTitle.bold())
-                Text("Incoming messages translate automatically.\nYour replies send in the conversation’s language.")
+                Text("Translation is off by default.\nEnable Translate messages in a conversation’s settings when you need it.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
             }

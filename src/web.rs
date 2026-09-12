@@ -172,6 +172,10 @@ pub enum WebSocketEvent {
     MessageUpdated {
         message: StoredMessage,
     },
+    ConversationSettingsUpdated {
+        chat_id: String,
+        settings: crate::storage::ConversationSettings,
+    },
     Resync,
     Heartbeat,
     Typing {
@@ -540,6 +544,9 @@ pub struct AuthResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConversationSettingsRequest {
+    // Older native builds omit this field when saving their existing settings.
+    // Preserve an explicit choice rather than silently resetting it.
+    pub translation_enabled: Option<bool>,
     /// Override the target language for translations (plain text, e.g., "Spanish")
     pub language_override: Option<String>,
     /// Style instruction for translations (plain text, e.g., "formal", "casual")
@@ -552,6 +559,7 @@ pub struct UpdateConversationSettingsRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSettingsResponse {
+    pub translation_enabled: bool,
     pub language_override: Option<String>,
     pub translation_style: Option<String>,
     pub send_original_follow_up: bool,
@@ -1769,12 +1777,9 @@ async fn get_conversation_settings(
     State(state): State<Arc<AppState>>,
     Path(contact_id): Path<String>,
 ) -> impl IntoResponse {
-    let contact_id = urlencoding::decode(&contact_id)
-        .map(|s| s.into_owned())
-        .unwrap_or(contact_id);
-
     match state.store.get_conversation_settings(&contact_id) {
         Ok(settings) => Json(ConversationSettingsResponse {
+            translation_enabled: settings.translation_enabled,
             language_override: settings.language_override,
             translation_style: settings.translation_style,
             send_original_follow_up: settings.send_original_follow_up,
@@ -1797,12 +1802,39 @@ async fn update_conversation_settings(
     Path(contact_id): Path<String>,
     Json(req): Json<UpdateConversationSettingsRequest>,
 ) -> impl IntoResponse {
-    let contact_id = urlencoding::decode(&contact_id)
-        .map(|s| s.into_owned())
-        .unwrap_or(contact_id);
+    match state.store.get_contact(&contact_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error":"Conversation not found"})),
+            )
+                .into_response()
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"Could not load conversation"})),
+            )
+                .into_response()
+        }
+    }
+    let previous = match state.store.get_conversation_settings(&contact_id) {
+        Ok(settings) => settings,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"Could not load conversation settings"})),
+            )
+                .into_response()
+        }
+    };
 
     // Convert empty strings to None
     let settings = crate::storage::ConversationSettings {
+        translation_enabled: req
+            .translation_enabled
+            .unwrap_or(previous.translation_enabled),
         language_override: req.language_override.filter(|s| !s.trim().is_empty()),
         translation_style: req.translation_style.filter(|s| !s.trim().is_empty()),
         send_original_follow_up: req.send_original_follow_up,
@@ -1812,13 +1844,22 @@ async fn update_conversation_settings(
         .store
         .update_conversation_settings(&contact_id, &settings)
     {
-        Ok(()) => Json(serde_json::json!({
-            "success": true,
-            "languageOverride": settings.language_override,
-            "translationStyle": settings.translation_style,
-            "sendOriginalFollowUp": settings.send_original_follow_up
-        }))
-        .into_response(),
+        Ok(()) => {
+            let _ = state
+                .broadcast_tx
+                .send(WebSocketEvent::ConversationSettingsUpdated {
+                    chat_id: contact_id,
+                    settings: settings.clone(),
+                });
+            Json(serde_json::json!({
+                "success": true,
+                "translationEnabled": settings.translation_enabled,
+                "languageOverride": settings.language_override,
+                "translationStyle": settings.translation_style,
+                "sendOriginalFollowUp": settings.send_original_follow_up
+            }))
+            .into_response()
+        }
         Err(e) => {
             error!("Failed to update conversation settings: {}", e);
             (
@@ -3478,6 +3519,9 @@ async fn translate_message(
         .unwrap_or_default();
 
     // Call the translation service with conversation settings
+    if !settings.translation_enabled {
+        return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"Translation is off for this conversation. Enable it in Conversation settings."}))).into_response();
+    }
     let result = match translator
         .process_text(
             text,
@@ -5636,6 +5680,309 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn conversation_translation_settings_default_off_and_preserve_choices_for_older_clients()
+    {
+        let (state, dir) = test_state(None);
+        let id = "family+one%2Ftwo@g.us";
+        state
+            .store
+            .upsert_contact(id, None, None, Some("group"), 0)
+            .unwrap();
+        let app = create_router(state.clone());
+        let path = format!("/api/contacts/{}/settings", urlencoding::encode(id));
+        let response = app.clone().oneshot(empty_request(&path)).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["translationEnabled"], false);
+        let mut events = state.broadcast_tx.subscribe();
+        for (body, expected) in [
+            (
+                serde_json::json!({"translationEnabled":true,"languageOverride":"Hungarian"}),
+                true,
+            ),
+            (
+                serde_json::json!({"languageOverride":"Hungarian","translationStyle":"friendly"}),
+                true,
+            ),
+            (
+                serde_json::json!({"translationEnabled":false,"languageOverride":"Hungarian"}),
+                false,
+            ),
+        ] {
+            let request = HttpRequest::builder()
+                .method("PUT")
+                .uri(&path)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                state
+                    .store
+                    .get_conversation_settings(id)
+                    .unwrap()
+                    .translation_enabled,
+                expected
+            );
+            let WebSocketEvent::ConversationSettingsUpdated { chat_id, settings } =
+                events.recv().await.unwrap()
+            else {
+                panic!("Expected settings event")
+            };
+            assert_eq!(chat_id, id);
+            assert_eq!(settings.translation_enabled, expected);
+        }
+        let unknown = HttpRequest::builder()
+            .method("PUT")
+            .uri("/api/contacts/missing/settings")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"translationEnabled":true}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(unknown).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+        let (locked, locked_dir) = test_state(Some("test-secret"));
+        assert_eq!(
+            create_router(locked)
+                .oneshot(empty_request(&path))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(locked_dir);
+    }
+
+    #[tokio::test]
+    async fn disabled_translation_sends_original_text_and_captions_for_people_groups_and_unified_replies_without_ai(
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/responses", listener.local_addr().unwrap());
+        let mock = Router::new().route(
+            "/responses",
+            post(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async { StatusCode::BAD_GATEWAY }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+        let (_, dir) = test_state(None);
+        let state = AppState::new(
+            MessageStore::new(&dir).unwrap(),
+            PathBuf::from("web/public"),
+            dir.clone(),
+            Some(Arc::new(TranslationService::new_with_api_url(url))),
+            None,
+            None,
+        );
+        let ids = ["123@s.whatsapp.net", "family@g.us"];
+        for id in ids {
+            state
+                .store
+                .upsert_contact(
+                    id,
+                    None,
+                    None,
+                    Some(if id.ends_with("g.us") {
+                        "group"
+                    } else {
+                        "private"
+                    }),
+                    0,
+                )
+                .unwrap();
+            for (suffix, time) in [("selected", 100), ("newer", 200)] {
+                let mut message = feed_test_message(&format!("{id}-{suffix}"), id, time);
+                message.original_text = Some("Jó reggelt".into());
+                message.source_language = Some("Hungarian".into());
+                state.store.add_message(&message).unwrap();
+            }
+        }
+        state.set_connected(true, None, None).await;
+        let (tx, mut rx) = mpsc::channel(8);
+        state.set_command_tx(tx).await;
+        let app = create_router(state.clone());
+        for (index, id) in ids.into_iter().enumerate() {
+            for other in ids {
+                state
+                    .store
+                    .update_conversation_settings(
+                        other,
+                        &ConversationSettings {
+                            translation_enabled: other != id,
+                            language_override: Some("Hungarian".into()),
+                            translation_style: Some("friendly".into()),
+                            send_original_follow_up: true,
+                        },
+                    )
+                    .unwrap();
+            }
+            for unified in [false, true] {
+                let reply = unified.then(|| format!("{id}-selected"));
+                let body = serde_json::json!({"contactId":id,"text":"Good morning, see you soon!","replyTo":reply,"replyToText":"Jó reggelt","replyOnlyIfNotLatest":unified});
+                let request = HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/send")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap();
+                let sending = tokio::spawn(app.clone().oneshot(request));
+                let command = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let BridgeCommand::Send {
+                    request_id: Some(request_id),
+                    to,
+                    text,
+                    reply_to,
+                    ..
+                } = command
+                else {
+                    panic!("Expected text send")
+                };
+                assert_eq!(to, id);
+                assert_eq!(text, "Good morning, see you soon!");
+                assert_eq!(reply_to, reply);
+                let sent_id = format!("confirmed-{index}-{unified}");
+                state
+                    .handle_send_result(BridgeSendResult {
+                        request_id,
+                        success: true,
+                        message_id: Some(sent_id.clone()),
+                        timestamp: Some(1000),
+                        message_ids: vec![],
+                        timestamps: vec![],
+                        error: None,
+                    })
+                    .await;
+                let response = sending.await.unwrap().unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                assert!(
+                    !state
+                        .store
+                        .get_message_by_id(&sent_id)
+                        .unwrap()
+                        .unwrap()
+                        .is_translated
+                );
+                assert!(
+                    rx.try_recv().is_err(),
+                    "disabled conversations must not send an original follow-up twice"
+                );
+            }
+            assert_eq!(
+                translate_caption(
+                    &state,
+                    id,
+                    Some(&format!("{id}-selected")),
+                    Some("Good morning")
+                )
+                .await
+                .unwrap(),
+                (Some("Good morning".into()), None)
+            );
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "off must bypass all detection and translation API calls"
+        );
+        server.abort();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn conversation_and_unified_history_only_queue_translation_for_enabled_contacts() {
+        let (_, dir) = test_state(None);
+        let state = AppState::new(
+            MessageStore::new(&dir).unwrap(),
+            PathBuf::from("web/public"),
+            dir.clone(),
+            Some(Arc::new(TranslationService::new_with_api_url(
+                "http://127.0.0.1:9/responses".into(),
+            ))),
+            None,
+            None,
+        );
+        for (id, message_id) in [
+            ("123@s.whatsapp.net", "person-message"),
+            ("family@g.us", "group-message"),
+        ] {
+            state.store.upsert_contact(id, None, None, None, 0).unwrap();
+            let mut message = feed_test_message(message_id, id, 100);
+            message.original_text = Some("Jó reggelt".into());
+            state
+                .store
+                .add_message_with_notification(&message, Some(true))
+                .unwrap();
+        }
+        let app = create_router(state.clone());
+        for uri in [
+            "/api/feed",
+            "/api/messages/123%40s.whatsapp.net",
+            "/api/messages/family%40g.us",
+        ] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(empty_request(uri))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::OK
+            );
+        }
+        assert!(state.store.claim_translation().unwrap().is_none());
+        assert_eq!(state.store.ready_notification_ids().unwrap().len(), 2);
+        state
+            .store
+            .update_conversation_settings(
+                "family@g.us",
+                &ConversationSettings {
+                    translation_enabled: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(empty_request("/api/feed"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            state.store.claim_translation().unwrap().as_deref(),
+            Some("group-message")
+        );
+        assert!(state.store.claim_translation().unwrap().is_none());
+        state
+            .store
+            .update_conversation_settings("family@g.us", &ConversationSettings::default())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(empty_request("/api/messages/family%40g.us"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert!(state.store.claim_translation().unwrap().is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn required_translation_without_a_translator_never_sends_english() {
         let (state, data_dir) = test_state(None);
         let contact_id = "33612345678@s.whatsapp.net";
@@ -5654,6 +6001,7 @@ mod tests {
             .update_conversation_settings(
                 contact_id,
                 &ConversationSettings {
+                    translation_enabled: true,
                     language_override: Some("French".to_string()),
                     translation_style: None,
                     send_original_follow_up: false,
@@ -5756,6 +6104,7 @@ mod tests {
             .update_conversation_settings(
                 "chat@example.test",
                 &ConversationSettings {
+                    translation_enabled: true,
                     language_override: Some("Hungarian".into()),
                     ..Default::default()
                 },
@@ -5803,6 +6152,16 @@ mod tests {
             .store
             .upsert_contact("chat@example.test", None, None, None, 0)
             .unwrap();
+        state
+            .store
+            .update_conversation_settings(
+                "chat@example.test",
+                &ConversationSettings {
+                    translation_enabled: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         for n in 0..4 {
             let mut message = test_outgoing_message(&format!("hungarian-{n}"), n);
             message.is_from_me = false;
@@ -5832,6 +6191,7 @@ mod tests {
             .update_conversation_settings(
                 "chat@example.test",
                 &ConversationSettings {
+                    translation_enabled: true,
                     language_override: Some("German".into()),
                     ..Default::default()
                 },
@@ -6730,6 +7090,20 @@ mod tests {
             None,
             None,
         );
+        state
+            .store
+            .upsert_contact("123@s.whatsapp.net", None, None, Some("private"), 0)
+            .unwrap();
+        state
+            .store
+            .update_conversation_settings(
+                "123@s.whatsapp.net",
+                &ConversationSettings {
+                    translation_enabled: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         crate::incoming::start(state.clone()).unwrap();
         let event:crate::bridge::BridgeEvent=serde_json::from_value(serde_json::json!({"type":"message","id":"incoming-one","timestamp":1700000000,"from":{"jid":"123@s.whatsapp.net","phone":"123"},"chat":{"type":"private","jid":"123@s.whatsapp.net"},"content":{"type":"text","body":"Hola"},"is_from_me":false,"is_forwarded":false})).unwrap();
         tokio::time::timeout(

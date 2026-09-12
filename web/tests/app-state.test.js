@@ -671,7 +671,7 @@ test('composer assist builds a translation preview and reply starter', () => {
 
   const state = getComposerAssistState({
     draftText: '18:30 works and I will send the taxi plate',
-    metadata: { languageOverride: 'Spanish', translationStyle: 'friendly' },
+    metadata: { languageOverride: 'Spanish', translationStyle: 'friendly', translationEnabled: true },
     contact: { id: 'host', name: 'Sofia' },
     latestIncomingMessage: incoming,
     demoMode: true,
@@ -693,7 +693,7 @@ test('composer assist builds a translation preview and reply starter', () => {
 
 test('composer assist still explains the route without a draft', () => {
   const state = getComposerAssistState({
-    metadata: { targetLanguage: 'Japanese' },
+    metadata: { targetLanguage: 'Japanese', translationEnabled: true },
     demoMode: false,
   });
 

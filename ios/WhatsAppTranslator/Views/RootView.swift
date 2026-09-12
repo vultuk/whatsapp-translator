@@ -142,6 +142,7 @@ private struct UnifiedMessagesView: View {
     @Binding var replyDraft: UnifiedReplyDraft
     @Binding var sending: Bool
     @State private var showSettings = false
+    @State private var settingsContact: Contact?
     @State private var atBottom = true
     @FocusState private var composerFocused: Bool
 
@@ -244,6 +245,7 @@ private struct UnifiedMessagesView: View {
                 composer.padding(.bottom, ComposerLayout.bottomAdjustment(for: bottomSafeArea))
             }
             .sheet(isPresented: $showSettings) { AppSettingsView() }
+            .sheet(item: $settingsContact) { ConversationSettingsView(contact: $0) }
         }
         .task { if !session.feedHasLoaded { await session.loadFeed() } }
         .onChange(of: session.mainTab) { _, tab in
@@ -280,6 +282,10 @@ private struct UnifiedMessagesView: View {
             .foregroundStyle(palette.deepAccent)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .contextMenu {
+            Button("Conversation settings", systemImage: "slider.horizontal.3") { settingsContact = contact }
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open chat: \(name(message))")

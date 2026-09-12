@@ -827,7 +827,12 @@ impl WhatsAppMcpServer {
             .get_contact(contact_id)
             .mcp()?
             .ok_or_else(|| McpError::invalid_params("Unknown contact_id", None))?;
-        let target_language = if mode == TranslationMode::Never {
+        let settings = self
+            .state
+            .store
+            .get_conversation_settings(contact_id)
+            .mcp()?;
+        let target_language = if mode == TranslationMode::Never || !settings.translation_enabled {
             None
         } else {
             if let Some(target) = args
@@ -992,6 +997,19 @@ impl WhatsAppMcpServer {
         if require_reply && prepared.reply_to_message_id.is_none() {
             return Err(McpError::invalid_params(
                 "reply_to_message requires a preparation created with reply_to_message_id",
+                None,
+            ));
+        }
+        if prepared.translated
+            && !self
+                .state
+                .store
+                .get_conversation_settings(&prepared.contact_id)
+                .mcp()?
+                .translation_enabled
+        {
+            return Err(McpError::invalid_params(
+                "Translation is now off for this conversation. Prepare the message again before sending.",
                 None,
             ));
         }
@@ -1628,6 +1646,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disabled_conversations_prepare_original_mcp_text_and_reject_stale_translated_preparations(
+    ) {
+        let (state, data_dir) = test_state();
+        let server = WhatsAppMcpServer::new(
+            state.clone(),
+            McpPermissions {
+                read: true,
+                send: true,
+            },
+        );
+        for contact_id in ["person@s.whatsapp.net", "family@g.us"] {
+            state
+                .store
+                .upsert_contact(contact_id, Some("Synthetic chat"), None, None, 0)
+                .unwrap();
+            let result = server.handle_prepare_message(json!({
+                "contact_id": contact_id, "text": "Hello", "translation_mode": "auto", "target_language": "Hungarian"
+            })).await.unwrap().structured_content.unwrap();
+            assert_eq!(result["finalText"], "Hello");
+            assert_eq!(result["translated"], false);
+            let preparations = state.mcp_prepared_messages.read().await;
+            let mut stale: PreparedMcpMessage = serde_json::from_value(
+                preparations
+                    .get(result["preparationToken"].as_str().unwrap())
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap();
+            drop(preparations);
+            stale.translated = true;
+            stale.final_text = "Szia".into();
+            state
+                .mcp_prepared_messages
+                .write()
+                .await
+                .insert(stale.token.clone(), serde_json::to_value(&stale).unwrap());
+            let error = server.handle_prepared_send(json!({"preparation_token": stale.token, "idempotency_key": format!("stale-{contact_id}")}), false).await.unwrap_err();
+            assert!(error.to_string().contains("Translation is now off"));
+            assert!(state
+                .mcp_prepared_messages
+                .read()
+                .await
+                .contains_key(&stale.token));
+        }
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn required_conversation_translation_without_a_translator_prepares_nothing() {
         let (state, data_dir) = test_state();
         let contact_id = "33612345678@s.whatsapp.net";
@@ -1646,6 +1712,7 @@ mod tests {
             .update_conversation_settings(
                 contact_id,
                 &ConversationSettings {
+                    translation_enabled: true,
                     language_override: Some("French".to_string()),
                     translation_style: None,
                     send_original_follow_up: false,

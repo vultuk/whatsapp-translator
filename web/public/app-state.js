@@ -1547,7 +1547,7 @@ export function getComposerSendReadiness({
   if (!trimmedDraft) {
     checks.push({ id: 'draft', status: 'info', label: 'Type a draft to check reply coverage.' });
   } else {
-    checks.push({ id: 'draft', status: 'ready', label: 'Draft is ready to translate.' });
+    checks.push({ id: 'draft', status: 'ready', label: metadata.translationEnabled === true ? 'Draft is ready to translate.' : 'Draft will send as written.' });
   }
 
   if (latestIncomingSnippet && textContainsQuestion(latestIncomingSnippet)) {
@@ -1601,12 +1601,13 @@ export function getComposerAssistState({
   demoMode = false,
   now = Date.now(),
 } = {}) {
+  const translationEnabled = metadata.translationEnabled === true;
   const targetLanguage = String(
     metadata?.targetLanguage
     || metadata?.languageOverride
     || metadata?.language
-    || 'Spanish',
-  ).trim() || 'Spanish';
+    || (demoMode ? 'Spanish' : 'Automatic'),
+  ).trim() || 'Automatic';
   const translationStyle = String(metadata?.translationStyle || '').trim();
   const trimmedDraft = String(draftText || '').trim();
   const latestIncomingSnippet = latestIncomingMessage ? messageSnippet(latestIncomingMessage, 96) : '';
@@ -1616,7 +1617,7 @@ export function getComposerAssistState({
   const smartReplies = latestIncomingMessage
     ? getSmartReplyOptions({ message: latestIncomingMessage, metadata: { ...metadata, targetLanguage }, contact })
     : [];
-  const translatedPreview = trimmedDraft
+  const translatedPreview = trimmedDraft && translationEnabled && demoMode
     ? simulateTranslation(trimmedDraft, targetLanguage)
     : '';
   const styleSummary = translationStyle ? `${translationStyle} tone` : 'standard tone';
@@ -1636,6 +1637,7 @@ export function getComposerAssistState({
   });
 
   return {
+    translationEnabled,
     targetLanguage,
     translationStyle,
     styleSummary,
@@ -1656,7 +1658,7 @@ export function getComposerAssistState({
     hasIncomingContext: Boolean(latestIncomingMessage),
     canUseSuggestedReply: smartReplies.length > 0 || Boolean(suggestedReply),
     showPreview: Boolean(trimmedDraft || latestIncomingMessage || targetLanguage || translationStyle || demoMode),
-    previewLabel: demoMode ? 'Demo translation preview' : 'Translation route',
+    previewLabel: !translationEnabled ? 'Send as written' : demoMode ? 'Demo translation preview' : 'Translation route',
   };
 }
 

@@ -48,7 +48,9 @@ Optional:
 
 Text AI defaults to GPT-6 Astra with low reasoning. The shared OpenAI settings override environment model choices; selecting Astra with no reasoning selection uses low. Speech recognition and speech synthesis retain their dedicated audio models.
 
-Incoming text and media captions translate into `WA_DEFAULT_LANGUAGE`. Outgoing text, captions, and voice use a conversation override first, then the replied-to incoming message's language, then the predominant recent incoming language. Unknown chat language is resolved from recent incoming text before sending. Language-neutral messages stay unchanged. Translation failures prevent outgoing sends and incoming jobs retry with backoff; opening a conversation queues previously undetected text and captions.
+Translation defaults **off for every person and group**, including existing conversations. Open **Conversation settings → Translate messages** to enable it for a particular chat. The server saves the choice by conversation ID and shares it across web, iOS/iPadOS, macOS, and unified **Messages**. In Messages, long-press or right-click a message's conversation heading to open those same settings. Disabled conversations send text and captions as written and voice notes as original recordings, without language detection or other translation AI calls. Disabling also cancels queued incoming translations and releases pending notifications; saved language, style, and original-follow-up preferences are retained.
+
+For enabled conversations, incoming text and media captions translate into `WA_DEFAULT_LANGUAGE`. Outgoing text, captions, and voice use a conversation override first, then the replied-to incoming message's language, then the predominant recent incoming language. Unknown chat language is resolved from recent incoming text before sending. Language-neutral messages stay unchanged. Translation failures prevent outgoing sends and incoming jobs retry with backoff; opening an enabled conversation queues previously undetected text and captions.
 
 Required for native iOS push notifications:
 
@@ -122,7 +124,7 @@ separate Node API server.
 
 ## Translated voice notes
 
-Incoming voice notes are transcribed, translated into your default language, and
+In conversations with **Translate messages** enabled, incoming voice notes are transcribed, translated into your default language, and
 spoken by an AI-generated voice. The original remains available beside the
 translation. Older recordings can be translated on demand.
 
@@ -140,7 +142,7 @@ Automatic approximately matches acoustic pitch and falls back to Neutral when
 uncertain; it does not clone the speaker or identify their gender. Each choice
 has an audible sample. Changing a setting applies to the next prepared recording.
 
-Voice processing requires microphone permission, FFmpeg, and an OpenAI key with
+Original recording preparation requires microphone permission and FFmpeg. With translation off, recordings are not sent to OpenAI. Translated voice processing additionally requires an OpenAI key with
 access to `gpt-4o-mini-transcribe` and `gpt-4o-mini-tts`. Browser recording requires
 HTTPS or localhost. Audio and transcripts are sent to OpenAI for processing;
 cached recordings are stored in the private application database. Audio-service
@@ -229,7 +231,7 @@ secrets.
 
 ## Delivery and connection recovery
 
-Incoming text is stored immediately, then translated by two background workers.
+Incoming text is stored immediately. In enabled conversations it is then translated by two background workers.
 The persistent queue holds up to 1,000 pending jobs and retries failed jobs up to
 three attempts. Queue overflow and exhausted retries retain the original message;
 manual translation remains available. Completed translations update the existing

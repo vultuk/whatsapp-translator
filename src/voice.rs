@@ -100,6 +100,8 @@ pub async fn sample(
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct VoiceNote {
+    #[serde(default = "translated_by_default")]
+    is_translated: bool,
     #[serde(default)]
     reply_only_if_not_latest: bool,
     id: String,
@@ -120,12 +122,16 @@ struct VoiceNote {
     reply_to_sender: Option<String>,
     reply_to_text: Option<String>,
 }
+fn translated_by_default() -> bool {
+    true
+}
 impl VoiceNote {
     fn public(&self) -> Value {
         json!({"id": self.id, "contactId": self.contact_id, "transcript": self.transcript,
         "translation": self.translation, "targetLanguage": self.target_language, "voice": self.voice,
         "audioData": self.audio_data, "originalData": self.original_data, "mimeType": "audio/mpeg",
-        "durationSeconds": self.duration_seconds, "originalFollowUp": self.original_follow_up})
+        "durationSeconds": self.duration_seconds, "originalFollowUp": self.original_follow_up,
+        "isTranslated": self.is_translated})
     }
 }
 
@@ -329,10 +335,6 @@ async fn build_note(
     id: String,
 ) -> Result<VoiceNote> {
     let epoch = state.voice_epoch.load(std::sync::atomic::Ordering::SeqCst);
-    let translator = state
-        .translator
-        .as_ref()
-        .context("Translation is unavailable. Configure the OpenAI API key on the server.")?;
     state
         .store
         .get_contact(&req.contact_id)?
@@ -347,18 +349,9 @@ async fn build_note(
         }
     }
     let settings = state.store.get_conversation_settings(&req.contact_id)?;
-    let target = if incoming {
-        translator.default_language().to_string()
-    } else {
-        crate::incoming::outgoing_language(state, &req.contact_id, req.reply_to.as_deref())
-            .await?
-            .context("Set this conversation’s language before sending a translated voice note.")?
-    };
-    let preference = state.store.voice_setting(if incoming {
-        &req.contact_id
-    } else {
-        "outgoing"
-    })?;
+    if incoming && !settings.translation_enabled {
+        bail!("Translation is off for this conversation. Enable it in Conversation settings.");
+    }
     let scratch = Scratch::new(&state.data_dir)?;
     tokio::fs::write(scratch.0.join("input"), decode_audio(&req.media_data)?).await?;
     let pcm = convert(
@@ -381,6 +374,64 @@ async fn build_note(
         bail!("No audible speech was detected. Please record again.");
     }
     let original_seconds = (pcm.len() as f64 / 2.0 / RATE as f64).ceil() as u32;
+    if !settings.translation_enabled {
+        // WhatsApp still needs its audio format, but this path never waits on
+        // transcription, language detection, translation, or speech generation.
+        let original = convert(
+            &scratch.0,
+            "input",
+            "original.mp3",
+            &["-ac", "1", "-c:a", "libmp3lame", "-b:a", "64k"],
+        )
+        .await?;
+        let send_audio = convert(
+            &scratch.0,
+            "input",
+            "original.ogg",
+            &["-ac", "1", "-c:a", "libopus", "-b:a", "32k"],
+        )
+        .await?;
+        if epoch != state.voice_epoch.load(std::sync::atomic::Ordering::SeqCst) {
+            bail!("Session changed while preparing. Please reconnect.");
+        }
+        return Ok(VoiceNote {
+            is_translated: false,
+            id,
+            contact_id: req.contact_id,
+            transcript: String::new(),
+            translation: String::new(),
+            target_language: String::new(),
+            source_language: String::new(),
+            voice: "original".into(),
+            audio_data: B64.encode(&original),
+            original_data: B64.encode(original),
+            duration_seconds: original_seconds,
+            original_duration_seconds: original_seconds,
+            send_audio: B64.encode(send_audio),
+            send_original: String::new(),
+            original_follow_up: false,
+            reply_only_if_not_latest: req.reply_only_if_not_latest,
+            reply_to: req.reply_to,
+            reply_to_sender: req.reply_to_sender,
+            reply_to_text: req.reply_to_text,
+        });
+    }
+    let translator = state
+        .translator
+        .as_ref()
+        .context("Translation is unavailable. Configure the OpenAI API key on the server.")?;
+    let target = if incoming {
+        translator.default_language().to_string()
+    } else {
+        crate::incoming::outgoing_language(state, &req.contact_id, req.reply_to.as_deref())
+            .await?
+            .context("Translation settings changed. Please prepare the voice note again.")?
+    };
+    let preference = state.store.voice_setting(if incoming {
+        &req.contact_id
+    } else {
+        "outgoing"
+    })?;
     let voice = select_voice(&preference, &pcm).to_string();
     let wav = convert(
         &scratch.0,
@@ -478,6 +529,7 @@ async fn build_note(
         bail!("Session changed while translating. Please reconnect.");
     }
     Ok(VoiceNote {
+        is_translated: true,
         id,
         contact_id: req.contact_id,
         source_language: translated.source_language,
@@ -505,9 +557,19 @@ pub async fn prepare(
 ) -> Response {
     result_response(
         async {
-            let _guard = tokio::time::timeout(Duration::from_secs(180), state.voice_lock.lock())
-                .await
-                .context("Voice translation is busy. Please try again shortly.")?;
+            let _guard = if state
+                .store
+                .get_conversation_settings(&req.contact_id)?
+                .translation_enabled
+            {
+                Some(
+                    tokio::time::timeout(Duration::from_secs(180), state.voice_lock.lock())
+                        .await
+                        .context("Voice translation is busy. Please try again shortly.")?,
+                )
+            } else {
+                None
+            };
             let note = build_note(&state, req, false, uuid::Uuid::new_v4().to_string()).await?;
             state
                 .store
@@ -584,6 +646,13 @@ async fn translate_received_inner(state: &AppState, message_id: &str) -> Result<
         .store
         .get_message_by_id(message_id)?
         .context("Message not found")?;
+    if !state
+        .store
+        .get_conversation_settings(&message.contact_id)?
+        .translation_enabled
+    {
+        bail!("Translation is off for this conversation. Enable it in Conversation settings.");
+    }
     let (data, _) = state
         .store
         .get_message_media(message_id)?
@@ -602,6 +671,13 @@ async fn translate_received_inner(state: &AppState, message_id: &str) -> Result<
         id,
     )
     .await?;
+    if !state
+        .store
+        .get_conversation_settings(&note.contact_id)?
+        .translation_enabled
+    {
+        bail!("Translation was turned off while this voice note was processing.");
+    }
     state
         .store
         .save_voice_note(&note.id, &serde_json::to_string(&note)?)?;
@@ -625,6 +701,21 @@ async fn translate_received_inner(state: &AppState, message_id: &str) -> Result<
 /// Bound automatic work independently of the bridge event loop. Older notes remain available on demand.
 pub fn queue_incoming(state: Arc<AppState>, message_id: String) {
     if state.translator.is_none() {
+        return;
+    }
+    let enabled = state
+        .store
+        .get_message_by_id(&message_id)
+        .ok()
+        .flatten()
+        .and_then(|message| {
+            state
+                .store
+                .get_conversation_settings(&message.contact_id)
+                .ok()
+        })
+        .is_some_and(|settings| settings.translation_enabled);
+    if !enabled {
         return;
     }
     let Ok(permit) = state.voice_queue.clone().try_acquire_owned() else {
@@ -652,6 +743,9 @@ pub async fn send(State(state): State<Arc<AppState>>, Json(req): Json<SendReques
         if chrono::Utc::now().timestamp() - created > 15 * 60 { bail!("Recording preview expired. Please prepare it again."); }
         if !*state.connected.read().await { bail!("WhatsApp is disconnected. Reconnect before sending."); }
         let mut note: VoiceNote = serde_json::from_str(&payload)?;
+        if note.is_translated != state.store.get_conversation_settings(&note.contact_id)?.translation_enabled {
+            bail!("Translation settings changed. Please record or prepare this voice note again.");
+        }
         if note.reply_only_if_not_latest {
             let id = note.reply_to.as_deref().context("Select a message before recording a reply")?;
             if state.store.reply_is_latest(&note.contact_id, id)? {
@@ -784,7 +878,8 @@ fn store_audio_message(
         .store
         .get_contact(&note.contact_id)?
         .context("Conversation not found")?;
-    let content = json!({"type":"audio","isVoiceNote":true,"durationSeconds":duration,"mime_type":"audio/mpeg", "media_data":if original {&note.original_data} else {&note.audio_data},"aiGenerated":!original,
+    let is_translated = note.is_translated && !original;
+    let content = json!({"type":"audio","isVoiceNote":true,"durationSeconds":duration,"mime_type":"audio/mpeg", "media_data":if original {&note.original_data} else {&note.audio_data},"aiGenerated":is_translated,
         "reply_context": note.reply_to.as_ref().map(|id| json!({"messageId":id,"senderName":note.reply_to_sender,"text":note.reply_to_text}))});
     let stored = StoredMessage {
         id: message_id.clone(),
@@ -803,18 +898,16 @@ fn store_audio_message(
         content_type: "audio".into(),
         content_json: content.to_string(),
         content: Some(content),
-        original_text: Some(note.transcript.clone()),
-        translated_text: if original {
-            None
-        } else {
-            Some(note.translation.clone())
-        },
-        source_language: Some(if original {
-            note.source_language.clone()
-        } else {
-            note.target_language.clone()
+        original_text: (!note.transcript.is_empty()).then(|| note.transcript.clone()),
+        translated_text: is_translated.then(|| note.translation.clone()),
+        source_language: note.is_translated.then(|| {
+            if original {
+                note.source_language.clone()
+            } else {
+                note.target_language.clone()
+            }
         }),
-        is_translated: !original,
+        is_translated,
         delivery_status: Some(status.into()),
     };
     state.store.add_message(&stored)?;
@@ -911,6 +1004,7 @@ mod integration_tests {
             .update_conversation_settings(
                 "test@s.whatsapp.net",
                 &ConversationSettings {
+                    translation_enabled: true,
                     language_override: Some("Hungarian".into()),
                     translation_style: Some("friendly".into()),
                     send_original_follow_up: true,
@@ -928,6 +1022,7 @@ mod integration_tests {
     }
     fn note(id: String) -> VoiceNote {
         VoiceNote {
+            is_translated: true,
             id,
             contact_id: "test@s.whatsapp.net".into(),
             transcript: "Good morning".into(),
@@ -1286,6 +1381,156 @@ mod integration_tests {
             "full recording must survive: {seconds}"
         );
         assert!(playable_audio(&B64.encode([0_u8; 64])).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn disabled_translation_prepares_and_sends_original_voice_without_ai_or_translation_lock()
+    {
+        let tone = Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=240:duration=1",
+                "-f",
+                "mp3",
+                "pipe:1",
+            ])
+            .output()
+            .await
+            .expect("ffmpeg is required for voice tests");
+        assert!(tone.status.success());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let mock = Router::new().fallback(move || {
+            let calls = observed.clone();
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+        for configured in [false, true] {
+            let dir = TestDirectory::new();
+            let translator = configured.then(|| {
+                Arc::new(TranslationService::new_with_api_url(format!(
+                    "http://{address}/v1/responses"
+                )))
+            });
+            let state = state(&dir.0, translator);
+            let contact_id = if configured {
+                "family@g.us"
+            } else {
+                "test@s.whatsapp.net"
+            };
+            state
+                .store
+                .upsert_contact(
+                    contact_id,
+                    Some("Synthetic chat"),
+                    None,
+                    Some(if configured { "group" } else { "private" }),
+                    1,
+                )
+                .unwrap();
+            state
+                .store
+                .update_conversation_settings(
+                    contact_id,
+                    &ConversationSettings {
+                        translation_enabled: false,
+                        language_override: Some("Hungarian".into()),
+                        translation_style: Some("friendly".into()),
+                        send_original_follow_up: true,
+                    },
+                )
+                .unwrap();
+            // Even another chat's busy translation must not delay original recordings.
+            let guard = state.voice_lock.lock().await;
+            let response = tokio::time::timeout(
+                Duration::from_secs(10),
+                prepare(
+                    State(state.clone()),
+                    Json(PrepareRequest {
+                        contact_id: contact_id.into(),
+                        media_data: B64.encode(&tone.stdout),
+                        reply_only_if_not_latest: false,
+                        reply_to: None,
+                        reply_to_sender: None,
+                        reply_to_text: None,
+                    }),
+                ),
+            )
+            .await
+            .expect("original recording must not wait for AI lock");
+            assert_eq!(response.status(), StatusCode::OK);
+            let payload = json_response(response).await;
+            assert_eq!(payload["isTranslated"], false);
+            assert_eq!(payload["originalFollowUp"], false);
+            assert_eq!(payload["transcript"], "");
+            let id = payload["id"].as_str().unwrap().to_string();
+            let stored_note = state.store.voice_note(&id).unwrap().unwrap();
+            let note: VoiceNote = serde_json::from_str(&stored_note.0).unwrap();
+            assert!(B64.decode(&note.send_audio).unwrap().starts_with(b"OggS"));
+            assert!(playable_audio(&note.audio_data).await.is_ok());
+            drop(guard);
+            *state.connected.write().await = true;
+            let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+            state.set_command_tx(tx).await;
+            let bridge_state = state.clone();
+            let destination = contact_id.to_string();
+            let bridge = tokio::spawn(async move {
+                let command = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let BridgeCommand::SendAudio {
+                    request_id: Some(request_id),
+                    to,
+                    ..
+                } = command
+                else {
+                    panic!("expected original audio");
+                };
+                assert_eq!(to, destination);
+                bridge_state
+                    .handle_send_result(BridgeSendResult {
+                        request_id,
+                        success: true,
+                        message_id: Some("original-voice".into()),
+                        timestamp: Some(1700000000),
+                        message_ids: vec![],
+                        timestamps: vec![],
+                        error: None,
+                    })
+                    .await;
+                rx
+            });
+            let sent = json_response(
+                send(
+                    State(state.clone()),
+                    Json(SendRequest { preparation_id: id }),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(sent["success"], true);
+            assert_eq!(sent["originalFollowUpSent"], false);
+            assert!(bridge.await.unwrap().try_recv().is_err());
+            let messages = state.store.get_messages(contact_id).unwrap();
+            assert_eq!(messages.len(), 1);
+            assert!(!messages[0].is_translated);
+            assert!(messages[0].translated_text.is_none());
+            assert!(messages[0].source_language.is_none());
+            let content: Value = serde_json::from_str(&messages[0].content_json).unwrap();
+            assert_eq!(content["aiGenerated"], false);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        server.abort();
     }
 
     #[tokio::test]

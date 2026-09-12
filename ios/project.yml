@@ -10,7 +10,7 @@ settings:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: SUR6QUSSV6
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 55
+    CURRENT_PROJECT_VERSION: 56
     MARKETING_VERSION: 1.0.0
 targets:
   WhatsAppTranslator:
@@ -232,12 +232,25 @@ targets:
     sources:
       - path: WhatsAppTranslatorTests
       - path: SharedTests/MessageToneTests.swift
+      - path: SharedTests/ConversationTranslationTests.swift
     dependencies:
       - target: WhatsAppTranslator
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.tests
         GENERATE_INFOPLIST_FILE: true
+  ConversationTranslationUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ConversationTranslationUITests
+    dependencies:
+      - target: WhatsAppTranslator
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.conversation-ui-tests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: WhatsAppTranslator
   BabelBridgeMacTests:
     type: bundle.unit-test
     platform: macOS
@@ -245,6 +258,7 @@ targets:
     sources:
       - path: BabelBridgeMacTests
       - path: SharedTests/MessageToneTests.swift
+      - path: SharedTests/ConversationTranslationTests.swift
     dependencies:
       - target: BabelBridgeMac
     settings:
@@ -259,9 +273,12 @@ schemes:
       targets:
         WhatsAppTranslator: all
         WhatsAppTranslatorTests: [test]
+        ConversationTranslationUITests: [test]
     test:
       targets:
         - name: WhatsAppTranslatorTests
+          parallelizable: false
+        - name: ConversationTranslationUITests
           parallelizable: false
   BabelBridgeMac:
     build:

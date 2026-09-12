@@ -7,6 +7,7 @@ struct MacConversationHeader: View {
     let displayName: String
     let avatarURL: URL?
     let localTime: String?
+    let translationEnabled: Bool
     let usage: UsageSummary?
     let starredOnly: Bool
     let showContactSettings: () -> Void
@@ -73,7 +74,8 @@ struct MacConversationHeader: View {
     }
 
     private var subtitle: String {
-        localTime.map { "Auto-translation · \($0)" } ?? "Auto-translation on"
+        let translation = translationEnabled ? "Translation on" : "Translation off"
+        return localTime.map { "\(translation) · \($0)" } ?? translation
     }
 
     private func headerButton(
