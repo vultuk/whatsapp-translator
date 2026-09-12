@@ -10,7 +10,7 @@ settings:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: SUR6QUSSV6
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 54
+    CURRENT_PROJECT_VERSION: 55
     MARKETING_VERSION: 1.0.0
 targets:
   WhatsAppTranslator:
@@ -21,6 +21,8 @@ targets:
       - path: Shared/NotificationPersonIdentity.swift
       - path: Shared/PhotoSendActivityAttributes.swift
       - path: Shared/MessagingIntentModels.swift
+      - path: ../web/public/sounds
+        buildPhase: resources
     dependencies:
       - target: WhatsAppTranslatorNotificationService
         embed: true
@@ -91,6 +93,8 @@ targets:
     sources:
       - path: WhatsAppTranslatorNotificationService
       - path: Shared/NotificationPersonIdentity.swift
+      - path: ../web/public/sounds
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.notification-service
@@ -132,6 +136,7 @@ targets:
       - path: WhatsAppTranslatorIntents
       - path: WhatsAppTranslator/Models/APIModels.swift
       - path: WhatsAppTranslator/Models/ServerConfiguration.swift
+      - path: WhatsAppTranslator/Models/MessageTone.swift
       - path: WhatsAppTranslator/Services/APIClient.swift
       - path: WhatsAppTranslator/Services/SendRecoveryStore.swift
       - path: WhatsAppTranslator/Services/CredentialStore.swift
@@ -177,6 +182,8 @@ targets:
           - Info.plist
           - WhatsAppTranslator.entitlements
       - path: BabelBridgeMac
+      - path: ../web/public/sounds
+        buildPhase: resources
     entitlements:
       path: BabelBridgeMac/BabelBridgeMac.entitlements
       properties:
@@ -224,6 +231,7 @@ targets:
     platform: iOS
     sources:
       - path: WhatsAppTranslatorTests
+      - path: SharedTests/MessageToneTests.swift
     dependencies:
       - target: WhatsAppTranslator
     settings:
@@ -236,6 +244,7 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: BabelBridgeMacTests
+      - path: SharedTests/MessageToneTests.swift
     dependencies:
       - target: BabelBridgeMac
     settings:

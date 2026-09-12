@@ -23,6 +23,7 @@ struct AppSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Notifications") { MessageToneSettingsRow() }
                 VoicePreferenceSection(scope: "outgoing")
 
                 Section("Connection") {

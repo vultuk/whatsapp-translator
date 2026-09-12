@@ -254,6 +254,20 @@ impl ApnsClient {
 }
 
 impl PushNotification {
+    pub fn with_message_tone(mut self, tone: crate::message_tones::MessageTone) -> Self {
+        if let Some(aps) = self.payload.get_mut("aps").and_then(Value::as_object_mut) {
+            match tone.sound_name() {
+                Some(name) => {
+                    aps.insert("sound".into(), Value::String(name.into()));
+                }
+                None => {
+                    aps.remove("sound");
+                }
+            }
+        }
+        self
+    }
+
     pub fn test() -> Self {
         Self {
             payload: json!({
@@ -438,6 +452,22 @@ fn truncate(value: &str, maximum_characters: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::message_tones::MessageTone;
+    #[test]
+    fn notification_payload_uses_bundled_tones_and_silent_keeps_the_alert() {
+        let original = PushNotification::test();
+        let audible = PushNotification::test().with_message_tone(MessageTone::Orbit);
+        assert_eq!(audible.payload["aps"]["sound"], "bb-orbit.wav");
+        let silent = audible.with_message_tone(MessageTone::Silent);
+        assert!(silent.payload["aps"].get("sound").is_none());
+        assert_eq!(
+            silent.payload["aps"]["alert"],
+            original.payload["aps"]["alert"]
+        );
+        let standard = silent.with_message_tone(MessageTone::Default);
+        assert_eq!(standard.payload["aps"]["sound"], "default");
+    }
+
     use super::*;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},

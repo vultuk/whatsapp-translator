@@ -23,6 +23,9 @@ struct MacSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 settingsHeader
+                SettingsGroup(title: "Notifications", systemImage: "bell.badge") {
+                    MessageToneSettingsRow()
+                }
                 connectionSection
                 openAISection
                 GroupBox {

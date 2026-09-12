@@ -10,6 +10,7 @@ mod display;
 mod incoming;
 mod link_preview;
 mod mcp;
+mod message_tones;
 mod oauth;
 mod outbox;
 mod push;

@@ -1,4 +1,5 @@
 import { setupVoiceNotes } from './voice-notes.js';
+import { setupMessageTones } from './message-tones.js';
 import { createReliableFetch, reconnectDelay, mergeMessageUpdate } from './send-recovery.js';
 // WhatsApp Translator Web Client
 
@@ -281,6 +282,7 @@ class WhatsAppClient {
     if (!modal) return;
     this.syncAppearanceControls();
     modal.classList.remove('hidden');
+    this.messageTones?.refreshLabel();
     try {
       const response = await this.apiFetch('/api/settings/openai');
       if (!response.ok) throw new Error(`Settings request failed (${response.status})`);
@@ -2418,7 +2420,7 @@ class WhatsAppClient {
     }
   }
 
-  maybeShowNotification(message) {
+  async maybeShowNotification(message) {
     if (!this.shouldNotifyForMessage(message)) {
       return;
     }
@@ -2436,13 +2438,18 @@ class WhatsAppClient {
       body = 'New message';
     }
 
+    const sound = await this.messageTones?.notificationSound(message.contactId) ?? {silent: false, filename: null};
+    if (!this.shouldNotifyForMessage(message)) return;
+
     const notification = new Notification(title, {
       body,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       tag: `chat:${message.contactId}`,
       renotify: false,
+      silent: sound.silent,
     });
+    this.messageTones?.playNotification(sound.filename);
 
     notification.addEventListener('click', () => {
       window.focus();
@@ -6347,6 +6354,7 @@ class WhatsAppClient {
     }
 
     modal.classList.remove('hidden');
+    this.messageTones?.refreshLabel(contactId);
   }
 
   updateChatHeaderNote() {
@@ -6442,3 +6450,4 @@ class WhatsAppClient {
 /* Initialize app */
 window.app = new WhatsAppClient();
 setupVoiceNotes(window.app);
+window.app.messageTones = setupMessageTones(window.app);

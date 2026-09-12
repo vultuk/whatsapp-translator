@@ -807,6 +807,16 @@ impl AppState {
                     warn!("Unable to load group notification context: {error}");
                     None
                 }),
+        )
+        .with_message_tone(
+            self.store
+                .message_tone_settings(Some(&message.contact_id))
+                .map(|settings| settings.effective_tone)
+                .unwrap_or_else(|error| {
+                    warn!("Unable to load message ringtone: {error}");
+                    // A storage failure must not unexpectedly make a silenced chat audible.
+                    crate::message_tones::MessageTone::Silent
+                }),
         );
         for device in devices {
             match client.send(&device, &notification).await {
@@ -1164,6 +1174,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(get_openai_settings).put(update_openai_settings),
         )
         .route("/api/contacts", get(get_contacts))
+        .route(
+            "/api/settings/message-tone",
+            get(crate::message_tones::get_settings).put(crate::message_tones::put_settings),
+        )
         .route("/api/push/devices", put(register_push_device))
         .route("/api/push/test", post(send_test_push_notification))
         .route(
@@ -5508,6 +5522,117 @@ mod tests {
             }
         );
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn ringtone_api_validates_and_isolates_global_and_conversation_changes() {
+        let (state, dir) = test_state(None);
+        let contact_id = "family+one&two%three@g.us";
+        state
+            .store
+            .upsert_contact(contact_id, Some("Family"), None, Some("group"), 1)
+            .unwrap();
+        let app = create_router(state.clone());
+        let global = "/api/settings/message-tone";
+        let conversation = format!("{global}?contactId={}", urlencoding::encode(contact_id));
+        let put = |path: &str, body: &str| {
+            HttpRequest::builder()
+                .method("PUT")
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        for (path, body) in [
+            (global, r#"{"tone":"aurora"}"#),
+            (conversation.as_str(), r#"{"tone":"silent"}"#),
+            (global, r#"{"tone":"glass"}"#),
+        ] {
+            assert_eq!(
+                app.clone().oneshot(put(path, body)).await.unwrap().status(),
+                StatusCode::OK
+            );
+        }
+        let response = app
+            .clone()
+            .oneshot(empty_request(&conversation))
+            .await
+            .unwrap();
+        let settings: crate::message_tones::MessageToneSettings = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            settings.effective_tone,
+            crate::message_tones::MessageTone::Silent
+        );
+        assert_eq!(
+            settings.global_tone,
+            crate::message_tones::MessageTone::Glass
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(put(&conversation, r#"{"tone":null}"#))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            state
+                .store
+                .message_tone_settings(Some(contact_id))
+                .unwrap()
+                .effective_tone,
+            crate::message_tones::MessageTone::Glass
+        );
+        for body in [
+            r#"{"tone":"../private.wav"}"#,
+            r#"{"tone":"unknown"}"#,
+            r#"{}"#,
+            r#"{"tone":null}"#,
+            r#"{"tone":"silent","extra":true}"#,
+        ] {
+            assert!(app
+                .clone()
+                .oneshot(put(global, body))
+                .await
+                .unwrap()
+                .status()
+                .is_client_error());
+        }
+        assert_eq!(
+            app.clone()
+                .oneshot(put(
+                    &format!("{global}?contactId=missing"),
+                    r#"{"tone":"silent"}"#
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            state
+                .store
+                .message_tone_settings(None)
+                .unwrap()
+                .effective_tone,
+            crate::message_tones::MessageTone::Glass
+        );
+        let (locked, locked_dir) = test_state(Some("secret"));
+        assert_eq!(
+            create_router(locked)
+                .oneshot(put(global, r#"{"tone":"silent"}"#))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(locked_dir);
     }
 
     #[tokio::test]

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "aurora",
+    "title": "Aurora",
+    "detail": "Three bright, rising notes",
+    "symbol": "sparkles",
+    "filename": "bb-aurora.wav"
+  },
+  {
+    "id": "bamboo",
+    "title": "Bamboo",
+    "detail": "Two soft wooden taps",
+    "symbol": "leaf",
+    "filename": "bb-bamboo.wav"
+  },
+  {
+    "id": "bloom",
+    "title": "Bloom",
+    "detail": "A warm, rounded chime",
+    "symbol": "sun.max",
+    "filename": "bb-bloom.wav"
+  },
+  {
+    "id": "droplet",
+    "title": "Droplet",
+    "detail": "A playful water drop",
+    "symbol": "drop",
+    "filename": "bb-droplet.wav"
+  },
+  {
+    "id": "glass",
+    "title": "Glass",
+    "detail": "One clear, delicate bell",
+    "symbol": "bell",
+    "filename": "bb-glass.wav"
+  },
+  {
+    "id": "orbit",
+    "title": "Orbit",
+    "detail": "A mellow two-note pulse",
+    "symbol": "circle.dotted",
+    "filename": "bb-orbit.wav"
+  }
+]

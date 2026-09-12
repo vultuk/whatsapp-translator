@@ -4773,3 +4773,23 @@ select {
 #live-reconnect-banner { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 50; max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 12px; background: #fff1cd; color: #684a00; font-size: 13px; box-shadow: 0 2px 10px #0002; }
 .delivery-uncertain { color: #986500; font-weight: 600; }
 .delivery-pending { opacity: .75; }
+/* Message ringtone picker, shared by global and conversation settings. */
+.message-tone-setting { display:flex; align-items:center; gap:12px; width:100%; border:0; background:transparent; color:var(--text-primary); padding:12px 0; text-align:left; font:inherit; cursor:pointer; }
+.message-tone-setting span:first-child { flex:1; }
+.message-tone-setting span:nth-child(2) { color:var(--text-secondary); }
+.message-tone-dialog { margin:auto; width:min(480px, calc(100vw - 32px)); max-height:calc(100dvh - 32px); box-sizing:border-box; padding:24px; border:1px solid var(--border-color); border-radius:20px; background:var(--bg-secondary); color:var(--text-primary); box-shadow:0 24px 80px #0006; }
+.message-tone-dialog::backdrop { background:#0007; backdrop-filter:blur(4px); }
+.message-tone-dialog h3 { margin:0 0 8px; font-size:22px; }
+.message-tone-hint, .message-tone-status { color:var(--text-secondary); font-size:13px; line-height:1.5; margin:8px 0 16px; }
+.message-tone-list { display:grid; gap:5px; }
+.message-tone-row { display:flex; align-items:center; border:1px solid transparent; border-radius:12px; }
+.message-tone-row:has(input:checked) { background:color-mix(in srgb, var(--accent-color, #00a884) 12%, transparent); border-color:var(--accent-color, #00a884); }
+.message-tone-choice { display:flex; align-items:center; flex:1; min-width:0; gap:12px; padding:12px; cursor:pointer; }
+.message-tone-choice input { accent-color:var(--accent-color, #00a884); width:17px; height:17px; flex:none; }
+.message-tone-choice strong, .message-tone-choice small { display:block; }
+.message-tone-choice strong { font-size:14px; font-weight:600; }
+.message-tone-choice small { color:var(--text-secondary); font-size:12px; margin-top:3px; }
+.message-tone-preview { background:transparent; color:var(--accent-color, #00a884); border:0; border-radius:9px; cursor:pointer; min-width:44px; height:44px; margin-right:6px; }
+.message-tone-preview:hover { background:#8882; }
+.message-tone-actions { display:flex; justify-content:flex-end; gap:10px; position:sticky; bottom:-24px; background:var(--bg-secondary); padding:12px 0; }
+.message-tone-dialog button:disabled { opacity:0.5; cursor:wait; }

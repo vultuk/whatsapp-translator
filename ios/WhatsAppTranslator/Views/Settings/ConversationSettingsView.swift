@@ -14,6 +14,7 @@ struct ConversationSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Notifications") { MessageToneSettingsRow(contactID: contact.id) }
                 VoicePreferenceSection(scope: contact.id)
 
                 Section {

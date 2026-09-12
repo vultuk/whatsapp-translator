@@ -17,6 +17,7 @@ Railway is the easiest hosted option for this app because it supports long-runni
 - Listen to translated voice notes and record, preview, and send translated WhatsApp audio
 - Generate AI-composed messages and AI replies in your writing style
 - Per-chat translation settings, including an option to send the translation followed by the original text
+- Six original message ringtones with in-app previews, a global default, per-conversation overrides, and a silent option
 - Local SQLite storage for messages, usage, and session data
 - MCP endpoint with OAuth support
 

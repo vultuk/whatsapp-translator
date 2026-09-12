@@ -5,6 +5,31 @@ project contains separate iOS and macOS app targets that share the messaging,
 translation, caching and API layers while using each platform's native app
 lifecycle and interaction patterns.
 
+## Message ringtones
+
+Open **Settings → Notifications → Message ringtone** for the global choice,
+or a chat’s **Conversation settings → Notifications → Message ringtone** for
+an override. Aurora, Bamboo, Bloom, Droplet, Glass and Orbit are original,
+bundled notification tones. Selecting a tone previews it; the separate play
+button previews without changing the selection. **Save** commits the choice,
+while **Cancel** leaves the saved setting unchanged. Conversation choices include
+**Use global ringtone**, **System default**, and **Silent**. Silent keeps visible
+notifications and badges without requesting audio.
+
+Choices are stored on the connected server, shared across native and web
+clients, and applied to the APNs payload before delivery, including when the app
+is closed. Deploy the matching `/api/settings/message-tone` backend before
+installing native build 55. Older app builds fall back to the system sound if
+they do not contain the selected custom asset. Normal system sound permissions,
+silent mode, Focus, and Watch/CarPlay audio policies still apply.
+
+The canonical sound assets and catalog are in `web/public/sounds`; Xcode copies
+them into the iOS app, notification extension, and macOS app. Re-render the
+original 16-bit mono PCM WAVs with `scripts/generate-message-tones.py`. All clips
+are under two seconds. Shared native tests decode and play every bundled clip,
+and backend tests verify persistence, inheritance, exact conversation routing,
+validation, and silent APNs payloads.
+
 ## Generate and open
 
 ```bash

@@ -83,6 +83,7 @@ enum NotificationMessagePresentation {
             // Restore the explicit group line while retaining its sender/avatar context.
             displayed.subtitle = content.subtitle
             displayed.body = content.body
+            displayed.sound = content.sound
             return displayed
         } catch {
             return content

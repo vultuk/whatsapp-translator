@@ -192,6 +192,63 @@ impl MessageStore {
         Ok(())
     }
 
+    pub fn message_tone_settings(
+        &self,
+        contact_id: Option<&str>,
+    ) -> Result<crate::message_tones::MessageToneSettings> {
+        use crate::message_tones::{MessageTone, MessageToneSettings};
+        let conn = self.conn.lock().unwrap();
+        let read = |key: &str| -> Result<Option<MessageTone>> {
+            let stored: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key = ?",
+                    [key],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            stored
+                .map(|value| {
+                    serde_json::from_str(&value).context("Invalid stored message ringtone")
+                })
+                .transpose()
+        };
+        let global_tone = read("message-tone:global")?.unwrap_or_default();
+        let tone = match contact_id {
+            Some(id) => read(&format!("message-tone:conversation:{id}"))?,
+            None => Some(global_tone),
+        };
+        Ok(MessageToneSettings {
+            tone,
+            global_tone,
+            effective_tone: tone.unwrap_or(global_tone),
+        })
+    }
+
+    pub fn set_message_tone(
+        &self,
+        contact_id: Option<&str>,
+        tone: Option<crate::message_tones::MessageTone>,
+    ) -> Result<()> {
+        let key = match contact_id {
+            Some(id) => format!("message-tone:conversation:{id}"),
+            None => "message-tone:global".to_string(),
+        };
+        let conn = self.conn.lock().unwrap();
+        if let Some(tone) = tone {
+            conn.execute(
+                "INSERT INTO app_settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![key, serde_json::to_string(&tone)?],
+            )?;
+        } else {
+            anyhow::ensure!(
+                contact_id.is_some(),
+                "A global message ringtone is required"
+            );
+            conn.execute("DELETE FROM app_settings WHERE key = ?", [key])?;
+        }
+        Ok(())
+    }
+
     pub fn voice_note(&self, id: &str) -> Result<Option<(String, String, Option<String>, i64)>> {
         Ok(self
             .conn
@@ -2023,6 +2080,7 @@ impl MessageStore {
             DELETE FROM outbox;
             DELETE FROM mcp_send_records;
             DELETE FROM app_settings WHERE key LIKE 'voice:%';
+            DELETE FROM app_settings WHERE key LIKE 'message-tone:%';
             "#,
         )?;
 

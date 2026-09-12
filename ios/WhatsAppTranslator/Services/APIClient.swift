@@ -56,6 +56,25 @@ actor APIClient {
         try await authorizedRequest("/api/voice/settings/\(scope.urlPathEncoded)")
     }
 
+    static func messageTonePath(contactID: String?) -> String {
+        guard let contactID else { return "/api/settings/message-tone" }
+        var components = URLComponents()
+        components.queryItems = [URLQueryItem(name: "contactId", value: contactID)]
+        let query = (components.percentEncodedQuery ?? "").replacingOccurrences(of: "+", with: "%2B")
+        return "/api/settings/message-tone?\(query)"
+    }
+
+    func messageToneSettings(contactID: String?) async throws -> MessageToneSettings {
+        try await authorizedRequest(Self.messageTonePath(contactID: contactID))
+    }
+
+    func saveMessageTone(_ tone: MessageTone?, contactID: String?) async throws -> MessageToneSettings {
+        try await authorizedRequest(
+            Self.messageTonePath(contactID: contactID), method: "PUT",
+            body: JSONEncoder.backend.encode(MessageToneUpdate(tone: tone))
+        )
+    }
+
     func saveVoicePreferences(_ preferences: VoicePreferences, scope: String) async throws {
         let _: VoicePreferences = try await authorizedRequest("/api/voice/settings/\(scope.urlPathEncoded)", method: "PUT", body: JSONEncoder.backend.encode(preferences))
     }
