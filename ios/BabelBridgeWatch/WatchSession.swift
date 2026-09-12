@@ -100,9 +100,8 @@ final class WatchSession: NSObject, WCSessionDelegate {
     private func request(_ request: WatchRequest) async throws -> WatchResponse {
         guard WCSession.default.activationState == .activated else { throw ConnectivityError.notReady }
         let data = try JSONEncoder().encode(request)
-        let response: Data = try await withCheckedThrowingContinuation { continuation in
-            WCSession.default.sendMessageData(data, replyHandler: { continuation.resume(returning: $0) },
-                                             errorHandler: { continuation.resume(throwing: $0) })
+        let response = try await WatchMessageTransport.response(for: data) { data, reply, failure in
+            WCSession.default.sendMessageData(data, replyHandler: reply, errorHandler: failure)
         }
         return try JSONDecoder().decode(WatchResponse.self, from: response)
     }

@@ -2,6 +2,22 @@ import XCTest
 
 final class WatchReplyUITests: XCTestCase {
     @MainActor
+    func testLiveLaunchWithUnavailablePhoneStaysOpen() async throws {
+        let app = XCUIApplication()
+        app.launch()
+        let recovery = app.staticTexts["Keep your iPhone nearby and connected. Open Babel Bridge on it, then refresh."]
+        XCTAssertTrue(recovery.waitForExistence(timeout: 30))
+        // Include activation callbacks and the next live refresh, not just the
+        // initial not-yet-activated state that appears before the first frame.
+        try await Task.sleep(for: .seconds(20))
+        XCTAssertEqual(app.state, .runningForeground)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Watch live launch without reachable phone"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    @MainActor
     func testUnifiedFeedLatestAndSpecificMessageReplies() {
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]

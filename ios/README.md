@@ -152,11 +152,17 @@ an entry also opens its reply. Use the Watch's system text input for dictation,
 Scribble, or the keyboard where supported, then tap **Send**. The destination stays
 fixed while composing even if a message arrives from another chat.
 
+To launch from a watch face, edit the face, choose a complication slot, and select
+**Babel Bridge**. The launcher supports circular, corner, rectangular, and inline
+slots on compatible faces; tapping it opens the Watch app's Messages view.
+
 The Watch asks the paired iPhone for the latest 30 messages while active, every
 15 seconds and on Refresh. Long messages are shortened to 1,000 characters and
 the transfer is bounded to 48 KB; open the iPhone for complete history and media.
 Watch Connectivity wakes the iPhone app in the background when reachable. The
 phone needs access to the backend; the Watch does not store the backend password.
+Transport completions are explicitly Sendable because Watch Connectivity invokes
+them on a background queue; UI state resumes on MainActor after awaiting the result.
 Replies use the existing translation and send-original settings for that chat.
 Selected older messages receive a quote, while the latest message in that chat
 does not. Deleted or unavailable targets fail without changing the recipient.
@@ -165,8 +171,10 @@ Interrupted replies keep a protected draft and submission ID. **Check delivery**
 consults the phone's persistent receipt instead of issuing another send. If the
 backend result itself is uncertain, check the conversation on the iPhone before
 composing another reply. The Watch does not silently queue sends while disconnected.
-The `BabelBridgeWatch` scheme provides a synthetic `-demo` UI test; real paired
-device connectivity and dictation still need a physical iPhone and Apple Watch.
+The `BabelBridgeWatch` scheme tests both the live startup/recovery screen and
+synthetic `-demo` replies. The iOS suite exercises the shared transport's success
+and error callbacks from a background queue. Real paired-device messaging and
+dictation still need a physical iPhone and Apple Watch.
 
 Apple Watch also mirrors iPhone notifications. With the iPhone unlocked, Apple routes
 the alert to the iPhone. To test Watch delivery, wear and unlock the Watch, lock

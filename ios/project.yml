@@ -11,7 +11,7 @@ settings:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: SUR6QUSSV6
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 57
+    CURRENT_PROJECT_VERSION: 58
     MARKETING_VERSION: 1.0.0
 targets:
   WhatsAppTranslator:
@@ -23,6 +23,7 @@ targets:
       - path: Shared/PhotoSendActivityAttributes.swift
       - path: Shared/MessagingIntentModels.swift
       - path: Shared/WatchMessagingModels.swift
+      - path: Shared/WatchMessageTransport.swift
       - path: ../web/public/sounds
         buildPhase: resources
     dependencies:
@@ -178,6 +179,10 @@ targets:
     sources:
       - path: BabelBridgeWatch
       - path: Shared/WatchMessagingModels.swift
+      - path: Shared/WatchMessageTransport.swift
+    dependencies:
+      - target: BabelBridgeWatchComplications
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.watchkitapp
@@ -199,6 +204,26 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
+  BabelBridgeWatchComplications:
+    type: app-extension
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: BabelBridgeWatchComplications
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.watchkitapp.complications
+        PRODUCT_NAME: BabelBridgeWatchComplications
+        SKIP_INSTALL: true
+        APPLICATION_EXTENSION_API_ONLY: true
+    info:
+      path: BabelBridgeWatchComplications/Info.plist
+      properties:
+        CFBundleDisplayName: Babel Bridge
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
   BabelBridgeWatchUITests:
     type: bundle.ui-testing
     platform: watchOS
