@@ -5,6 +5,19 @@ import XCTest
 @testable import WhatsAppTranslator
 
 final class CarPlayMessagingTests: XCTestCase {
+    func testUnifiedCarPlaySelectionReadsOnlyThatMessageAndPreservesItsReplyRoute() throws {
+        let chat = contact("family@g.us", unread: 2)
+        let target = try message("selected", chat: chat.id, time: 1, translated: "The chosen message")
+        let newer = try message("newer", chat: chat.id, time: 2, translated: "A later message")
+        let route = MessagingMessageIdentity(contactID: chat.id, messageID: target.id).encoded
+        let filter = MessageSearchFilter(intent: search(conversations: [route]))
+        XCTAssertEqual(filter.selectContacts(from: [chat, contact("other@g.us")]).map(\.id), [chat.id])
+        let results = filter.results(contact: chat, messages: [newer, target])
+        XCTAssertEqual(results.map(\.message.id), [target.id])
+        XCTAssertEqual(results.first?.intentMessage.conversationIdentifier, route)
+        XCTAssertEqual(results.first?.intentMessage.content, "The chosen message")
+    }
+
     func testTappedNotificationReadsOnlyItsTranslatedMessageAndKeepsReplyDestination() throws {
         let first = try notification("alert-one", chat: "family@g.us", message: "message-one", text: "We will arrive at six.")
         let other = try notification("alert-two", chat: "other@g.us", message: "message-two", text: "An unrelated message.")

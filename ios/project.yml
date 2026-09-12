@@ -4,13 +4,14 @@ options:
   deploymentTarget:
     iOS: "18.0"
     macOS: "15.0"
+    watchOS: "11.0"
   xcodeVersion: "26.0"
 settings:
   base:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: SUR6QUSSV6
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 56
+    CURRENT_PROJECT_VERSION: 57
     MARKETING_VERSION: 1.0.0
 targets:
   WhatsAppTranslator:
@@ -21,6 +22,7 @@ targets:
       - path: Shared/NotificationPersonIdentity.swift
       - path: Shared/PhotoSendActivityAttributes.swift
       - path: Shared/MessagingIntentModels.swift
+      - path: Shared/WatchMessagingModels.swift
       - path: ../web/public/sounds
         buildPhase: resources
     dependencies:
@@ -29,6 +31,8 @@ targets:
       - target: WhatsAppTranslatorIntents
         embed: true
       - target: WhatsAppTranslatorSendActivity
+        embed: true
+      - target: BabelBridgeWatch
         embed: true
     entitlements:
       path: WhatsAppTranslator/WhatsAppTranslator.entitlements
@@ -167,6 +171,47 @@ targets:
               - INSendMessageIntent
               - INSearchForMessagesIntent
               - INSetMessageAttributeIntent
+  BabelBridgeWatch:
+    type: application
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: BabelBridgeWatch
+      - path: Shared/WatchMessagingModels.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.watchkitapp
+        PRODUCT_NAME: BabelBridgeWatch
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "4"
+        SKIP_INSTALL: true
+    info:
+      path: BabelBridgeWatch/Info.plist
+      properties:
+        CFBundleDisplayName: Babel Bridge
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: com.vultuk.whatsapptranslator
+        WKRunsIndependentlyOfCompanionApp: false
+        NSMicrophoneUsageDescription: Dictate replies to your WhatsApp messages.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+  BabelBridgeWatchUITests:
+    type: bundle.ui-testing
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: BabelBridgeWatchUITests
+    dependencies:
+      - target: BabelBridgeWatch
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vultuk.whatsapptranslator.watch-ui-tests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: BabelBridgeWatch
   BabelBridgeMac:
     type: application
     platform: macOS
@@ -178,6 +223,7 @@ targets:
           - App/PushNotificationCoordinator.swift
           - App/MessagingIntentDonor.swift
           - App/CarPlaySceneDelegate.swift
+          - App/WatchPhoneCoordinator.swift
           - en.lproj/AppIntentVocabulary.plist
           - Info.plist
           - WhatsAppTranslator.entitlements
@@ -268,6 +314,15 @@ targets:
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Babel Bridge.app/Contents/MacOS/Babel Bridge
         BUNDLE_LOADER: $(TEST_HOST)
 schemes:
+  BabelBridgeWatch:
+    build:
+      targets:
+        BabelBridgeWatch: all
+        BabelBridgeWatchUITests: [test]
+    test:
+      targets:
+        - name: BabelBridgeWatchUITests
+          parallelizable: false
   WhatsAppTranslator:
     build:
       targets:

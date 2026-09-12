@@ -119,11 +119,15 @@ account on 11 September 2026. It is enabled for `com.vultuk.whatsapptranslator`
 and included in the iOS target as `com.apple.developer.carplay-communication`.
 The account can enable it separately for other eligible communication apps.
 
-CarPlay opens a native conversation list with unread chats first and up to 12
-conversations. Selecting an unread conversation asks Siri to read it; selecting a
-read conversation starts a dictated message. The screen shows names and unread
-counts, while Siri handles message text and confirmation. Refresh updates the
-list, and it refreshes automatically while active. Account setup stays on iPhone.
+CarPlay opens **Messages**, an interleaved timeline across conversations, with a
+**Chats** tab for the grouped conversation list. Each tab shows up to 12 entries
+(or the vehicle's smaller limit). Messages shows the conversation, sender and time;
+Siri handles message bodies and dictation. Selecting an unread entry reads that
+message; selecting a read entry starts a reply. Message rows retain the exact
+conversation and message identity, so a reply to an older entry quotes it using
+the same conditional-quote rule as the iPhone unified view. Chats keeps unread
+conversations first. Refresh updates both tabs, including automatic refresh while
+active. Account setup stays on iPhone.
 
 Tapped alerts resolve their exact delivered notification ID and read its translated
 body. An expired alert returns no message instead of reading another conversation.
@@ -139,7 +143,32 @@ Xcode's iPhone simulator with I/O → External Displays → CarPlay verifies the
 conversation screen; `-demo` uses synthetic CarPlay conversations. Siri speech,
 real push delivery, and the car's audio routing still require a physical device.
 
-Apple Watch mirrors iPhone notifications. With the iPhone unlocked, Apple routes
+The bundled **Babel Bridge** Watch app requires watchOS 11 or later and the paired
+iPhone app. Install it from the iPhone Watch app after updating Babel Bridge in
+TestFlight (or enable automatic app installation). It opens only the unified
+**Messages** view, with the latest entry first. Tap **Reply to latest** to capture
+the current latest message, or swipe left on any entry and choose **Reply**. Tapping
+an entry also opens its reply. Use the Watch's system text input for dictation,
+Scribble, or the keyboard where supported, then tap **Send**. The destination stays
+fixed while composing even if a message arrives from another chat.
+
+The Watch asks the paired iPhone for the latest 30 messages while active, every
+15 seconds and on Refresh. Long messages are shortened to 1,000 characters and
+the transfer is bounded to 48 KB; open the iPhone for complete history and media.
+Watch Connectivity wakes the iPhone app in the background when reachable. The
+phone needs access to the backend; the Watch does not store the backend password.
+Replies use the existing translation and send-original settings for that chat.
+Selected older messages receive a quote, while the latest message in that chat
+does not. Deleted or unavailable targets fail without changing the recipient.
+
+Interrupted replies keep a protected draft and submission ID. **Check delivery**
+consults the phone's persistent receipt instead of issuing another send. If the
+backend result itself is uncertain, check the conversation on the iPhone before
+composing another reply. The Watch does not silently queue sends while disconnected.
+The `BabelBridgeWatch` scheme provides a synthetic `-demo` UI test; real paired
+device connectivity and dictation still need a physical iPhone and Apple Watch.
+
+Apple Watch also mirrors iPhone notifications. With the iPhone unlocked, Apple routes
 the alert to the iPhone. To test Watch delivery, wear and unlock the Watch, lock
 the iPhone, and enable this app under Watch → Notifications → Mirror iPhone Alerts
 From. Focus and notification settings can still silence alerts. The app cannot

@@ -26,7 +26,8 @@ final class IntentHandler: INExtension, INSendMessageIntentHandling, INSearchFor
             do {
                 let contacts = try await backend.contacts()
                 if let conversationID, !conversationID.isEmpty {
-                    let result: INSendMessageRecipientResolutionResult = contacts.first { $0.id == conversationID }
+                    let targetID = MessagingMessageIdentity.decode(conversationID)?.contactID ?? conversationID
+                    let result: INSendMessageRecipientResolutionResult = contacts.first { $0.id == targetID }
                         .map { .success(with: $0.intentPerson) } ?? .unsupported()
                     completion.call([result])
                     return
@@ -185,7 +186,8 @@ private actor MessagingIntentBackend {
         let contacts = try await contacts()
         let contact: Contact?
         if let conversationID, !conversationID.isEmpty {
-            contact = contacts.first { $0.id == conversationID }
+            let targetID = MessagingMessageIdentity.decode(conversationID)?.contactID ?? conversationID
+            contact = contacts.first { $0.id == targetID }
         } else {
             let matches = recipientQueries
                 .flatMap { contacts.matching($0) }
@@ -193,7 +195,14 @@ private actor MessagingIntentBackend {
             contact = matches.count == 1 ? matches.first : nil
         }
         guard let contact else { throw BackendError.contactNotFound }
-        let response = try await api.send(contactID: contact.id, text: content)
+        var reply: MessageReplyTarget?
+        if let conversationID, let identity = MessagingMessageIdentity.decode(conversationID) {
+            let messages = try await api.messages(contactID: contact.id, limit: 200).messages
+            guard let target = messages.first(where: { $0.id == identity.messageID && $0.contactId == contact.id }),
+                  !target.isReaction, target.normalizedContentType != "revoked" else { throw BackendError.contactNotFound }
+            reply = target.replyTarget
+        }
+        let response = try await api.send(contactID: contact.id, text: content, reply: reply, replyOnlyIfNotLatest: reply != nil)
         return (contact, response)
     }
 

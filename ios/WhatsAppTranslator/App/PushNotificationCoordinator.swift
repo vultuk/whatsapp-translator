@@ -273,6 +273,7 @@ final class NotificationAppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        WatchPhoneCoordinator.shared.start()
         BackgroundPhotoUploadSession.cancelLegacyMonolithicUploads()
         PushNotificationCoordinator.shared.registerMessagingCategory()
         #if DEBUG

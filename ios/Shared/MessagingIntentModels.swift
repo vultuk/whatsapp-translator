@@ -47,7 +47,8 @@ struct MessageSearchFilter: Sendable {
 
     func selectContacts(from contacts: [Contact]) -> [Contact] {
         var contacts = contacts.filter(\.showsInChatList)
-        let explicitIDs = conversationIDs.union(identifiers.compactMap { MessagingMessageIdentity.decode($0)?.contactID })
+        let explicitIDs = Set(conversationIDs.map { MessagingMessageIdentity.decode($0)?.contactID ?? $0 })
+            .union(identifiers.compactMap { MessagingMessageIdentity.decode($0)?.contactID })
         if !explicitIDs.isEmpty {
             return contacts.filter { explicitIDs.contains($0.id) }
         }
@@ -67,7 +68,12 @@ struct MessageSearchFilter: Sendable {
     func includes(_ result: IntentMessageResult) -> Bool {
         let message = result.message
         if message.isReaction || message.normalizedContentType == "revoked" { return false }
-        if !conversationIDs.isEmpty, !conversationIDs.contains(result.contact.id) { return false }
+        if !conversationIDs.isEmpty, !conversationIDs.contains(where: { value in
+            if let target = MessagingMessageIdentity.decode(value) {
+                return target.contactID == result.contact.id && target.messageID == message.id
+            }
+            return value == result.contact.id
+        }) { return false }
         if !identifiers.isEmpty,
            !identifiers.contains(message.id),
            !identifiers.contains(MessagingMessageIdentity(contactID: result.contact.id, messageID: message.id).encoded) { return false }
@@ -87,7 +93,10 @@ struct MessageSearchFilter: Sendable {
             .sorted { $0.timestamp == $1.timestamp ? $0.id > $1.id : $0.timestamp > $1.timestamp }
         // The backend exposes a conversation unread count rather than per-message flags.
         let unreadIDs = Set(incoming.prefix(max(0, contact.unreadCount)).map(\.id))
-        return messages.map { IntentMessageResult(contact: contact, message: $0, isUnread: unreadIDs.contains($0.id)) }
+        return messages.map { message in
+            let selectedRoute = conversationIDs.first { MessagingMessageIdentity.decode($0) == MessagingMessageIdentity(contactID: contact.id, messageID: message.id) }
+            return IntentMessageResult(contact: contact, message: message, isUnread: unreadIDs.contains(message.id), selectedRoute: selectedRoute)
+        }
             .filter(includes)
     }
 
@@ -103,6 +112,7 @@ struct IntentMessageResult: Sendable {
     let contact: Contact
     let message: ChatMessage
     var isUnread = false
+    var selectedRoute: String? = nil
 
     var intentMessage: INMessage {
         let sender = message.isFromMe
@@ -113,7 +123,7 @@ struct IntentMessageResult: Sendable {
             )
         return INMessage(
             identifier: MessagingMessageIdentity(contactID: contact.id, messageID: message.id).encoded,
-            conversationIdentifier: contact.id,
+            conversationIdentifier: selectedRoute ?? contact.id,
             content: message.displayText,
             dateSent: message.date,
             sender: sender,
