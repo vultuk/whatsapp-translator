@@ -1,15 +1,55 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"go.mau.fi/whatsmeow/util/gcmutil"
+	"go.mau.fi/whatsmeow/util/hkdfutil"
 	"google.golang.org/protobuf/proto"
 	"testing"
 	"time"
 )
+
+type editFixtureSecrets struct {
+	store.MsgSecretStore
+	key    []byte
+	sender types.JID
+}
+
+func (s *editFixtureSecrets) GetMessageSecret(context.Context, types.JID, types.JID, types.MessageID) ([]byte, types.JID, error) {
+	return s.key, s.sender, nil
+}
+
+func TestSecretEncryptedEditUsesWhatsMeowDecryptionAndOriginalTarget(t *testing.T) {
+	sender := types.NewJID("447700900123", types.DefaultUserServer)
+	secret := &editFixtureSecrets{key: make([]byte, 32), sender: sender}
+	c := &Client{ctx: context.Background(), client: &whatsmeow.Client{Store: &store.Device{MsgSecrets: secret}}}
+	key := hkdfutil.SHA256(secret.key, nil, []byte("original"+sender.String()+sender.String()+string(whatsmeow.EncSecretMessageEdit)), 32)
+	plaintext, err := proto.Marshal(&waE2E.Message{Conversation: proto.String("Grr")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	iv := make([]byte, 12)
+	ciphertext, err := gcmutil.Encrypt(key, iv, plaintext, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evt := &events.Message{Info: types.MessageInfo{ID: "envelope", Timestamp: time.Unix(1700000000, 0), MessageSource: types.MessageSource{Sender: sender, Chat: types.NewJID("family", types.GroupServer)}}, Message: &waE2E.Message{SecretEncryptedMessage: &waE2E.SecretEncryptedMessage{TargetMessageKey: &waCommon.MessageKey{ID: proto.String("original"), FromMe: proto.Bool(true)}, SecretEncType: waE2E.SecretEncryptedMessage_MESSAGE_EDIT.Enum(), EncIV: iv, EncPayload: ciphertext}}}
+	id, clock, content, ok := c.extractMessageEdit(evt)
+	if !ok || id != "original" || clock != 1700000000000 || content.GetConversation() != "Grr" {
+		t.Fatalf("encrypted edit lost: %s %d %v", id, clock, ok)
+	}
+	secret.key = nil
+	if _, _, _, ok := c.extractMessageEdit(evt); ok {
+		t.Fatal("missing decryption key must not create a false message")
+	}
+}
 
 func TestEditEnvelopeKeepsTargetAndClockForLiveAndHistory(t *testing.T) {
 	correction := &waE2E.Message{Conversation: proto.String("Grr")}

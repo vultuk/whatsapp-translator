@@ -5,6 +5,30 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 )
 
+func (c *Client) extractMessageEdit(evt *events.Message) (string, int64, *waE2E.Message, bool) {
+	secret := evt.Message.GetSecretEncryptedMessage()
+	if secret.GetSecretEncType() != waE2E.SecretEncryptedMessage_MESSAGE_EDIT {
+		return messageEdit(evt)
+	}
+	if secret.GetTargetMessageKey().GetID() == "" {
+		return "", 0, nil, false
+	}
+	decoded, err := c.client.DecryptSecretEncryptedMessage(c.ctx, evt)
+	if err != nil {
+		SendEvent(NewLogEvent("warn", "Could not decrypt an incoming message edit"))
+		return "", 0, nil, false
+	}
+	unwrapped := &events.Message{Info: evt.Info, RawMessage: decoded}
+	unwrapped.UnwrapRaw()
+	if id, clock, content, ok := messageEdit(unwrapped); ok {
+		if id != secret.GetTargetMessageKey().GetID() {
+			return "", 0, nil, false
+		}
+		return id, clock, content, true
+	}
+	return secret.GetTargetMessageKey().GetID(), evt.Info.Timestamp.UnixMilli(), unwrapped.Message, true
+}
+
 // Live events retain the edit protocol; ParseWebMessage unwraps its content.
 // Read RawMessage too so both paths retain the original ID and edit clock.
 func messageEdit(evt *events.Message) (string, int64, *waE2E.Message, bool) {

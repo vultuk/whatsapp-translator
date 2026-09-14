@@ -358,7 +358,7 @@ func (c *Client) handleMessage(evt *events.Message) {
 	msg.Chat = c.buildChat(evt.Info)
 
 	// Set message content (with media download)
-	if id, editedAt, content, ok := messageEdit(evt); ok {
+	if id, editedAt, content, ok := c.extractMessageEdit(evt); ok {
 		msg.ID = id
 		msg.Content = c.buildMessageContent(content)
 		SendEvent(NewMessageEditEvent(msg, editedAt))
@@ -510,7 +510,7 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 			// The message is wrapped in a WebMessageInfo, need to unwrap
 			waMessage := webMsg.Message
 			if parsed, err := c.client.ParseWebMessage(chatJIDParsed, webMsg); err == nil {
-				if id, editedAt, content, ok := messageEdit(parsed); ok {
+				if id, editedAt, content, ok := c.extractMessageEdit(parsed); ok {
 					msg.ID = id
 					msg.Content = c.buildMessageContent(content)
 					msg.IsHistory = true
