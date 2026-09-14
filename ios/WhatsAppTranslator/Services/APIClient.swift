@@ -270,18 +270,20 @@ actor APIClient {
         )
     }
 
-    func react(to message: ChatMessage, emoji: String, senderJID: String?) async throws {
+    func react(to message: ChatMessage, emoji: String, senderJID: String?) async throws -> ChatMessage? {
         let payload = SendReactionRequest(
             contactId: message.contactId,
             messageId: message.id,
             senderJid: senderJID,
             emoji: emoji
         )
-        let _: SuccessResponse = try await authorizedRequest(
+        let response: ReactionResponse = try await authorizedRequest(
             "/api/react",
             method: "POST",
             body: JSONEncoder.backend.encode(payload)
         )
+        guard response.success else { throw APIError.server(response.error ?? "Reaction was not sent.") }
+        return response.reaction
     }
 
     func translate(_ message: ChatMessage) async throws -> TranslateMessageResponse {

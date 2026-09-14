@@ -2152,7 +2152,7 @@ class WhatsAppClient {
   getReactionActor(reactionMsg) {
     const isFromMe = reactionMsg?.isFromMe || reactionMsg?.is_from_me;
     if (isFromMe) {
-      return document.getElementById('user-phone')?.textContent?.replace('+', '') || 'me';
+      return 'me';
     }
     return reactionMsg?.senderPhone || reactionMsg?.sender_phone || reactionMsg?.senderJid || 'unknown';
   }
@@ -2161,6 +2161,12 @@ class WhatsAppClient {
     const content = reactionMsg?.content || {};
     const emoji = content.emoji || '';
     const reactor = this.getReactionActor(reactionMsg);
+
+    const state = { id: reactionMsg.id || '', timestamp: reactionMsg.timestamp || 0, emoji };
+    const previous = targetMessage.reactionStates?.[reactor];
+    if (previous && (previous.timestamp > state.timestamp ||
+        (previous.timestamp === state.timestamp && previous.id >= state.id))) return;
+    targetMessage.reactionStates = { ...targetMessage.reactionStates, [reactor]: state };
 
     if (!targetMessage.reactions) {
       targetMessage.reactions = {};
@@ -4505,40 +4511,13 @@ class WhatsAppClient {
         throw new Error(result.error || 'Failed to send reaction');
       }
 
-      // Update local message with the reaction
-      const messages = this.messages.get(contactId);
-      if (messages) {
-        const message = messages.find(m => m.id === messageId);
-        if (message) {
-          // Initialize reactions map if needed
-          if (!message.reactions) {
-            message.reactions = {};
-          }
-          
-          // Get my phone number for tracking who reacted
-          const myPhone = document.getElementById('user-phone')?.textContent?.replace('+', '') || 'me';
-          
-          // Remove my previous reaction (if any)
-          for (const [existingEmoji, reactors] of Object.entries(message.reactions)) {
-            message.reactions[existingEmoji] = reactors.filter(r => r !== myPhone);
-            if (message.reactions[existingEmoji].length === 0) {
-              delete message.reactions[existingEmoji];
-            }
-          }
-          
-          // Add new reaction (empty emoji means remove)
-          if (emoji) {
-            if (!message.reactions[emoji]) {
-              message.reactions[emoji] = [];
-            }
-            message.reactions[emoji].push(myPhone);
-          }
-          
-          // Update the message display
-          this.updateMessageReactions(messageId);
-        }
-      }
-      
+      if (result.success === false) throw new Error(result.error || 'Failed to send reaction');
+      this.handleReactionMessage(result.reaction || {
+        id: `confirmed-reaction-${crypto.randomUUID()}`, contactId, timestamp: Date.now(),
+        isFromMe: true, contentType: 'Reaction',
+        content: { type: 'reaction', target_message_id: messageId, emoji }
+      });
+
       console.log('Reaction sent successfully');
     } catch (err) {
       console.error('Failed to send reaction:', err);

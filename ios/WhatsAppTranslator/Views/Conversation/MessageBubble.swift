@@ -130,6 +130,7 @@ struct MessageBubble: View {
     var albumAIReply: ((ChatMessage) -> Void)? = nil
     @State private var showAlternate = false
     @State private var showActions = false
+    @State private var showReactionPicker = false
     @State private var demoSwipeOffset: CGFloat = 0
     @State private var swipeTranslation: CGSize = .zero
 
@@ -266,6 +267,7 @@ struct MessageBubble: View {
                     }
                 }
                 .contextMenu { actionMenu }
+                .menuActionDismissBehavior(.enabled)
                 .offset(x: swipeOffset)
             }
             #if os(macOS)
@@ -286,6 +288,9 @@ struct MessageBubble: View {
             if !message.isFromMe { Spacer(minLength: bubbleEdgeInset) }
         }
         .frame(maxWidth: .infinity)
+        .sheet(isPresented: $showReactionPicker) {
+            MessageReactionPicker(selected: message.ownReactionEmoji, choose: react)
+        }
         .task {
             if ProcessInfo.processInfo.arguments.contains("-demoActions"), message.id == "4" {
                 showActions = true
@@ -522,6 +527,21 @@ struct MessageBubble: View {
 
     @ViewBuilder
     private var actionMenu: some View {
+        ControlGroup {
+            ForEach(MessageReactionChoices.quick, id: \.self) { emoji in
+                Button {
+                    react(message.ownReactionEmoji == emoji ? "" : emoji)
+                } label: {
+                    Label { Text("React with \(emoji)") } icon: { MessageReactionChoices.icon(emoji) }
+                }
+                .accessibilityLabel("React with \(emoji)")
+            }
+            Button("More reactions", systemImage: "plus") { showReactionPicker = true }
+        }
+        .controlGroupStyle(.palette)
+        .menuActionDismissBehavior(.enabled)
+        .disabled(isBusy)
+        Divider()
         Button("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
         if message.canTranslate {
             Button("Translate", systemImage: "character.bubble", action: translate)
@@ -530,10 +550,8 @@ struct MessageBubble: View {
             Button("AI reply", systemImage: "sparkles", action: aiReply)
         }
         Button(isStarred ? "Remove star" : "Star", systemImage: isStarred ? "star.slash" : "star", action: toggleStar)
-        Menu("React", systemImage: "face.smiling") {
-            ForEach(["👍", "❤️", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
-                Button(emoji) { react(emoji) }
-            }
+        if message.ownReactionEmoji != nil {
+            Button("Remove reaction", systemImage: "minus.circle") { react("") }
         }
         if message.alternateText != nil {
             Divider()

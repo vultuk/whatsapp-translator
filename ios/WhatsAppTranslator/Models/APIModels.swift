@@ -77,6 +77,11 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     let isTranslated: Bool
     var deliveryStatus: String? = nil
     var reactions: [String: [String]]? = nil
+    var reactionStates: [String: MessageReactionState]? = nil
+
+    var ownReactionEmoji: String? {
+        reactions?.first(where: { $0.value.contains("me") })?.key
+    }
 
     var deliveryState: MessageDeliveryState {
         guard isFromMe else { return .none }
@@ -177,6 +182,18 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
             return URL(string: cleaned)
         }
     }
+}
+
+struct MessageReactionState: Codable, Hashable, Sendable {
+    let id: String
+    let timestamp: Int64
+    let emoji: String
+}
+
+struct ReactionResponse: Decodable, Sendable {
+    let success: Bool
+    let reaction: ChatMessage?
+    let error: String?
 }
 
 struct PhotoAlbumTimeline: Identifiable {
@@ -663,6 +680,10 @@ struct LiveEvent: Decodable, Sendable {
 
     static func signal(_ type: String) -> LiveEvent {
         LiveEvent(type: type, connected: nil, chatId: nil, message: nil, messageIds: nil, messageId: nil, status: nil, progressId: nil, stage: nil, completed: nil, total: nil)
+    }
+
+    static func reaction(_ message: ChatMessage) -> LiveEvent {
+        LiveEvent(type: "reaction", connected: nil, chatId: nil, message: message, messageIds: nil, messageId: nil, status: nil, progressId: nil, stage: nil, completed: nil, total: nil)
     }
 
     private enum CodingKeys: String, CodingKey {

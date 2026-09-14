@@ -33,7 +33,7 @@ final class AppSession {
         let messageID: String
     }
     // Keep removals too: an older page or replay must not restore an old emoji.
-    private var reactionEvents: [ReactionTarget: [String: ChatMessage]] = [:]
+    private var reactionEvents: [ReactionTarget: [String: MessageReactionState]] = [:]
 
     var unifiedMessages: [ChatMessage] {
         var result = feedByID
@@ -675,22 +675,34 @@ final class AppSession {
     }
 
     func react(to message: ChatMessage, emoji: String) async {
+        guard !activeMessageActionIDs.contains(message.id) else { return }
         activeMessageActionIDs.insert(message.id)
         defer { activeMessageActionIDs.remove(message.id) }
         if demoMode {
-            replaceMessage(message.id, in: message.contactId) { current in
-                var updated = current
-                updated.reactions = [emoji: ["me"]]
-                return updated
-            }
+            applyConfirmedReaction(to: message, emoji: emoji)
             return
         }
         do {
-            try await api.react(to: message, emoji: emoji, senderJID: message.isFromMe ? ownSenderJID : message.senderJID)
-            await loadMessages(for: message.contactId)
+            let confirmed = try await api.react(to: message, emoji: emoji, senderJID: message.isFromMe ? ownSenderJID : message.senderJID)
+            if let confirmed { handle(.reaction(confirmed)) }
+            else { applyConfirmedReaction(to: message, emoji: emoji) }
         } catch {
             presentError("Couldn’t react to message", error)
         }
+    }
+
+    // Older servers return success without an event. Apply that confirmed choice
+    // locally too; don't rely on an unrelated later refresh or WhatsApp echo.
+    private func applyConfirmedReaction(to message: ChatMessage, emoji: String) {
+        let reaction = ChatMessage(
+            id: "confirmed-reaction-\(UUID().uuidString)", contactId: message.contactId,
+            timestamp: Int64(Date().timeIntervalSince1970 * 1_000), isFromMe: true, isForwarded: false,
+            senderName: nil, senderPhone: nil, contactName: message.contactName, contactPhone: message.contactPhone,
+            chatType: message.chatType, contentType: "Reaction",
+            content: MessageContent(type: "reaction", body: nil, emoji: emoji, targetMessageId: message.id, showTranslatedPrimary: nil, replyContext: nil),
+            originalText: nil, translatedText: nil, sourceLanguage: nil, isTranslated: false
+        )
+        handle(.reaction(reaction))
     }
 
     func loadMedia(for message: ChatMessage) async {
@@ -1108,12 +1120,17 @@ final class AppSession {
             let actor = reaction.isFromMe ? "me" : (reaction.senderPhone ?? reaction.senderName ?? "unknown")
             if let previous = reactionEvents[key]?[actor],
                (previous.timestamp, previous.id) >= (reaction.timestamp, reaction.id) { continue }
-            reactionEvents[key, default: [:]][actor] = reaction
+            reactionEvents[key, default: [:]][actor] = MessageReactionState(id: reaction.id, timestamp: reaction.timestamp, emoji: reaction.content?.emoji ?? "")
         }
 
         var display: [ReactionTarget: ChatMessage] = [:]
         for var message in values where !message.isReaction {
             let key = ReactionTarget(contactID: message.contactId, messageID: message.id)
+            for (actor, state) in message.reactionStates ?? [:] {
+                if let previous = reactionEvents[key]?[actor],
+                   (previous.timestamp, previous.id) >= (state.timestamp, state.id) { continue }
+                reactionEvents[key, default: [:]][actor] = state
+            }
             // Message updates and feed pages contain message fields, not reaction events.
             // Preserve cached aggregates before applying the newest per-person changes.
             if message.reactions == nil {
@@ -1128,11 +1145,12 @@ final class AppSession {
                         reactions[emoji]?.removeAll { $0 == actor }
                         if reactions[emoji]?.isEmpty == true { reactions.removeValue(forKey: emoji) }
                     }
-                    if let emoji = events[actor]?.content?.emoji, !emoji.isEmpty {
+                    if let emoji = events[actor]?.emoji, !emoji.isEmpty {
                         reactions[emoji, default: []].append(actor)
                     }
                 }
                 message.reactions = reactions
+                message.reactionStates = events
             }
             display[key] = message
         }
@@ -1408,7 +1426,8 @@ private extension ChatMessage {
             translatedText: "Translated: \(message.contentText ?? message.displayText)",
             sourceLanguage: "Hungarian",
             isTranslated: true,
-            reactions: message.reactions
+            reactions: message.reactions,
+            reactionStates: message.reactionStates
         )
     }
 

@@ -235,3 +235,21 @@ test('static and generated markup do not use inline event attributes', () => {
     /\son(?:click|error|change|input|submit|keydown|load)=/i
   );
 });
+
+
+test('confirmed reactions use one actor and preserve snapshot removals against older pages', () => {
+  const app = {};
+  app.getReactionActor = new Function('reactionMsg', extractMethodBody(appJs, 'getReactionActor'));
+  app.applyReactionToMessage = new Function('targetMessage', 'reactionMsg', extractMethodBody(appJs, 'applyReactionToMessage'));
+  const message = {reactions: {}, reactionStates: {me: {id: 'remove', timestamp: 102, emoji: ''}}};
+  const reaction = (id, timestamp, emoji) => ({id, timestamp, isFromMe: true, content: {emoji}});
+  app.applyReactionToMessage(message, reaction('z-old', 101, '❤️'));
+  assert.deepEqual(message.reactions, {});
+  app.applyReactionToMessage(message, reaction('a-new', 103, '👍'));
+  app.applyReactionToMessage(message, reaction('a-new', 103, '👍'));
+  assert.deepEqual(message.reactions, {'👍': ['me']});
+  app.applyReactionToMessage(message, reaction('b-new', 104, '❤️'));
+  assert.deepEqual(message.reactions, {'❤️': ['me']});
+  app.applyReactionToMessage(message, reaction('c-new', 105, ''));
+  assert.deepEqual(message.reactions, {});
+});

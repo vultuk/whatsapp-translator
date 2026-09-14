@@ -925,9 +925,10 @@ func (c *Client) buildMessageContent(msg *waE2E.Message) MessageContent {
 	// Reaction message
 	if msg.ReactionMessage != nil {
 		return MessageContent{
-			Type:            "reaction",
-			Emoji:           getString(msg.ReactionMessage.Text),
-			TargetMessageID: msg.ReactionMessage.Key.GetID(),
+			Type:              "reaction",
+			Emoji:             getString(msg.ReactionMessage.Text),
+			TargetMessageID:   msg.ReactionMessage.Key.GetID(),
+			SenderTimestampMS: msg.ReactionMessage.GetSenderTimestampMS(),
 		}
 	}
 
@@ -1352,7 +1353,23 @@ func (c *Client) SendReaction(ctx context.Context, chatJIDStr string, targetMess
 		return "", 0, fmt.Errorf("failed to send reaction: %w", err)
 	}
 
+	// whatsmeow does not deliver our own send as an incoming Message event.
+	// Publish the confirmed payload before send_result so every consumer sees it
+	// in storage and the live stream before the HTTP/MCP send is acknowledged.
+	if c.client.Store.ID != nil {
+		c.handleMessage(confirmedReactionEvent(chatJID, *c.client.Store.ID, resp.ID, resp.Timestamp, reactionMsg))
+	}
 	return resp.ID, resp.Timestamp.Unix(), nil
+}
+
+func confirmedReactionEvent(chat, sender types.JID, id string, sentAt time.Time, payload *waE2E.Message) *events.Message {
+	return &events.Message{
+		Info: types.MessageInfo{
+			MessageSource: types.MessageSource{Chat: normalizeAddress(chat, types.JID{}), Sender: sender.ToNonAD(), IsFromMe: true, IsGroup: chat.Server == types.GroupServer},
+			ID:            id, Timestamp: sentAt,
+		},
+		Message: payload,
+	}
 }
 
 // MarkRead marks a message as read in WhatsApp.

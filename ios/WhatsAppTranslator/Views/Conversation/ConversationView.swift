@@ -133,7 +133,7 @@ struct ConversationView: View {
                         .accessibilityHidden(focusedReplyMessage != nil)
                     if let focusedReplyMessage {
                         FocusedReplyOverlay(destination: session.displayName(for: contact), isSending: session.sendingContactIDs.contains(contact.id), cancel: cancelReply) {
-                            messageBubble(message: focusedReplyMessage)
+                            messageBubble(message: session.messages[focusedReplyMessage.contactId]?.first(where: { $0.id == focusedReplyMessage.id }) ?? focusedReplyMessage)
                         }
                     }
                 }

@@ -423,6 +423,7 @@ impl MessageDisplay {
             MessageContent::Reaction {
                 emoji,
                 target_message_id,
+                ..
             } => {
                 execute!(
                     stdout,

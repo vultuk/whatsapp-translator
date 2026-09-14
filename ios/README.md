@@ -206,6 +206,18 @@ Reaction state is retained per conversation, target, and actor, so translation
 updates, refreshes, history pages, and older event replays cannot erase a newer
 reaction. Reaction events remain hidden from message lists.
 
+Long-press a message (or open its context menu on macOS) for a row of quick
+reactions beside the reply actions. The plus opens more emoji choices; selecting
+an existing quick reaction again removes it. The send response contains the
+confirmed reaction, which updates both views even when the live socket is delayed.
+
+The bridge publishes successful outgoing reactions before acknowledging the send,
+and preserves WhatsApp's millisecond reaction clock. Empty emoji fields omitted by
+the Go bridge represent removals. Both paginated message endpoints attach current
+reaction aggregates and per-actor clocks, including removals, so cached or older
+pages cannot resurrect an earlier choice. The shared `ReactionDeliveryTests` and
+long-press UI test cover this path without sending real WhatsApp messages.
+
 Live text and caption alerts are persisted on the server until language detection
 and any required translation finish. Translation retries and server restarts
 retain pending alerts; imported history does not create alerts. Group alerts carry

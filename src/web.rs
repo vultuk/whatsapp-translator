@@ -450,6 +450,7 @@ pub struct SendReactionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SendReactionResponse {
     pub success: bool,
+    pub reaction: Option<StoredMessage>,
 }
 
 /// Mark-read request
@@ -1953,8 +1954,26 @@ struct MessagesQuery {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MessagesResponse {
+    messages: Vec<crate::storage::PresentedMessage>,
+    has_more: bool,
+}
+
+fn present_message_page(
+    store: &MessageStore,
     messages: Vec<StoredMessage>,
     has_more: bool,
+) -> Response {
+    match store.present_messages(messages) {
+        Ok(messages) => Json(MessagesResponse { messages, has_more }).into_response(),
+        Err(error) => {
+            error!("Could not load message reaction state: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not load message reactions",
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn get_unified_messages(
@@ -1987,7 +2006,7 @@ async fn get_unified_messages(
                     }
                 }
             }
-            Json(MessagesResponse { messages, has_more }).into_response()
+            present_message_page(&state.store, messages, has_more)
         }
         Err(error) => {
             error!("Failed to load unified feed: {error}");
@@ -2043,7 +2062,7 @@ async fn get_messages(
                     }
                 }
             }
-            Json(MessagesResponse { messages, has_more }).into_response()
+            present_message_page(&state.store, messages, has_more)
         }
         Err(e) => {
             error!("Failed to get messages: {}", e);
@@ -3485,7 +3504,15 @@ async fn send_reaction(
             .into_response();
     }
 
-    Json(SendReactionResponse { success: true }).into_response()
+    let reaction = send_result
+        .message_id
+        .as_deref()
+        .and_then(|id| state.store.get_message_by_id(id).ok().flatten());
+    Json(SendReactionResponse {
+        success: true,
+        reaction,
+    })
+    .into_response()
 }
 
 /// Translate a message manually
@@ -6342,6 +6369,125 @@ mod tests {
         ));
         assert!(!should_send_push_notification(&reaction, None));
         assert!(should_send_push_notification(&incoming_target, None));
+    }
+
+    #[tokio::test]
+    async fn confirmed_reaction_wire_events_reach_ack_live_stream_and_both_snapshots() {
+        let (state, dir) = test_state(None);
+        let chat = "family@g.us";
+        state
+            .store
+            .upsert_contact(chat, Some("Family"), None, Some("group"), 100)
+            .unwrap();
+        state
+            .store
+            .add_message(&feed_test_message("target", chat, 100))
+            .unwrap();
+        state.set_connected(true, None, None).await;
+        let (sender, mut commands) = mpsc::channel(8);
+        state.set_command_tx(sender).await;
+        let router = create_router(state.clone());
+        let mut events = state.broadcast_tx.subscribe();
+        for (index, emoji) in ["❤️", "👍", ""].into_iter().enumerate() {
+            let request = HttpRequest::builder()
+                .method("POST")
+                .uri("/api/react")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"contactId":chat,"messageId":"target","emoji":emoji})
+                        .to_string(),
+                ))
+                .unwrap();
+            let sending = tokio::spawn(router.clone().oneshot(request));
+            let BridgeCommand::SendReaction {
+                request_id: Some(request_id),
+                to,
+                ..
+            } = tokio::time::timeout(Duration::from_secs(2), commands.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            else {
+                panic!("expected reaction send")
+            };
+            assert_eq!(to, chat);
+            let id = format!("reaction-{}", 3 - index);
+            let timestamp = 1_700_000_000_100 + index as i64;
+            let mut content = serde_json::json!({"type":"reaction","target_message_id":"target","sender_timestamp_ms":timestamp});
+            // Go's omitempty removes the field entirely for a removal.
+            if !emoji.is_empty() {
+                content["emoji"] = emoji.into();
+            }
+            let wire = serde_json::json!({"type":"message","id":id,"timestamp":1700000000,
+                "from":{"jid":"447700900123@s.whatsapp.net","phone":"447700900123"},
+                "chat":{"type":"group","jid":chat,"name":"Family"},"content":content,"is_from_me":true,"is_forwarded":false});
+            let event: crate::bridge::BridgeEvent = serde_json::from_value(wire).unwrap();
+            crate::handle_web_event(event, &state, &state.store, None)
+                .await
+                .unwrap();
+            let mut seen = false;
+            while let Ok(event) = events.try_recv() {
+                if let WebSocketEvent::Reaction { message } = event {
+                    assert_eq!(message.id, id);
+                    assert_eq!(message.timestamp, timestamp);
+                    assert_eq!(message.content.unwrap()["emoji"], emoji);
+                    seen = true;
+                }
+            }
+            assert!(
+                seen,
+                "confirmed reaction must publish before the acknowledgement"
+            );
+            state
+                .handle_send_result(BridgeSendResult {
+                    request_id,
+                    success: true,
+                    message_id: Some(id.clone()),
+                    timestamp: Some(1700000000),
+                    message_ids: vec![],
+                    timestamps: vec![],
+                    error: None,
+                })
+                .await;
+            let response = sending.await.unwrap().unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: serde_json::Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), 100_000)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(body["reaction"]["id"], id);
+            assert_eq!(body["reaction"]["timestamp"], timestamp);
+            for route in [
+                "/api/feed?limit=1".to_string(),
+                format!(
+                    "/api/messages/{}?limit=1&before=200",
+                    urlencoding::encode(chat)
+                ),
+            ] {
+                let response = router.clone().oneshot(empty_request(&route)).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body: serde_json::Value = serde_json::from_slice(
+                    &axum::body::to_bytes(response.into_body(), 100_000)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                let message = &body["messages"][0];
+                assert_eq!(message["id"], "target");
+                assert_eq!(message["reactionStates"]["me"]["emoji"], emoji);
+                assert_eq!(message["reactionStates"]["me"]["timestamp"], timestamp);
+                if emoji.is_empty() {
+                    assert_eq!(message["reactions"], serde_json::json!({}));
+                } else {
+                    assert_eq!(message["reactions"][emoji], serde_json::json!(["me"]));
+                }
+            }
+        }
+        drop(router);
+        drop(state);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -234,7 +234,7 @@ private struct UnifiedMessagesView: View {
                 .accessibilityHidden(replyDraft.isFocused)
                 if replyDraft.isFocused, let selected = replyDraft.selected {
                     FocusedReplyOverlay(destination: name(selected), isSending: sending, cancel: cancelReply) {
-                        bubble(selected)
+                        bubble(session.unifiedMessages.first(where: { $0.id == selected.id && $0.contactId == selected.contactId }) ?? selected)
                     }
                 }
             }

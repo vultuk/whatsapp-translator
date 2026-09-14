@@ -626,7 +626,13 @@ async fn process_message(
     StoredMessage {
         id: msg.id,
         contact_id,
-        timestamp: msg.timestamp.timestamp_millis(),
+        timestamp: match &msg.content {
+            MessageContent::Reaction {
+                sender_timestamp_ms: Some(timestamp),
+                ..
+            } if *timestamp > 0 => *timestamp,
+            _ => msg.timestamp.timestamp_millis(),
+        },
         is_from_me: msg.is_from_me,
         is_forwarded: msg.is_forwarded,
         sender_name: msg.push_name.or_else(|| msg.from.name.clone()),
@@ -1285,10 +1291,14 @@ impl serde::Serialize for bridge::MessageContent {
             bridge::MessageContent::Reaction {
                 emoji,
                 target_message_id,
+                sender_timestamp_ms,
             } => {
                 map.serialize_entry("type", "reaction")?;
                 map.serialize_entry("emoji", emoji)?;
                 map.serialize_entry("target_message_id", target_message_id)?;
+                if let Some(timestamp) = sender_timestamp_ms {
+                    map.serialize_entry("sender_timestamp_ms", timestamp)?;
+                }
             }
             bridge::MessageContent::Revoked => {
                 map.serialize_entry("type", "revoked")?;

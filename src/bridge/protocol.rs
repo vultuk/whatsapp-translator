@@ -249,8 +249,11 @@ pub enum MessageContent {
 
     /// Reaction to another message
     Reaction {
+        #[serde(default)]
         emoji: String,
         target_message_id: String,
+        #[serde(default)]
+        sender_timestamp_ms: Option<i64>,
     },
 
     /// Message was deleted/revoked

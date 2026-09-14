@@ -98,31 +98,32 @@ type Chat struct {
 
 // MessageContent represents the content of a message
 type MessageContent struct {
-	Type            string    `json:"type"`
-	Body            string    `json:"body,omitempty"`
-	Caption         string    `json:"caption,omitempty"`
-	MimeType        string    `json:"mime_type,omitempty"`
-	FileName        string    `json:"file_name,omitempty"`
-	FileSize        uint64    `json:"file_size,omitempty"`
-	FileHash        string    `json:"file_hash,omitempty"`
-	MediaData       string    `json:"media_data,omitempty"` // Base64 encoded media data
-	DurationSeconds *uint32   `json:"duration_seconds,omitempty"`
-	IsVoiceNote     bool      `json:"is_voice_note,omitempty"`
-	IsAnimated      bool      `json:"is_animated,omitempty"`
-	Latitude        *float64  `json:"latitude,omitempty"`
-	Longitude       *float64  `json:"longitude,omitempty"`
-	LocationName    string    `json:"name,omitempty"`
-	Address         string    `json:"address,omitempty"`
-	DisplayName     string    `json:"display_name,omitempty"`
-	VCard           string    `json:"vcard,omitempty"`
-	Emoji           string    `json:"emoji,omitempty"`
-	TargetMessageID string    `json:"target_message_id,omitempty"`
-	Question        string    `json:"question,omitempty"`
-	Options         []string  `json:"options,omitempty"`
-	RawType         string    `json:"raw_type,omitempty"`
-	Mentions        []Mention `json:"mentions,omitempty"`
-	AlbumID         string    `json:"album_id,omitempty"`
-	AlbumIndex      *int32    `json:"album_index,omitempty"`
+	Type              string    `json:"type"`
+	Body              string    `json:"body,omitempty"`
+	Caption           string    `json:"caption,omitempty"`
+	MimeType          string    `json:"mime_type,omitempty"`
+	FileName          string    `json:"file_name,omitempty"`
+	FileSize          uint64    `json:"file_size,omitempty"`
+	FileHash          string    `json:"file_hash,omitempty"`
+	MediaData         string    `json:"media_data,omitempty"` // Base64 encoded media data
+	DurationSeconds   *uint32   `json:"duration_seconds,omitempty"`
+	IsVoiceNote       bool      `json:"is_voice_note,omitempty"`
+	IsAnimated        bool      `json:"is_animated,omitempty"`
+	Latitude          *float64  `json:"latitude,omitempty"`
+	Longitude         *float64  `json:"longitude,omitempty"`
+	LocationName      string    `json:"name,omitempty"`
+	Address           string    `json:"address,omitempty"`
+	DisplayName       string    `json:"display_name,omitempty"`
+	VCard             string    `json:"vcard,omitempty"`
+	Emoji             string    `json:"emoji,omitempty"`
+	TargetMessageID   string    `json:"target_message_id,omitempty"`
+	Question          string    `json:"question,omitempty"`
+	Options           []string  `json:"options,omitempty"`
+	RawType           string    `json:"raw_type,omitempty"`
+	Mentions          []Mention `json:"mentions,omitempty"`
+	AlbumID           string    `json:"album_id,omitempty"`
+	AlbumIndex        *int32    `json:"album_index,omitempty"`
+	SenderTimestampMS int64     `json:"sender_timestamp_ms,omitempty"`
 }
 
 // Mention identifies a WhatsApp user referenced by an @ token in message text.

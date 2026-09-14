@@ -16,6 +16,8 @@ mod identity;
 use crate::identity::canonical_chat_id;
 mod reliability;
 pub use reliability::OutboxEntry;
+mod reactions;
+pub use reactions::PresentedMessage;
 
 /// Stored message with translation info
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -433,6 +435,7 @@ impl MessageStore {
             CREATE INDEX IF NOT EXISTS idx_messages_feed_cursor ON messages(timestamp DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_desc ON messages(contact_id, timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_id_desc ON messages(contact_id, timestamp DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_message_reactions_target ON messages(contact_id,json_extract(content_json,'$.target_message_id'),timestamp DESC,id DESC) WHERE lower(content_type)='reaction';
             CREATE INDEX IF NOT EXISTS idx_contacts_last_message ON contacts(last_message_time DESC);
 
             -- AI usage tracking
