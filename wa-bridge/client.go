@@ -358,6 +358,12 @@ func (c *Client) handleMessage(evt *events.Message) {
 	msg.Chat = c.buildChat(evt.Info)
 
 	// Set message content (with media download)
+	if id, editedAt, content, ok := messageEdit(evt); ok {
+		msg.ID = id
+		msg.Content = c.buildMessageContent(content)
+		SendEvent(NewMessageEditEvent(msg, editedAt))
+		return
+	}
 	msg.Content = c.buildMessageContent(evt.Message)
 
 	// Skip protocol messages and unknown types - these shouldn't be displayed
@@ -503,6 +509,16 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 
 			// The message is wrapped in a WebMessageInfo, need to unwrap
 			waMessage := webMsg.Message
+			if parsed, err := c.client.ParseWebMessage(chatJIDParsed, webMsg); err == nil {
+				if id, editedAt, content, ok := messageEdit(parsed); ok {
+					msg.ID = id
+					msg.Content = c.buildMessageContent(content)
+					msg.IsHistory = true
+					SendEvent(NewMessageEditEvent(msg, editedAt))
+					continue
+				}
+				waMessage = parsed.Message
+			}
 			msg.Content = c.buildMessageContent(waMessage)
 
 			// Skip protocol/unknown messages

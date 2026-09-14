@@ -311,6 +311,18 @@ async fn handle_web_event(
             _ => {}
         },
 
+        BridgeEvent::MessageEdit {
+            message,
+            edited_at_ms,
+        } => {
+            let edit = process_message(message, None, Some(store)).await;
+            if let Some(message) = store.record_message_edit(&edit, edited_at_ms)? {
+                let _ = state
+                    .broadcast_tx
+                    .send(web::WebSocketEvent::MessageUpdated { message });
+            }
+        }
+
         BridgeEvent::Message(msg) => {
             // Extract unread count before moving msg
             let unread_count = msg.unread_count;
@@ -379,7 +391,11 @@ async fn handle_web_event(
                         .send(web::WebSocketEvent::MessageUpdated { message });
                 }
             } else {
-                state.broadcast_message(stored_msg);
+                state.broadcast_message(
+                    store
+                        .get_message_by_id(&stored_msg.id)?
+                        .unwrap_or(stored_msg),
+                );
             }
         }
 
@@ -849,6 +865,11 @@ async fn handle_terminal_event(
             message_display.display(&msg)?;
         }
 
+        BridgeEvent::MessageEdit { message, .. } => {
+            print_info("Message edited:");
+            message_display.display(&message)?;
+        }
+
         BridgeEvent::Error { code, message } => {
             error!("Bridge error [{}]: {}", code, message);
             print_error(&format!("[{}] {}", code, message));
@@ -958,6 +979,14 @@ impl serde::Serialize for BridgeEvent {
             BridgeEvent::Message(msg) => {
                 map.serialize_entry("type", "message")?;
                 map.serialize_entry("message", msg)?;
+            }
+            BridgeEvent::MessageEdit {
+                message,
+                edited_at_ms,
+            } => {
+                map.serialize_entry("type", "message_edit")?;
+                map.serialize_entry("message", message)?;
+                map.serialize_entry("edited_at_ms", edited_at_ms)?;
             }
             BridgeEvent::Error { code, message } => {
                 map.serialize_entry("type", "error")?;

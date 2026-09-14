@@ -3602,17 +3602,23 @@ async fn translate_message(
         }
     }
 
-    if let Err(error) = state.store.finish_translation(
+    match state.store.finish_translation(
         &req.message_id,
         result.translated_text.as_deref(),
         &result.source_language,
         result.needs_translation,
+        message.original_text.as_deref(),
+        message.edit_revision(),
     ) {
+        Ok(true) => {},
+        Ok(false) => return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"The message changed during translation. Please try again."}))).into_response(),
+        Err(error) => {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Could not save translation: {error}")})),
         )
             .into_response();
+        }
     }
     if let Ok(Some(message)) = state.store.get_message_by_id(&req.message_id) {
         let _ = state
@@ -6369,6 +6375,183 @@ mod tests {
         ));
         assert!(!should_send_push_notification(&reaction, None));
         assert!(should_send_push_notification(&incoming_target, None));
+    }
+
+    #[tokio::test]
+    async fn edited_wire_messages_replace_both_snapshots_without_duplicates_or_unreads() {
+        for (chat, from_me) in [
+            ("447700900123@s.whatsapp.net", false),
+            ("family@g.us", false),
+            ("family@g.us", true),
+        ] {
+            let (state, dir) = test_state(None);
+            let wire = |kind: &str, body: &str, revision: i64| {
+                serde_json::json!({
+                    "type":kind,"id":"original","timestamp":1700000000,"edited_at_ms":revision,
+                    "from":{"jid":"447700900123@s.whatsapp.net","phone":"447700900123"},
+                    "chat":{"type":if chat.ends_with("@g.us") {"group"} else {"private"},"jid":chat,"name":"Test chat"},
+                    "content":{"type":"text","body":body},"is_from_me":from_me,"is_forwarded":false
+                })
+            };
+            crate::handle_web_event(
+                serde_json::from_value(wire("message", "Get", 0)).unwrap(),
+                &state,
+                &state.store,
+                None,
+            )
+            .await
+            .unwrap();
+            let before = state.store.get_message_by_id("original").unwrap().unwrap();
+            let unread = state.store.get_contacts().unwrap()[0].unread_count;
+            state
+                .store
+                .update_conversation_settings(
+                    chat,
+                    &ConversationSettings {
+                        translation_enabled: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            state
+                .store
+                .finish_translation(
+                    "original",
+                    Some("Old translation"),
+                    "Hungarian",
+                    true,
+                    Some("Get"),
+                    0,
+                )
+                .unwrap();
+            let mut events = state.broadcast_tx.subscribe();
+            crate::handle_web_event(
+                serde_json::from_value(wire("message_edit", "Grr", 1700000000123)).unwrap(),
+                &state,
+                &state.store,
+                None,
+            )
+            .await
+            .unwrap();
+            let WebSocketEvent::MessageUpdated { message } = events.try_recv().unwrap() else {
+                panic!("edit must update the original")
+            };
+            assert_eq!(message.id, "original");
+            assert_eq!(message.timestamp, before.timestamp);
+            assert_eq!(message.original_text.as_deref(), Some("Grr"));
+            assert_eq!(message.translated_text, None);
+            assert_eq!(message.edit_revision(), 1700000000123);
+            assert_eq!(state.store.get_contacts().unwrap()[0].unread_count, unread);
+            // A stale AI response cannot restore the translation of Get or remove the new job.
+            assert!(!state
+                .store
+                .finish_translation("original", Some("Stale"), "Hungarian", true, Some("Get"), 0)
+                .unwrap());
+            assert_eq!(state.store.claim_translation().unwrap().is_some(), !from_me);
+            for (text, revision) in [("Get", 1700000000122), ("Grr", 1700000000123)] {
+                crate::handle_web_event(
+                    serde_json::from_value(wire("message_edit", text, revision)).unwrap(),
+                    &state,
+                    &state.store,
+                    None,
+                )
+                .await
+                .unwrap();
+                assert!(events.try_recv().is_err());
+            }
+            let router = create_router(state.clone());
+            for route in [
+                "/api/feed?limit=10".to_string(),
+                format!("/api/messages/{}?limit=10", urlencoding::encode(chat)),
+            ] {
+                let response = router.clone().oneshot(empty_request(&route)).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body: serde_json::Value = serde_json::from_slice(
+                    &axum::body::to_bytes(response.into_body(), 100_000)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+                assert_eq!(body["messages"][0]["content"]["body"], "Grr");
+                assert_eq!(body["messages"][0]["timestamp"], before.timestamp);
+            }
+            let reopened = MessageStore::new(&dir).unwrap();
+            assert_eq!(
+                reopened
+                    .get_message_by_id("original")
+                    .unwrap()
+                    .unwrap()
+                    .original_text
+                    .as_deref(),
+                Some("Grr")
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[tokio::test]
+    async fn edits_arriving_before_history_survive_restart_and_caption_edits_keep_media() {
+        let (state, dir) = test_state(None);
+        let chat = "family@g.us";
+        state
+            .store
+            .upsert_contact(chat, Some("Family"), None, Some("group"), 100)
+            .unwrap();
+        let mut original = feed_test_message("photo", chat, 100);
+        original.content_type = "Image".into();
+        original.content_json = serde_json::json!({"type":"image","caption":"Get","media_data":"photo-data","album_id":"album","reply_context":{"message_id":"quoted"}}).to_string();
+        original.original_text = Some("Get".into());
+        let mut edit = original.clone();
+        edit.content_json = serde_json::json!({"type":"image","caption":"Grr"}).to_string();
+        edit.original_text = Some("Grr".into());
+        assert!(state
+            .store
+            .record_message_edit(&edit, 200)
+            .unwrap()
+            .is_none());
+        let reopened = MessageStore::new(&dir).unwrap();
+        reopened.add_message(&original).unwrap();
+        let saved = reopened.get_message_by_id("photo").unwrap().unwrap();
+        let content = saved.content.unwrap();
+        assert_eq!(content["caption"], "Grr");
+        assert_eq!(content["media_data"], "photo-data");
+        assert_eq!(content["album_id"], "album");
+        assert_eq!(content["reply_context"]["message_id"], "quoted");
+        assert_eq!(saved.timestamp, 100);
+        // Caption removal is a valid edit and must not remove the attachment.
+        edit.content_json = serde_json::json!({"type":"image"}).to_string();
+        edit.original_text = None;
+        let removed = reopened.record_message_edit(&edit, 201).unwrap().unwrap();
+        assert!(removed.content.as_ref().unwrap()["caption"].is_null());
+        assert_eq!(
+            removed.content.as_ref().unwrap()["media_data"],
+            "photo-data"
+        );
+        edit.contact_id = "another@g.us".into();
+        assert!(reopened.record_message_edit(&edit, 300).unwrap().is_none());
+        assert_eq!(
+            reopened
+                .get_message_by_id("photo")
+                .unwrap()
+                .unwrap()
+                .edit_revision(),
+            201
+        );
+        reopened.clear_all().unwrap();
+        reopened
+            .upsert_contact(chat, Some("Family"), None, Some("group"), 100)
+            .unwrap();
+        reopened.add_message(&original).unwrap();
+        assert_eq!(
+            reopened
+                .get_message_by_id("photo")
+                .unwrap()
+                .unwrap()
+                .edit_revision(),
+            0
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

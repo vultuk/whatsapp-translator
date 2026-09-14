@@ -932,11 +932,11 @@ final class AppSession {
                 feedByID[affectedID] = updated
                 if feedLoading { feedEventsDuringLoad.insert(affectedID) }
             }
-            if !message.isReaction {
+            if !message.isReaction, let updated = normalized.first(where: { $0.id == message.id }) {
                 updateContactPreview(
-                    contactID: message.contactId,
-                    preview: message.displayText,
-                    timestamp: message.timestamp
+                    contactID: updated.contactId,
+                    preview: updated.displayText,
+                    timestamp: updated.timestamp
                 )
             }
             persistCacheSoon()
@@ -1126,6 +1126,11 @@ final class AppSession {
         var display: [ReactionTarget: ChatMessage] = [:]
         for var message in values where !message.isReaction {
             let key = ReactionTarget(contactID: message.contactId, messageID: message.id)
+            // An in-flight page or replay may predate an edit already shown live.
+            let cached = [display[key], messages[message.contactId]?.first(where: { $0.id == message.id }),
+                          feedByID[message.id]].compactMap { $0 }.filter { $0.contactId == message.contactId }
+            if let latest = cached.max(by: { $0.editRevision < $1.editRevision }),
+               latest.editRevision > message.editRevision { message = latest }
             for (actor, state) in message.reactionStates ?? [:] {
                 if let previous = reactionEvents[key]?[actor],
                    (previous.timestamp, previous.id) >= (state.timestamp, state.id) { continue }
@@ -1176,6 +1181,7 @@ final class AppSession {
     private func updateContactPreview(contactID: String, preview: String, timestamp: Int64) {
         guard let index = contacts.firstIndex(where: { $0.id == contactID }) else { return }
         let old = contacts[index]
+        guard timestamp >= old.lastMessageTime else { return }
         contacts[index] = Contact(
             id: old.id,
             name: old.name,
@@ -1280,10 +1286,36 @@ final class AppSession {
         if ProcessInfo.processInfo.arguments.contains("-demoLiveReactions") {
             startLiveReactionDemo()
         }
+        if ProcessInfo.processInfo.arguments.contains("-demoLiveEdits") {
+            startLiveEditDemo()
+        }
         #endif
     }
 
     #if DEBUG
+    private func startLiveEditDemo() {
+        let chat = "edit-preview@g.us"
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1_000) - 60_000
+        let original = ChatMessage.demo(id: "edit-preview-original", contactID: chat, timestamp: timestamp, fromMe: false, body: "Get", translated: nil, sender: "Alex", chatType: "group")
+        let reply = ChatMessage.demo(id: "edit-preview-reply", contactID: chat, timestamp: timestamp + 30_000, fromMe: true, body: "Get what?", translated: nil, sender: nil, deliveryStatus: "read", chatType: "group")
+        contacts = [Contact(id: chat, name: "Edit preview", phone: nil, type: "group", lastMessageTime: reply.timestamp, unreadCount: 0, pinnedAt: nil, lastMessagePreview: reply.displayText)]
+        messages = [chat: [original, reply]]
+        feedByID = [original.id: original, reply.id: reply]
+        feedHasLoaded = true
+        mainTab = .messages
+        selectedContactID = nil
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(8))
+            guard let data = try? JSONEncoder().encode(original),
+                  var value = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+            value["content"] = ["type": "text", "body": "Grr", "edited_at_ms": timestamp + 45_000]
+            value["originalText"] = "Grr"
+            guard let data = try? JSONSerialization.data(withJSONObject: ["type": "message_updated", "message": value]),
+                  let event = try? JSONDecoder().decode(LiveEvent.self, from: data) else { return }
+            handle(event)
+        }
+    }
+
     private func loadPhotoGalleryDemo() {
         let contactID = "gallery-preview@g.us"
         let base = Int64(Date().timeIntervalSince1970 * 1_000) - 120_000

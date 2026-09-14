@@ -312,13 +312,18 @@ impl MessageStore {
         translated: Option<&str>,
         language: &str,
         needs_translation: bool,
-    ) -> Result<()> {
+        expected_original: Option<&str>,
+        expected_edit_revision: i64,
+    ) -> Result<bool> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        tx.execute(
-            "UPDATE messages SET translated_text=?, source_language=?, is_translated=? WHERE id=? AND EXISTS(SELECT 1 FROM contacts c WHERE c.id=messages.contact_id AND c.translation_enabled=1)",
-            params![translated, language, needs_translation, id],
+        let updated = tx.execute(
+            "UPDATE messages SET translated_text=?, source_language=?, is_translated=? WHERE id=? AND original_text IS ? AND COALESCE(json_extract(content_json,'$.edited_at_ms'),0)=? AND EXISTS(SELECT 1 FROM contacts c WHERE c.id=messages.contact_id AND c.translation_enabled=1)",
+            params![translated, language, needs_translation, id, expected_original, expected_edit_revision],
         )?;
+        if updated == 0 {
+            return Ok(false);
+        }
         let contact: Option<String> = tx
             .query_row(
                 "SELECT contact_id FROM messages WHERE id=?",
@@ -334,7 +339,7 @@ impl MessageStore {
             params![id],
         )?;
         tx.commit()?;
-        Ok(())
+        Ok(true)
     }
 
     pub fn discard_translation(&self, id: &str) -> Result<()> {

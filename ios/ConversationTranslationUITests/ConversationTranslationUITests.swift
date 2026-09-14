@@ -2,6 +2,33 @@ import XCTest
 
 @MainActor
 final class ConversationTranslationUITests: XCTestCase {
+    func testLiveEditChangesGetToGrrInUnifiedAndNormalViewsWithoutRelaunch() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoLiveEdits"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Get"].firstMatch.waitForExistence(timeout: 5))
+        let before = XCTAttachment(screenshot: app.screenshot())
+        before.name = "Unified feed before incoming edit"
+        before.lifetime = .keepAlways
+        add(before)
+        XCTAssertTrue(app.staticTexts["Grr"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.staticTexts["Get"].exists)
+        XCTAssertTrue(app.staticTexts["Edited"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Get what?"].exists)
+        let after = XCTAttachment(screenshot: app.screenshot())
+        after.name = "Unified feed shows Grr and Edited without relaunch"
+        after.lifetime = .keepAlways
+        add(after)
+        app.buttons["Open chat: Edit preview"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Grr"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Edited"].firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["Get"].exists)
+        let chat = XCTAttachment(screenshot: app.screenshot())
+        chat.name = "Normal conversation shows the same corrected message"
+        chat.lifetime = .keepAlways
+        add(chat)
+    }
+
     func testLongPressReactionsUpdateUnifiedAndNormalViewsWithoutRelaunch() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoUnifiedFeed"]

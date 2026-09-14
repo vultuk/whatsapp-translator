@@ -16,6 +16,7 @@ mod identity;
 use crate::identity::canonical_chat_id;
 mod reliability;
 pub use reliability::OutboxEntry;
+mod edits;
 mod reactions;
 pub use reactions::PresentedMessage;
 
@@ -347,6 +348,15 @@ impl MessageStore {
                 status TEXT NOT NULL DEFAULT 'pending',
                 attempts INTEGER NOT NULL DEFAULT 0,
                 retry_at INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS message_edits (
+                message_id TEXT PRIMARY KEY,
+                contact_id TEXT NOT NULL,
+                is_from_me INTEGER NOT NULL,
+                sender_phone TEXT,
+                edited_at_ms INTEGER NOT NULL,
+                content_json TEXT NOT NULL,
+                original_text TEXT
             );
             CREATE TABLE IF NOT EXISTS pending_notifications (
                 message_id TEXT PRIMARY KEY,
@@ -1192,6 +1202,7 @@ impl MessageStore {
                 }
             }
         }
+        Self::apply_pending_edit(&tx, &msg.id)?;
         tx.commit()?;
         Ok(())
     }
@@ -2145,6 +2156,7 @@ impl MessageStore {
 
         conn.execute_batch(
             r#"
+            DELETE FROM message_edits;
             DELETE FROM messages;
             DELETE FROM contacts;
             DELETE FROM translation_usage;
@@ -3113,7 +3125,7 @@ mod tests {
         let store = MessageStore::new(&dir).unwrap();
         assert!(store.ready_notification_ids().unwrap().is_empty());
         store
-            .finish_translation("Szia", Some("Hello"), "Hungarian", true)
+            .finish_translation("Szia", Some("Hello"), "Hungarian", true, Some("Szia"), 0)
             .unwrap();
         assert_eq!(store.ready_notification_ids().unwrap(), vec!["Szia"]);
         let saved = store.get_message_by_id("Szia").unwrap().unwrap();
@@ -3146,7 +3158,14 @@ mod tests {
         store.add_message(&test_message("history", 1)).unwrap();
         store.enqueue_translation("history").unwrap();
         store
-            .finish_translation("history", Some("Old message"), "Hungarian", true)
+            .finish_translation(
+                "history",
+                Some("Old message"),
+                "Hungarian",
+                true,
+                Some("history"),
+                0,
+            )
             .unwrap();
         let mut outgoing = test_message("outgoing", 2);
         outgoing.is_from_me = true;
@@ -3160,11 +3179,18 @@ mod tests {
             .add_message_with_notification(&test_message("empty-result", 4), Some(true))
             .unwrap();
         store
-            .finish_translation("empty-result", Some(" "), "Hungarian", true)
+            .finish_translation(
+                "empty-result",
+                Some(" "),
+                "Hungarian",
+                true,
+                Some("empty-result"),
+                0,
+            )
             .unwrap();
         assert!(store.ready_notification_ids().unwrap().is_empty());
         store
-            .finish_translation("English", None, "English", false)
+            .finish_translation("English", None, "English", false, Some("English"), 0)
             .unwrap();
         assert_eq!(store.ready_notification_ids().unwrap(), vec!["English"]);
         store.finish_notification("English").unwrap();
@@ -3222,7 +3248,7 @@ mod tests {
         assert_eq!(translated.source_language.as_deref(), Some("Hungarian"));
         assert_eq!(translated.translated_text.as_deref(), Some("Good morning"));
         store
-            .finish_translation("legacy", None, "English", false)
+            .finish_translation("legacy", None, "English", false, Some("legacy"), 0)
             .unwrap();
         drop(store);
         let store = MessageStore::new(&dir).unwrap();
@@ -3561,7 +3587,14 @@ mod tests {
             .update_conversation_settings("chat@example.test", &settings)
             .unwrap();
         store
-            .finish_translation("first", Some("Late translation"), "Hungarian", true)
+            .finish_translation(
+                "first",
+                Some("Late translation"),
+                "Hungarian",
+                true,
+                Some("first"),
+                0,
+            )
             .unwrap();
         let first = store.get_message_by_id("first").unwrap().unwrap();
         assert!(!first.is_translated);

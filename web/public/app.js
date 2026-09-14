@@ -2204,7 +2204,9 @@ class WhatsAppClient {
     const displayMessages = [];
     const reactionMessages = [];
 
-    for (const message of rawMessages || []) {
+    for (let message of rawMessages || []) {
+      const current = this.messages.get(contactId)?.find(value => value.id === message.id);
+      if ((current?.content?.edited_at_ms || 0) > (message.content?.edited_at_ms || 0)) message = current;
       this.prepareMessageForCache(message);
       if (this.isReactionMessage(message)) {
         reactionMessages.push(message);
@@ -3443,7 +3445,7 @@ class WhatsAppClient {
   renderMessage(message) {
     const isOutgoing = message.isFromMe || message.is_from_me;
     const isTranslated = message.isTranslated || message.is_translated;
-    const time = this.formatMessageTime(message.timestamp);
+    const time = `${message.content?.edited_at_ms ? 'Edited ' : ''}${this.formatMessageTime(message.timestamp)}`;
     const content = this.renderContent(message);
     
     let forwarded = '';

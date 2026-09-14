@@ -83,6 +83,9 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         reactions?.first(where: { $0.value.contains("me") })?.key
     }
 
+    var editRevision: Int64 { content?.editedAtMS ?? 0 }
+    var isEdited: Bool { editRevision > 0 }
+
     var deliveryState: MessageDeliveryState {
         guard isFromMe else { return .none }
         return switch deliveryStatus?.lowercased() {
@@ -324,6 +327,7 @@ enum MessageDeliveryState: Equatable, Sendable {
 }
 
 struct MessageContent: Codable, Hashable, Sendable {
+    let editedAtMS: Int64?
     let type: String?
     let body: String?
     let caption: String?
@@ -352,6 +356,7 @@ struct MessageContent: Codable, Hashable, Sendable {
     let replyContext: ReplyContext?
 
     enum CodingKeys: String, CodingKey {
+        case editedAtMS = "edited_at_ms"
         case type, body, caption, emoji, showTranslatedPrimary, latitude, longitude, name, address, question, options, vcard
         case mimeType = "mime_type"
         case mediaData = "media_data"
@@ -394,10 +399,12 @@ struct MessageContent: Codable, Hashable, Sendable {
         targetMessageId: String? = nil,
         albumId: String? = nil,
         albumIndex: Int? = nil,
+        editedAtMS: Int64? = nil,
         showTranslatedPrimary: Bool?,
         replyContext: ReplyContext?
     ) {
         self.type = type
+        self.editedAtMS = editedAtMS
         self.body = body
         self.caption = caption
         self.mimeType = mimeType

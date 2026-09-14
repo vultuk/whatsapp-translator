@@ -100,11 +100,13 @@ async fn translate(state: &AppState, id: &str) -> anyhow::Result<()> {
     if epoch != state.voice_epoch.load(Ordering::SeqCst) {
         return Ok(());
     }
-    state.store.finish_translation(
+    let applied = state.store.finish_translation(
         id,
         result.translated_text.as_deref(),
         &result.source_language,
         result.needs_translation,
+        message.original_text.as_deref(),
+        message.edit_revision(),
     )?;
     if result.usage.input_tokens > 0 {
         state.store.record_usage(
@@ -118,7 +120,7 @@ async fn translate(state: &AppState, id: &str) -> anyhow::Result<()> {
             },
         )?;
     }
-    if let Some(message) = state.store.get_message_by_id(id)? {
+    if let Some(message) = state.store.get_message_by_id(id)?.filter(|_| applied) {
         let _ = state
             .broadcast_tx
             .send(WebSocketEvent::MessageUpdated { message });

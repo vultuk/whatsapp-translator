@@ -37,3 +37,19 @@ test('translation updates replace one message without appending duplicates and b
   assert.equal(updated.length,2); assert.equal(updated[0].translatedText,'Hello');
   assert.deepEqual([1,2,3,10].map(reconnectDelay),[2000,4000,8000,30000]);
 });
+
+test('message edits retain send time and survive stale live events and later edits', () => {
+  const original = {id:'one', contactId:'chat', timestamp:1, content:{type:'text',body:'Get'}};
+  const edited = {...original, content:{type:'text',body:'Grr',edited_at_ms:20}};
+  let messages = mergeMessageUpdate([original,{id:'two',timestamp:2}], edited);
+  messages = mergeMessageUpdate(messages,original);
+  assert.equal(messages.length,2);
+  assert.equal(messages[0].content.body,'Grr');
+  assert.equal(messages[0].timestamp,1);
+  const translated = {...edited,translatedText:'Corrected translation'};
+  messages = mergeMessageUpdate(messages,translated);
+  assert.equal(messages[0].translatedText,'Corrected translation');
+  messages = mergeMessageUpdate(messages,{...edited,content:{...edited.content,body:'Grr!',edited_at_ms:21}});
+  messages = mergeMessageUpdate(messages,edited);
+  assert.equal(messages[0].content.body,'Grr!');
+});

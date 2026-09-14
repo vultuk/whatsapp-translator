@@ -323,6 +323,7 @@ struct MessageBubble: View {
             }
             if isBusy { ProgressView().controlSize(.mini) }
             if isStarred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
+            if message.isEdited { Text("Edited") }
             Text(message.date.formatted(date: .omitted, time: .shortened))
                 .fixedSize(horizontal: true, vertical: false)
             if message.isFromMe {
@@ -340,6 +341,7 @@ struct MessageBubble: View {
         HStack(spacing: 5) {
             if isBusy { ProgressView().controlSize(.mini) }
             if isStarred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
+            if message.isEdited { Text("Edited") }
             Text(message.date.formatted(date: .omitted, time: .shortened))
             if message.isFromMe {
                 MessageDeliveryIndicator(state: message.deliveryState)

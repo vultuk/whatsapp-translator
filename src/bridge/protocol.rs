@@ -25,6 +25,13 @@ pub enum BridgeEvent {
     /// Received a message
     Message(Message),
 
+    /// An edit targets an existing message, without changing its send time.
+    MessageEdit {
+        #[serde(flatten)]
+        message: Message,
+        edited_at_ms: i64,
+    },
+
     /// Result of a send message request
     SendResult {
         request_id: i32,

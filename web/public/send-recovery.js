@@ -39,5 +39,7 @@ export function createReliableFetch({fetchImpl = fetch, storage = localStorage, 
 export const reconnectDelay = attempt => Math.min(30000, 1000 * 2 ** Math.min(Math.max(attempt, 1), 5));
 
 export function mergeMessageUpdate(messages, message) {
+  const previous = messages.find(existing => existing.id === message.id && existing.contactId === message.contactId);
+  if ((previous?.content?.edited_at_ms || 0) > (message.content?.edited_at_ms || 0)) message = previous;
   return [...messages.filter(existing => existing.id !== message.id), message].sort((a, b) => a.timestamp - b.timestamp);
 }

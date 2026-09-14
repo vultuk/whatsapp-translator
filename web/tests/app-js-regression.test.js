@@ -253,3 +253,11 @@ test('confirmed reactions use one actor and preserve snapshot removals against o
   app.applyReactionToMessage(message, reaction('c-new', 105, ''));
   assert.deepEqual(message.reactions, {});
 });
+
+test('a history response captured before a live edit cannot restore its old text', () => {
+  const original = {id:'one',contactId:'chat',timestamp:1,content:{type:'text',body:'Get'}};
+  const edited = {...original,content:{...original.content,body:'Grr',edited_at_ms:20}};
+  const app = {messages:new Map([['chat',[edited]]]),prepareMessageForCache:()=>{},isReactionMessage:()=>false,isDisplayableMessage:()=>true};
+  app.normalizeLoadedMessages = new Function('contactId','rawMessages','additionalReactionTargets',extractMethodBody(appJs,'normalizeLoadedMessages'));
+  assert.deepEqual(app.normalizeLoadedMessages('chat',[original],[]),[edited]);
+});

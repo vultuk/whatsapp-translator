@@ -256,6 +256,13 @@ three attempts. Queue overflow and exhausted retries retain the original message
 manual translation remains available. Completed translations update the existing
 message without creating another unread message.
 
+WhatsApp edits replace the original message in both conversation and unified-feed
+views, preserving its send time, reactions, and attachments. The latest edit is
+persisted even when it arrives before its target during history recovery. Edits
+clear outdated translations and queue the corrected text in enabled conversations;
+late translation results and older message snapshots cannot undo a newer edit.
+Native and web messages show an Edited label beside the original send time.
+
 Native and browser clients reconnect with bounded backoff and refresh the open
 conversation to recover messages missed while disconnected. Outgoing actions use
 persisted idempotency keys. A lost response or server restart retains the same
