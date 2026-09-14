@@ -30,7 +30,8 @@ impl MessageStore {
             .collect();
 
         // A consistent, private SQLite snapshot must succeed before changing data.
-        // VACUUM INTO also includes committed WAL contents. Keep it for recovery.
+        // Copy SQLite pages, including committed WAL contents, without rebuilding
+        // the database in temp_store=MEMORY. Memory use must not scale with its size.
         if !aliases.is_empty() {
             let path = conn
                 .path()
@@ -40,26 +41,67 @@ impl MessageStore {
                 "messages-before-device-jid-repair-{}.db",
                 uuid::Uuid::new_v4()
             ));
+            // Reuse only this incomplete destination after an interrupted start.
+            // Completed snapshots have unique names and are never overwritten.
+            let incomplete =
+                Path::new(path).with_file_name("messages-device-jid-repair.incomplete");
             let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
+            options.write(true).create(true);
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt;
                 options.mode(0o600);
             }
-            drop(
-                options
-                    .open(&backup)
-                    .context("Create identity repair snapshot")?,
-            );
-            let snapshot = conn.execute(
-                "VACUUM INTO ?",
-                [backup.to_str().context("Invalid snapshot path")?],
-            );
+            let snapshot_file = options
+                .open(&incomplete)
+                .context("Create identity repair snapshot")?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                snapshot_file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            }
+            drop(snapshot_file);
+            info!(aliases = aliases.len(), "Identity repair snapshot starting");
+            let snapshot = (|| -> Result<()> {
+                let mut destination = Connection::open(&incomplete)?;
+                destination.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA cache_size=-4096; PRAGMA temp_store=FILE;")?;
+                {
+                    use rusqlite::backup::{Backup, StepResult};
+                    use std::time::{Duration, Instant};
+                    let copy = Backup::new(conn, &mut destination)?;
+                    let started = Instant::now();
+                    let mut last_log = started;
+                    loop {
+                        let result = copy.step(1024)?;
+                        if result == StepResult::Done {
+                            break;
+                        }
+                        anyhow::ensure!(
+                            started.elapsed() < Duration::from_secs(480),
+                            "Identity repair snapshot exceeded eight minutes"
+                        );
+                        if last_log.elapsed() >= Duration::from_secs(5) {
+                            let progress = copy.progress();
+                            info!(
+                                remaining_pages = progress.remaining,
+                                total_pages = progress.pagecount,
+                                "Identity repair snapshot progress"
+                            );
+                            last_log = Instant::now();
+                        }
+                        if matches!(result, StepResult::Busy | StepResult::Locked) {
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                    }
+                }
+                destination.close().map_err(|(_, error)| error)?;
+                std::fs::rename(&incomplete, &backup)?;
+                Ok(())
+            })();
             if let Err(error) = snapshot {
                 // Only remove this attempt's incomplete output. A restart must
                 // not consume the volume with a new partial snapshot each time.
-                if let Err(cleanup) = std::fs::remove_file(&backup) {
+                if let Err(cleanup) = std::fs::remove_file(&incomplete) {
                     tracing::warn!(
                         "Could not remove incomplete identity repair snapshot: {cleanup}"
                     );
@@ -256,6 +298,97 @@ mod tests {
         );
         store.init_schema().unwrap();
         assert_eq!(store.get_contact(ACCOUNT).unwrap().unwrap().unread_count, 8);
+        drop(snapshot);
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn snapshot_copies_large_wal_data_and_reuses_only_incomplete_output() {
+        let (store, dir) = fixture();
+        let incomplete = dir.join("messages-device-jid-repair.incomplete");
+        // A killed previous attempt can leave a valid but outdated destination.
+        // Restart must replace its contents, preserving completed snapshots.
+        let previous = Connection::open(&incomplete).unwrap();
+        previous
+            .execute_batch("CREATE TABLE stale(value); INSERT INTO stale VALUES (1);")
+            .unwrap();
+        drop(previous);
+        let preserved = dir.join("messages-before-device-jid-repair-preserved.db");
+        std::fs::write(&preserved, b"previous completed snapshot").unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute_batch(
+                "PRAGMA wal_autocheckpoint=0; CREATE TABLE large_snapshot_fixture(payload BLOB);",
+            )
+            .unwrap();
+            // 64 MiB, well beyond the destination cache, written only to the WAL.
+            for _ in 0..64 {
+                conn.execute(
+                    "INSERT INTO large_snapshot_fixture VALUES (zeroblob(1048576))",
+                    [],
+                )
+                .unwrap();
+            }
+            store.migrate_device_jids(&conn).unwrap();
+        }
+        assert!(!incomplete.exists());
+        assert_eq!(
+            std::fs::read(&preserved).unwrap(),
+            b"previous completed snapshot"
+        );
+        let snapshot_path = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                path != &preserved
+                    && path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("messages-before-device-jid-repair-")
+            })
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Reusing an incomplete destination must also enforce private mode.
+            assert_eq!(
+                std::fs::metadata(&snapshot_path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o077,
+                0
+            );
+        }
+        let snapshot = Connection::open(snapshot_path).unwrap();
+        assert_eq!(
+            snapshot
+                .query_row(
+                    "SELECT SUM(length(payload)) FROM large_snapshot_fixture",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            64 * 1048576
+        );
+        assert_eq!(
+            snapshot
+                .query_row("PRAGMA quick_check", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+        assert_eq!(
+            snapshot
+                .query_row("SELECT COUNT(*) FROM contacts WHERE id=?", [DEVICE], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        assert!(snapshot.prepare("SELECT * FROM stale").is_err());
         drop(snapshot);
         drop(store);
         std::fs::remove_dir_all(dir).unwrap();

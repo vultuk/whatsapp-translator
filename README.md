@@ -85,9 +85,12 @@ On first startup after this update, the server repairs older split conversations
 in one SQLite transaction. It preserves message IDs, contents, timestamps,
 attachments, unread totals and the existing account conversation's preferences.
 Before merging, it saves a private, consistent `messages-before-device-jid-repair-*.db`
-snapshot beside `messages.db`. Keep that snapshot for recovery and provide space
-for another copy of the database. A failed snapshot or merge stops startup without
-applying a partial repair. Successful startup logs the repaired conversation and
+snapshot beside `messages.db`, using SQLite's page backup API with a 4 MiB
+destination cache. Copy progress is logged every five seconds; interrupted starts
+reuse only the incomplete destination, while completed snapshots are retained.
+Keep completed snapshots for recovery and provide space for another copy of the
+database. Railway allows up to ten minutes for this one-time startup work. A failed
+snapshot or merge stops startup without applying a partial repair. Successful startup logs the repaired conversation and
 message counts without logging phone numbers or message contents.
 
 ## Run Locally
