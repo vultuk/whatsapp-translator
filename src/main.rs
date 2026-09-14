@@ -7,6 +7,7 @@ mod access;
 mod bridge;
 mod cli;
 mod display;
+mod identity;
 mod incoming;
 mod link_preview;
 mod mcp;
@@ -523,7 +524,7 @@ async fn process_message(
         canonical_private_phone
             .as_ref()
             .map(|phone| format!("{}@s.whatsapp.net", phone))
-            .unwrap_or_else(|| msg.chat.jid().to_string())
+            .unwrap_or_else(|| identity::canonical_chat_id(msg.chat.jid()).into_owned())
     } else {
         msg.chat.jid().to_string()
     };
@@ -647,7 +648,8 @@ async fn process_message(
 fn phone_from_chat_jid(jid: &str) -> Option<String> {
     let (user, server) = jid.split_once('@')?;
     match server {
-        "s.whatsapp.net" | "c.us" | "broadcast" => Some(user.to_string()),
+        "s.whatsapp.net" | "c.us" => identity::phone_number(jid),
+        "broadcast" => Some(user.to_string()),
         _ => None,
     }
 }
@@ -1303,5 +1305,30 @@ impl serde::Serialize for bridge::MessageContent {
         }
 
         map.end()
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn device_identity_live_and_history_messages_use_account_contact_and_phone() {
+        for device in [17, 22] {
+            for is_from_me in [true, false] {
+                for is_history in [true, false] {
+                    let msg: Message = serde_json::from_value(serde_json::json!({
+                        "id":"fixture", "timestamp":1_700_000_000,
+                        "from":{"jid":"447700900123@s.whatsapp.net","phone":"447700900123"},
+                        "chat":{"type":"private","jid":format!("447700900123:{device}@s.whatsapp.net"),"name":"Friend"},
+                        "content":{"type":"text","body":"Hello"},
+                        "is_from_me":is_from_me,"is_history":is_history,"is_forwarded":false
+                    })).unwrap();
+                    let stored = process_message(msg, None, None).await;
+                    assert_eq!(stored.contact_id, "447700900123@s.whatsapp.net");
+                    assert_eq!(stored.contact_phone.as_deref(), Some("447700900123"));
+                }
+            }
+        }
     }
 }

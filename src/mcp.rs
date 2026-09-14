@@ -175,6 +175,7 @@ impl TranslationMode {
 #[serde(rename_all = "camelCase")]
 pub struct PreparedMcpMessage {
     pub token: String,
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     pub contact_id: String,
     pub contact_name: Option<String>,
     pub original_text: String,
@@ -680,7 +681,8 @@ impl WhatsAppMcpServer {
 
     async fn handle_read_messages(&self, args: Value) -> Result<CallToolResult, McpError> {
         self.require_read()?;
-        let contact_id = required_string(&args, "contact_id")?;
+        let contact_id = crate::identity::canonical_chat_id(required_string(&args, "contact_id")?);
+        let contact_id = contact_id.as_ref();
         let contact = self
             .state
             .store
@@ -815,7 +817,8 @@ impl WhatsAppMcpServer {
 
     async fn handle_prepare_message(&self, args: Value) -> Result<CallToolResult, McpError> {
         self.require_read()?;
-        let contact_id = required_string(&args, "contact_id")?;
+        let contact_id = crate::identity::canonical_chat_id(required_string(&args, "contact_id")?);
+        let contact_id = contact_id.as_ref();
         let original_text = required_string(&args, "text")?.trim();
         if original_text.is_empty() {
             return Err(McpError::invalid_params("text must not be empty", None));
@@ -1170,7 +1173,8 @@ impl WhatsAppMcpServer {
 
     async fn handle_reaction(&self, args: Value) -> Result<CallToolResult, McpError> {
         self.require_send()?;
-        let contact_id = required_string(&args, "contact_id")?;
+        let contact_id = crate::identity::canonical_chat_id(required_string(&args, "contact_id")?);
+        let contact_id = contact_id.as_ref();
         let message_id = required_string(&args, "message_id")?;
         let emoji = args
             .get("emoji")
@@ -1274,7 +1278,8 @@ impl WhatsAppMcpServer {
 
     async fn handle_mark_read(&self, args: Value) -> Result<CallToolResult, McpError> {
         self.require_send()?;
-        let contact_id = required_string(&args, "contact_id")?;
+        let contact_id = crate::identity::canonical_chat_id(required_string(&args, "contact_id")?);
+        let contact_id = contact_id.as_ref();
         self.state
             .store
             .get_contact(contact_id)

@@ -279,7 +279,7 @@ func (c *Client) handleEvent(evt interface{}) {
 		// Log for debugging (use info level so it always shows)
 		SendEvent(NewLogEvent("info", fmt.Sprintf("ChatPresence: chat=%s sender=%s state=%s media=%s", v.Chat.String(), v.Sender.String(), v.State, v.Media)))
 		// Send chat presence event
-		SendEvent(NewChatPresenceEvent(v.Chat.String(), v.Sender.String(), state))
+		SendEvent(NewChatPresenceEvent(normalizeAddress(v.Chat, types.JID{}).String(), normalizeAddress(v.Sender, types.JID{}).String(), state))
 
 	case *events.HistorySync:
 		// History sync - import historical messages
@@ -299,7 +299,7 @@ func (c *Client) handleEvent(evt interface{}) {
 	case *events.MarkChatAsRead:
 		// Chat marked as read from another device (e.g., phone)
 		if v.Action != nil && v.Action.GetRead() {
-			SendEvent(NewMarkAsReadEvent(v.JID.String()))
+			SendEvent(NewMarkAsReadEvent(normalizeAddress(v.JID, types.JID{}).String()))
 			SendEvent(NewLogEvent("debug", fmt.Sprintf("Chat marked as read: %s", v.JID.String())))
 		}
 
@@ -386,7 +386,12 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 			continue
 		}
 
-		chatJID := *conv.ID
+		chatJIDParsed, err := types.ParseJID(*conv.ID)
+		if err != nil {
+			continue
+		}
+		chatJIDParsed = normalizeAddress(chatJIDParsed, types.JID{})
+		chatJID := chatJIDParsed.String()
 
 		// Get unread count from conversation (only set on first message)
 		var convUnreadCount *uint32
@@ -417,7 +422,7 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 				// Outgoing message - sender is me
 				if c.client.Store.ID != nil {
 					msg.From = Contact{
-						JID:   c.client.Store.ID.String(),
+						JID:   c.client.Store.ID.ToNonAD().String(),
 						Phone: c.client.Store.ID.User,
 					}
 				}
@@ -448,11 +453,6 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 			}
 
 			// Build chat info
-			chatJIDParsed, err := types.ParseJID(chatJID)
-			if err != nil {
-				continue
-			}
-
 			// Determine if it's a group
 			isGroup := strings.HasSuffix(chatJID, "@g.us")
 
@@ -610,8 +610,15 @@ func (c *Client) downloadMediaForMessage(waMsg *waE2E.Message, content *MessageC
 }
 
 func normalizeAddress(primary types.JID, alternate types.JID) types.JID {
-	if primary.Server == "lid" && alternate.User != "" {
-		return alternate
+	if primary.Server == types.HiddenUserServer && alternate.User != "" &&
+		(alternate.Server == types.DefaultUserServer || alternate.Server == types.LegacyUserServer) {
+		primary = alternate
+	}
+	// SenderAlt also carries the sender's device number. Conversation/contact
+	// identity must refer to the account, including after resolving LID -> phone.
+	switch primary.Server {
+	case types.DefaultUserServer, types.LegacyUserServer, types.HiddenUserServer:
+		return primary.ToNonAD()
 	}
 	return primary
 }

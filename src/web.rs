@@ -249,6 +249,7 @@ struct QrResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequest {
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     pub contact_id: String,
     pub text: String,
     /// Message ID to reply to (optional)
@@ -291,6 +292,7 @@ pub struct SendImageRequest {
     pub file_name: Option<String>,
     #[serde(default)]
     pub reply_only_if_not_latest: bool,
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     pub contact_id: String,
     /// Base64 encoded image data
     pub media_data: String,
@@ -319,6 +321,7 @@ pub struct CreatePhotoAlbumRequest {
     #[serde(default)]
     pub reply_only_if_not_latest: bool,
     pub job_id: String,
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     pub contact_id: String,
     pub photo_count: usize,
     pub caption: Option<String>,
@@ -333,6 +336,7 @@ pub struct CreatePhotoAlbumRequest {
 pub struct SendImagesRequest {
     #[serde(default)]
     pub reply_only_if_not_latest: bool,
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     pub contact_id: String,
     pub progress_id: Option<String>,
     pub images: Vec<SendImageItemRequest>,
@@ -434,6 +438,7 @@ fn image_signature_matches(decoded: &[u8], mime_type: &str) -> bool {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendReactionRequest {
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     pub contact_id: String,
     pub message_id: String,
     pub sender_jid: Option<String>,
@@ -462,6 +467,7 @@ pub struct MarkReadRequest {
 pub struct TranslateMessageRequest {
     pub text: String,
     pub message_id: String,
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     pub contact_id: String,
 }
 
@@ -504,6 +510,7 @@ pub struct AiComposeResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiReplyRequest {
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     pub contact_id: String,
     pub message_id: String,
 }
@@ -1713,6 +1720,7 @@ async fn mark_contact_as_read(
     let contact_id = urlencoding::decode(&contact_id)
         .map(|s| s.into_owned())
         .unwrap_or(contact_id);
+    let contact_id = crate::identity::canonical_chat_id(&contact_id).into_owned();
 
     match state.store.mark_as_read(&contact_id) {
         Ok(()) => {
@@ -1758,6 +1766,7 @@ async fn toggle_pin(
     let contact_id = urlencoding::decode(&contact_id)
         .map(|s| s.into_owned())
         .unwrap_or(contact_id);
+    let contact_id = crate::identity::canonical_chat_id(&contact_id).into_owned();
 
     match state.store.toggle_pin(&contact_id) {
         Ok(is_pinned) => Json(serde_json::json!({
@@ -1777,6 +1786,7 @@ async fn get_conversation_settings(
     State(state): State<Arc<AppState>>,
     Path(contact_id): Path<String>,
 ) -> impl IntoResponse {
+    let contact_id = crate::identity::canonical_chat_id(&contact_id).into_owned();
     match state.store.get_conversation_settings(&contact_id) {
         Ok(settings) => Json(ConversationSettingsResponse {
             translation_enabled: settings.translation_enabled,
@@ -1802,6 +1812,7 @@ async fn update_conversation_settings(
     Path(contact_id): Path<String>,
     Json(req): Json<UpdateConversationSettingsRequest>,
 ) -> impl IntoResponse {
+    let contact_id = crate::identity::canonical_chat_id(&contact_id).into_owned();
     match state.store.get_contact(&contact_id) {
         Ok(Some(_)) => {}
         Ok(None) => {
@@ -1993,6 +2004,7 @@ async fn get_messages(
     let contact_id = urlencoding::decode(&contact_id)
         .map(|s| s.into_owned())
         .unwrap_or(contact_id);
+    let contact_id = crate::identity::canonical_chat_id(&contact_id).into_owned();
 
     // Default to 30 messages for initial load, unless explicitly requesting all (limit=0)
     let limit = match params.limit {
@@ -2107,6 +2119,7 @@ async fn get_avatar(
     let jid = urlencoding::decode(&jid)
         .map(|s| s.into_owned())
         .unwrap_or(jid);
+    let jid = crate::identity::canonical_chat_id(&jid).into_owned();
 
     // Check if connected
     if !*state.connected.read().await {
@@ -3891,6 +3904,7 @@ async fn get_conversation_usage(
     let contact_id = urlencoding::decode(&contact_id)
         .map(|s| s.into_owned())
         .unwrap_or(contact_id);
+    let contact_id = crate::identity::canonical_chat_id(&contact_id).into_owned();
 
     match state.store.get_conversation_usage(&contact_id) {
         Ok(usage) => Json(serde_json::json!({
@@ -5085,6 +5099,94 @@ mod tests {
             is_translated: false,
             delivery_status: None,
         }
+    }
+
+    #[tokio::test]
+    async fn device_identity_cached_link_and_reply_route_to_account_and_replay_once() {
+        let (state, dir) = test_state(None);
+        let account = "447700900123@s.whatsapp.net";
+        let device = "447700900123:22@s.whatsapp.net";
+        state
+            .store
+            .upsert_contact(account, Some("Friend"), None, Some("private"), 1)
+            .unwrap();
+        state
+            .store
+            .add_message(&feed_test_message("a", device, 100))
+            .unwrap();
+        state
+            .store
+            .add_message(&feed_test_message("b", account, 200))
+            .unwrap();
+        let router = create_router(state.clone());
+        let response = router
+            .clone()
+            .oneshot(empty_request(&format!(
+                "/api/messages/{}",
+                urlencoding::encode(device)
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(payload["messages"][0]["contactId"], account);
+        state.set_connected(true, None, None).await;
+        let (sender, mut receiver) = mpsc::channel(8);
+        state.set_command_tx(sender).await;
+        let request = || {
+            HttpRequest::builder().method("POST").uri("/api/send")
+            .header("content-type", "application/json").header("idempotency-key", "device-reply-once")
+            .body(Body::from(serde_json::json!({"contactId": device, "text":"Reply", "replyTo":"a", "replyToText":"a", "replyOnlyIfNotLatest":true}).to_string())).unwrap()
+        };
+        let sending = tokio::spawn(router.clone().oneshot(request()));
+        let BridgeCommand::Send {
+            request_id: Some(request_id),
+            to,
+            reply_to,
+            ..
+        } = tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected send")
+        };
+        assert_eq!(to, account);
+        assert_eq!(reply_to.as_deref(), Some("a"));
+        state
+            .handle_send_result(BridgeSendResult {
+                request_id,
+                success: true,
+                message_id: Some("sent-device-reply".into()),
+                timestamp: Some(1_700_000_000),
+                message_ids: vec![],
+                timestamps: vec![],
+                error: None,
+            })
+            .await;
+        assert_eq!(sending.await.unwrap().unwrap().status(), StatusCode::OK);
+        assert_eq!(
+            router.oneshot(request()).await.unwrap().status(),
+            StatusCode::OK
+        );
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(state.store.get_contacts().unwrap().len(), 1);
+        assert_eq!(
+            state
+                .store
+                .get_message_by_id("sent-device-reply")
+                .unwrap()
+                .unwrap()
+                .contact_id,
+            account
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

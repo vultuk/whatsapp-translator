@@ -74,6 +74,22 @@ Hosted deploy recommendation:
   or `http://[::1]` redirect URIs, and authorization requires an exact registered
   redirect match.
 
+## Device-address repair
+
+Private chats use the WhatsApp account address. Device suffixes such as `:17`
+and `:22` are removed after WhatsApp resolves an LID to a phone address; an
+unresolved LID stays in its own namespace. The same rule applies to history
+imports, cached conversation links, replies and saved voice preparations.
+
+On first startup after this update, the server repairs older split conversations
+in one SQLite transaction. It preserves message IDs, contents, timestamps,
+attachments, unread totals and the existing account conversation's preferences.
+Before merging, it saves a private, consistent `messages-before-device-jid-repair-*.db`
+snapshot beside `messages.db`. Keep that snapshot for recovery and provide space
+for another copy of the database. A failed snapshot or merge stops startup without
+applying a partial repair. Successful startup logs the repaired conversation and
+message counts without logging phone numbers or message contents.
+
 ## Run Locally
 
 Prerequisites:

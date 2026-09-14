@@ -12,6 +12,8 @@ use crate::oauth::{
     AccessToken, AuthorizationCode, OAuthClientRegistration, PendingAuthorization, RefreshToken,
 };
 use crate::translation::UsageInfo;
+mod identity;
+use crate::identity::canonical_chat_id;
 mod reliability;
 pub use reliability::OutboxEntry;
 
@@ -21,6 +23,7 @@ pub use reliability::OutboxEntry;
 pub struct StoredMessage {
     pub id: String,
     #[serde(rename = "contactId")]
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     pub contact_id: String,
     pub timestamp: i64,
     #[serde(rename = "isFromMe")]
@@ -179,6 +182,7 @@ impl MessageStore {
     }
 
     pub fn voice_setting(&self, scope: &str) -> Result<String> {
+        let scope = canonical_chat_id(scope);
         let conn = self.conn.lock().unwrap();
         Ok(conn
             .query_row(
@@ -191,6 +195,7 @@ impl MessageStore {
     }
 
     pub fn set_voice_setting(&self, scope: &str, voice: &str) -> Result<()> {
+        let scope = canonical_chat_id(scope);
         self.conn.lock().unwrap().execute("INSERT INTO app_settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("voice:{scope}"), voice])?;
         Ok(())
     }
@@ -199,6 +204,8 @@ impl MessageStore {
         &self,
         contact_id: Option<&str>,
     ) -> Result<crate::message_tones::MessageToneSettings> {
+        let contact_id = contact_id.map(canonical_chat_id);
+        let contact_id = contact_id.as_deref();
         use crate::message_tones::{MessageTone, MessageToneSettings};
         let conn = self.conn.lock().unwrap();
         let read = |key: &str| -> Result<Option<MessageTone>> {
@@ -232,6 +239,8 @@ impl MessageStore {
         contact_id: Option<&str>,
         tone: Option<crate::message_tones::MessageTone>,
     ) -> Result<()> {
+        let contact_id = contact_id.map(canonical_chat_id);
+        let contact_id = contact_id.as_deref();
         let key = match contact_id {
             Some(id) => format!("message-tone:conversation:{id}"),
             None => "message-tone:global".to_string(),
@@ -556,6 +565,7 @@ impl MessageStore {
         // Add conversation settings columns.
         self.migrate_add_conversation_settings_columns(&conn)?;
         self.migrate_invalidate_unverified_language_labels(&conn)?;
+        self.migrate_device_jids(&conn)?;
 
         Ok(())
     }
@@ -930,6 +940,8 @@ impl MessageStore {
 
     /// WhatsApp supplies the full group membership count with live messages.
     pub fn set_group_participant_count(&self, contact_id: &str, count: u32) -> Result<()> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         if contact_id.ends_with("@g.us") && count > 0 {
             self.conn.lock().unwrap().execute(
                 "UPDATE contacts SET participant_count = ? WHERE id = ?",
@@ -941,6 +953,8 @@ impl MessageStore {
 
     /// Incoming recipients include this account and exclude the message's sender.
     pub fn notification_recipient_count(&self, contact_id: &str) -> Result<Option<u32>> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         if !contact_id.ends_with("@g.us") {
             return Ok(None);
         }
@@ -969,6 +983,9 @@ impl MessageStore {
         contact_type: Option<&str>,
         last_message_time: i64,
     ) -> Result<()> {
+        let id = canonical_chat_id(id);
+        let normalized_phone = crate::identity::phone_number(&id);
+        let phone = normalized_phone.as_deref().or(phone);
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -993,6 +1010,8 @@ impl MessageStore {
 
     /// Increment unread count for a contact
     pub fn increment_unread(&self, contact_id: &str) -> Result<()> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE contacts SET unread_count = unread_count + 1 WHERE id = ?",
@@ -1003,6 +1022,8 @@ impl MessageStore {
 
     /// Reset unread count for a contact
     pub fn mark_as_read(&self, contact_id: &str) -> Result<()> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE contacts SET unread_count = 0 WHERE id = ?",
@@ -1013,6 +1034,8 @@ impl MessageStore {
 
     /// Set unread count for a contact (used for history sync)
     pub fn set_unread_count(&self, contact_id: &str, count: u32) -> Result<()> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE contacts SET unread_count = ? WHERE id = ?",
@@ -1101,6 +1124,7 @@ impl MessageStore {
         msg: &StoredMessage,
         notification_requires_translation: Option<bool>,
     ) -> Result<()> {
+        let contact_id = canonical_chat_id(&msg.contact_id);
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let preview = Self::generate_message_preview(
@@ -1120,7 +1144,7 @@ impl MessageStore {
             "#,
             params![
                 msg.id,
-                msg.contact_id,
+                contact_id,
                 msg.timestamp,
                 msg.is_from_me,
                 msg.is_forwarded,
@@ -1144,13 +1168,13 @@ impl MessageStore {
                 last_message_preview = ?3
             WHERE id = ?1
             "#,
-            params![msg.contact_id, msg.timestamp, preview],
+            params![contact_id, msg.timestamp, preview],
         )?;
         if inserted > 0 && !msg.is_from_me {
             if let Some(requires_translation) = notification_requires_translation {
                 let requires_translation = requires_translation && tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM contacts WHERE id=? AND translation_enabled=1)",
-                    params![msg.contact_id],
+                    params![contact_id],
                     |row| row.get::<_, bool>(0),
                 )?;
                 tx.execute(
@@ -1307,6 +1331,8 @@ impl MessageStore {
         conn: &rusqlite::Transaction<'_>,
         contact_id: &str,
     ) -> Result<()> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let latest: Option<(i64, String, String, bool, Option<String>)> = conn
             .query_row(
                 r#"
@@ -1495,6 +1521,8 @@ impl MessageStore {
 
     /// Pin or unpin a contact
     pub fn toggle_pin(&self, contact_id: &str) -> Result<bool> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
 
         // Check if currently pinned
@@ -1527,6 +1555,8 @@ impl MessageStore {
 
     /// Get conversation settings for a contact
     pub fn get_conversation_settings(&self, contact_id: &str) -> Result<ConversationSettings> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
 
         let result = conn.query_row(
@@ -1555,6 +1585,8 @@ impl MessageStore {
         contact_id: &str,
         settings: &ConversationSettings,
     ) -> Result<()> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let changed = tx.execute(
@@ -1611,6 +1643,8 @@ impl MessageStore {
 
     /// Get messages for a specific contact (all messages - for MCP/internal use)
     pub fn get_messages(&self, contact_id: &str) -> Result<Vec<StoredMessage>> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         self.get_messages_paginated(contact_id, None, None, None, false)
     }
 
@@ -1651,6 +1685,8 @@ impl MessageStore {
 
     /// The target must belong to this conversation. Reactions do not change reply context.
     pub fn reply_is_latest(&self, contact_id: &str, message_id: &str) -> Result<bool> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             r#"SELECT id = (
@@ -1747,6 +1783,8 @@ impl MessageStore {
         before_message_id: Option<&str>,
         strip_media: bool,
     ) -> Result<Vec<StoredMessage>> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
 
         // First get the contact info to populate contact_name and contact_phone
@@ -1860,6 +1898,8 @@ impl MessageStore {
 
     /// Get a contact by ID
     pub fn get_contact(&self, contact_id: &str) -> Result<Option<StoredContact>> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
@@ -1909,6 +1949,8 @@ impl MessageStore {
         contact_id: &str,
         limit: usize,
     ) -> Result<Option<String>> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
 
         // Get the most common source language from recent incoming (not from me) messages
@@ -1945,6 +1987,8 @@ impl MessageStore {
         usage: &UsageInfo,
         operation: &str,
     ) -> Result<()> {
+        let contact_id = contact_id.map(canonical_chat_id);
+        let contact_id = contact_id.as_deref();
         let conn = self.conn.lock().unwrap();
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2000,6 +2044,8 @@ impl MessageStore {
 
     /// Get usage for a specific conversation
     pub fn get_conversation_usage(&self, contact_id: &str) -> Result<UsageInfo> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
 
         let result = conn.query_row(
@@ -2595,6 +2641,8 @@ impl MessageStore {
 
     /// Get a style profile by contact ID (or "__global__" for global profile)
     pub fn get_style_profile(&self, contact_id: &str) -> Result<Option<StyleProfile>> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
 
         let result = conn.query_row(
@@ -2640,7 +2688,7 @@ impl MessageStore {
                 updated_at = excluded.updated_at
             "#,
             params![
-                profile.contact_id,
+                canonical_chat_id(&profile.contact_id),
                 profile.profile_text,
                 sample_messages_json,
                 profile.message_count,
@@ -2658,6 +2706,8 @@ impl MessageStore {
 
     /// Get count of outgoing messages (for determining if style profile needs refresh)
     pub fn get_outgoing_message_count(&self, contact_id: Option<&str>) -> Result<i32> {
+        let contact_id = contact_id.map(canonical_chat_id);
+        let contact_id = contact_id.as_deref();
         let conn = self.conn.lock().unwrap();
 
         let count: i32 = if let Some(cid) = contact_id {
@@ -2685,6 +2735,8 @@ impl MessageStore {
         contact_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<StoredMessage>> {
+        let contact_id = contact_id.map(canonical_chat_id);
+        let contact_id = contact_id.as_deref();
         let conn = self.conn.lock().unwrap();
 
         let query = if contact_id.is_some() {
@@ -2741,6 +2793,8 @@ impl MessageStore {
         contact_id: &str,
         limit: usize,
     ) -> Result<Vec<(StoredMessage, StoredMessage)>> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
 
         // Get recent messages for this contact, ordered by timestamp
@@ -2852,6 +2906,8 @@ impl MessageStore {
         contact_id: &str,
         limit: usize,
     ) -> Result<Vec<StoredMessage>> {
+        let contact_id = canonical_chat_id(contact_id);
+        let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
 
         // Get contact info

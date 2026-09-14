@@ -105,6 +105,7 @@ struct VoiceNote {
     #[serde(default)]
     reply_only_if_not_latest: bool,
     id: String,
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     contact_id: String,
     transcript: String,
     translation: String,
@@ -140,6 +141,7 @@ impl VoiceNote {
 pub struct PrepareRequest {
     #[serde(default)]
     reply_only_if_not_latest: bool,
+    #[serde(deserialize_with = "crate::identity::deserialize_contact_id")]
     contact_id: String,
     media_data: String,
     reply_to: Option<String>,
