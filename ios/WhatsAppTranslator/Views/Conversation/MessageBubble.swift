@@ -530,6 +530,15 @@ struct MessageBubble: View {
 
     @ViewBuilder
     private var actionMenu: some View {
+        #if os(macOS)
+        Menu("React", systemImage: "face.smiling") {
+            ForEach(MessageReactionChoices.quick, id: \.self) { emoji in
+                Button("React with \(emoji)") { react(message.ownReactionEmoji == emoji ? "" : emoji) }
+            }
+            Button("More reactions", systemImage: "plus") { showReactionPicker = true }
+        }
+        .disabled(isBusy)
+        #else
         ControlGroup {
             ForEach(MessageReactionChoices.quick, id: \.self) { emoji in
                 Button {
@@ -544,6 +553,7 @@ struct MessageBubble: View {
         .controlGroupStyle(.palette)
         .menuActionDismissBehavior(.enabled)
         .disabled(isBusy)
+        #endif
         Divider()
         Label(session.messageTopicLabel(for: message), systemImage: "tag")
         Divider()
