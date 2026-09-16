@@ -320,17 +320,12 @@ async fn classify(state: &AppState, batch: &TopicBatch) -> Result<usize> {
         .store
         .topic_names(&batch.contact_id)
         .context(TopicStage("read_topics"))?;
-    let context = state
+    let messages = state
         .store
-        .topic_context(&batch.contact_id)
+        .topic_message_input(batch)
         .context(TopicStage("read_context"))?;
-    let messages: Vec<Value> = batch.messages.iter().map(|m| {
-        let content: Value = serde_json::from_str(&m.content_json).unwrap_or(Value::Null);
-        json!({"messageId":m.id,"text":m.original_text.as_deref().unwrap_or("").chars().take(2000).collect::<String>(),
-               "replyTo":content.get("reply_context").or_else(|| content.get("reply_to")).or_else(|| content.get("replyTo")),"timestamp":m.timestamp})
-    }).collect();
     let (output, usage) = translator.classify_topics(json!({
-        "labelLanguage":translator.default_language(),"existingTopics":existing,"context":context,"messages":messages
+        "labelLanguage":translator.default_language(),"existingTopics":existing,"messages":messages
     })).await.context(TopicStage("ai_request"))?;
     if account_epoch != state.voice_epoch.load(std::sync::atomic::Ordering::SeqCst) {
         return Ok(0);

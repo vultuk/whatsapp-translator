@@ -81,12 +81,52 @@ impl MessageStore {
             END;
             CREATE TRIGGER IF NOT EXISTS topics_delete AFTER DELETE ON messages
             BEGIN DELETE FROM topic_assignments WHERE message_id=OLD.id; DELETE FROM topic_jobs WHERE message_id=OLD.id; END;
+            CREATE TRIGGER IF NOT EXISTS topics_confirm_id AFTER UPDATE OF id ON messages WHEN OLD.id!=NEW.id
+            BEGIN
+                UPDATE OR IGNORE topic_jobs SET message_id=NEW.id WHERE message_id=OLD.id;
+                DELETE FROM topic_jobs WHERE message_id=OLD.id;
+                UPDATE OR IGNORE topic_assignments SET message_id=NEW.id WHERE message_id=OLD.id;
+                DELETE FROM topic_assignments WHERE message_id=OLD.id;
+            END;
         "#)?;
         self.recover_topic_jobs("topic_json_input_v1", "json_input")?;
         self.recover_topic_jobs("topic_background_timeout_v1", "background_timeout")?;
         self.recover_topic_jobs("topic_compact_batches_v1", "compact_batches")?;
         self.queue_legacy_topic_labels()?;
         self.recover_isolated_topic_retries()?;
+        self.recover_outgoing_topics(chrono::Utc::now().timestamp_millis())?;
+        Ok(())
+    }
+
+    /// Repair only recent, unassigned outgoing messages in opted-in chats.
+    /// A restart cannot repeatedly import older history or replace saved categories.
+    fn recover_outgoing_topics(&self, now_ms: i64) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        if tx.execute(
+            "INSERT OR IGNORE INTO app_settings(key,value) VALUES('topic_outgoing_context_v1','1')",
+            [],
+        )? == 0
+        {
+            return Ok(());
+        }
+        let since = now_ms - crate::topics::IMPORT_DAYS * 24 * 60 * 60 * 1000;
+        let restored = tx.execute(r#"UPDATE messages SET original_text=CASE lower(json_extract(content_json,'$.type'))
+                WHEN 'text' THEN json_extract(content_json,'$.body') ELSE json_extract(content_json,'$.caption') END
+            WHERE is_from_me=1 AND timestamp>=?1 AND timestamp<=?2 AND length(trim(COALESCE(original_text,'')))=0
+                AND lower(json_extract(content_json,'$.type')) IN ('text','image','video','document')
+                AND length(trim(COALESCE(CASE lower(json_extract(content_json,'$.type')) WHEN 'text' THEN json_extract(content_json,'$.body') ELSE json_extract(content_json,'$.caption') END,'')))>0
+                AND EXISTS(SELECT 1 FROM topic_settings s WHERE s.contact_id=messages.contact_id AND s.enabled=1)
+                AND NOT EXISTS(SELECT 1 FROM topic_assignments a WHERE a.message_id=messages.id)"#, params![since,now_ms])?;
+        let queued = tx.execute(r#"INSERT OR IGNORE INTO topic_jobs(message_id)
+            SELECT m.id FROM messages m JOIN topic_settings s ON s.contact_id=m.contact_id AND s.enabled=1
+            WHERE m.is_from_me=1 AND m.timestamp>=?1 AND m.timestamp<=?2 AND length(trim(COALESCE(m.original_text,'')))>0
+                AND lower(m.content_type)!='reaction' AND lower(COALESCE(json_extract(m.content_json,'$.type'),''))!='reaction'
+                AND NOT EXISTS(SELECT 1 FROM topic_assignments a WHERE a.message_id=m.id)"#,params![since,now_ms])?;
+        tx.execute("DELETE FROM topic_jobs WHERE NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=topic_jobs.message_id)", [])?;
+        tx.execute("DELETE FROM topic_assignments WHERE NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=topic_assignments.message_id)", [])?;
+        tx.commit()?;
+        tracing::info!(restored, queued, "Recovered recent outgoing topic messages");
         Ok(())
     }
 
@@ -381,12 +421,43 @@ impl MessageStore {
             .collect())
     }
 
-    pub fn topic_context(&self, contact_id: &str) -> Result<Vec<Value>> {
+    pub fn topic_message_input(&self, batch: &TopicBatch) -> Result<Vec<Value>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt=conn.prepare(r#"SELECT m.id,m.original_text,t.title FROM messages m JOIN topic_assignments a ON a.message_id=m.id
-            JOIN chat_topics t ON t.id=a.topic_id AND t.contact_id=m.contact_id WHERE m.contact_id=? ORDER BY m.timestamp DESC,m.id DESC LIMIT 12"#)?;
-        let result=stmt.query_map([contact_id],|r|Ok(json!({"messageId":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?.chars().take(600).collect::<String>(),"topic":r.get::<_,String>(2)?})))?.collect::<rusqlite::Result<_>>()?;
-        Ok(result)
+        // Include unclassified neighbours too, but never another chat or future
+        // messages. Keep each target's context separate during history imports.
+        let columns = r#"SELECT m.id,COALESCE(NULLIF(m.original_text,''),json_extract(m.content_json,'$.body'),json_extract(m.content_json,'$.caption'),''),t.title,m.timestamp,m.is_from_me
+            FROM messages m LEFT JOIN topic_assignments a ON a.message_id=m.id
+            LEFT JOIN chat_topics t ON t.id=a.topic_id AND t.contact_id=m.contact_id"#;
+        let mut previous = conn.prepare(&format!(r#"{columns} WHERE m.contact_id=?1 AND (m.timestamp<?2 OR (m.timestamp=?2 AND m.id<?3)) AND m.timestamp>=?4
+            AND lower(m.content_type)!='reaction' AND lower(COALESCE(json_extract(m.content_json,'$.type'),''))!='reaction'
+            AND length(trim(COALESCE(NULLIF(m.original_text,''),json_extract(m.content_json,'$.body'),json_extract(m.content_json,'$.caption'),'')))>0
+            ORDER BY m.timestamp DESC,m.id DESC LIMIT 6"#))?;
+        let mut quoted = conn.prepare(&format!(
+            "{columns} WHERE m.contact_id=?1 AND m.id=?2 AND m.id!=?3 AND m.timestamp<=?4"
+        ))?;
+        let context_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<Value> {
+            Ok(
+                json!({"messageId":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?.chars().take(600).collect::<String>(),
+                "topic":r.get::<_,Option<String>>(2)?,"timestamp":r.get::<_,i64>(3)?,"isFromMe":r.get::<_,bool>(4)?}),
+            )
+        };
+        batch.messages.iter().map(|message| {
+            anyhow::ensure!(message.contact_id == batch.contact_id, "Invalid topic context ownership");
+            let since = message.timestamp.saturating_sub(crate::topics::IMPORT_DAYS * 24 * 60 * 60 * 1000);
+            let mut context = previous.query_map(params![batch.contact_id,message.timestamp,message.id,since],context_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            context.reverse();
+            let content: Value = serde_json::from_str(&message.content_json).unwrap_or(Value::Null);
+            let quote = content.get("reply_context").filter(|v| !v.is_null()).or_else(|| content.get("reply_to")).or_else(|| content.get("replyTo"));
+            let quote_id = quote.and_then(|q| q.as_str().or_else(|| q.get("messageId").or_else(|| q.get("message_id")).or_else(|| q.get("id")).and_then(Value::as_str)));
+            let resolved = match quote_id {
+                Some(id) => quoted.query_row(params![batch.contact_id,id,message.id,message.timestamp],context_row).optional()?,
+                None => None,
+            };
+            let reply = resolved.or_else(|| quote.map(|q| json!({"messageId":quote_id.map(|id|id.chars().take(512).collect::<String>()),
+                "text":q.get("text").or_else(||q.get("body")).and_then(Value::as_str).unwrap_or("").chars().take(600).collect::<String>()})));
+            Ok(json!({"messageId":message.id,"text":message.original_text.as_deref().unwrap_or("").chars().take(2000).collect::<String>(),
+                "timestamp":message.timestamp,"isFromMe":message.is_from_me,"replyTo":reply,"previousMessages":context}))
+        }).collect()
     }
 
     pub fn next_topic_batch(&self) -> Result<Option<TopicBatch>> {
@@ -572,6 +643,190 @@ mod tests {
             )
             .unwrap();
         store.queue_legacy_topic_labels().unwrap();
+    }
+
+    #[test]
+    fn outgoing_topic_text_and_jobs_survive_send_confirmation_and_echo() {
+        let (store, path) = test_store();
+        store
+            .upsert_contact("chat@g.us", None, None, Some("group"), 1)
+            .unwrap();
+        store.set_topics_enabled("chat@g.us", true).unwrap();
+        let mut message = test_message("pending", 100);
+        message.contact_id = "chat@g.us".into();
+        message.is_from_me = true;
+        message.original_text = None;
+        message.content_json =
+            json!({"type":"text","body":"Yes, the hospital appointment works."}).to_string();
+        store.add_message(&message).unwrap();
+        let pending = store.next_topic_batch().unwrap().unwrap();
+        assert_eq!(
+            pending.messages[0].original_text.as_deref(),
+            Some("Yes, the hospital appointment works.")
+        );
+        store
+            .replace_message_id("pending", "confirmed", Some(101))
+            .unwrap();
+        // A response for the temporary ID cannot attach to the wrong message.
+        let assignment = TopicAssignment {
+            message_id: "pending".into(),
+            topic: "Hospital".into(),
+        };
+        assert_eq!(
+            store.finish_topic_batch(&pending, &[assignment]).unwrap(),
+            0
+        );
+        let confirmed = store.next_topic_batch().unwrap().unwrap();
+        assert_eq!(confirmed.messages[0].id, "confirmed");
+        finish(&store, &confirmed, "Hospital");
+        store
+            .replace_message_id("confirmed", "final-id", None)
+            .unwrap();
+        assert_eq!(
+            store.message_topics(&["final-id".into()]).unwrap()[0]
+                .title
+                .as_deref(),
+            Some("Hospital")
+        );
+        assert!(store.next_topic_batch().unwrap().is_none());
+        // WhatsApp can echo the real message before send confirmation arrives.
+        message.id = "pending-echo".into();
+        store.add_message(&message).unwrap();
+        message.id = "real-echo".into();
+        store.add_message(&message).unwrap();
+        store
+            .replace_message_id("pending-echo", "real-echo", None)
+            .unwrap();
+        let echo = store.next_topic_batch().unwrap().unwrap();
+        assert_eq!(echo.messages.len(), 1);
+        assert_eq!(echo.messages[0].id, "real-echo");
+        finish(&store, &echo, "Hospital");
+        let conn = store.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM topic_jobs", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        drop(conn);
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn topic_context_resolves_quotes_and_only_earlier_same_chat_messages() {
+        let (store, path) = test_store();
+        legacy_topic(&store, "chat@g.us", "hospital", "Hospital");
+        // The quote remains useful beyond the six-message neighbourhood.
+        for i in 0..8 {
+            add(&store, "chat@g.us", &format!("earlier-{i}"), 110 + i);
+        }
+        add(&store, "other@g.us", "private-other-chat", 119);
+        add(&store, "chat@g.us", "future", 200);
+        let mut target = test_message("outgoing", 120);
+        target.contact_id = "chat@g.us".into();
+        target.is_from_me = true;
+        target.original_text = Some("Yes, I can take you.".into());
+        target.content_json = json!({"type":"text","body":"Yes, I can take you.","reply_context":{"message_id":"hospital","text":"old quote","media_data":"must-not-send"}}).to_string();
+        let batch = TopicBatch {
+            contact_id: target.contact_id.clone(),
+            epoch: "test".into(),
+            messages: vec![target.clone()],
+        };
+        let input = store.topic_message_input(&batch).unwrap();
+        assert_eq!(input[0]["isFromMe"], true);
+        assert_eq!(input[0]["replyTo"]["topic"], "Hospital");
+        assert_eq!(input[0]["replyTo"]["messageId"], "hospital");
+        let context = input[0]["previousMessages"].as_array().unwrap();
+        assert_eq!(context.len(), 6);
+        assert_eq!(context[0]["messageId"], "earlier-2");
+        assert_eq!(context[5]["messageId"], "earlier-7");
+        assert!(context.iter().all(|m| m["topic"].is_null())); // Unclassified neighbours are included.
+        let serialized = serde_json::to_string(&input).unwrap();
+        assert!(!serialized.contains("private-other-chat"));
+        assert!(!serialized.contains("future"));
+        assert!(!serialized.contains("must-not-send"));
+        // Embedded quote text still works if the quoted message is not stored;
+        // an ID from another chat cannot resolve to that chat's text or topic.
+        target.content_json = json!({"type":"text","reply_context":{"messageId":"private-other-chat","text":"x".repeat(2000),"media_data":"must-not-send"}}).to_string();
+        let fallback = store
+            .topic_message_input(&TopicBatch {
+                messages: vec![target],
+                ..batch
+            })
+            .unwrap();
+        assert_eq!(fallback[0]["replyTo"]["text"].as_str().unwrap().len(), 600);
+        assert!(fallback[0]["replyTo"]["topic"].is_null());
+        assert!(!fallback[0]["replyTo"].to_string().contains("must-not-send"));
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn outgoing_topic_recovery_is_recent_opted_in_and_once_only() {
+        let (store, path) = test_store();
+        let now = 1_800_000_000_000;
+        for chat in ["enabled@g.us", "paused@g.us"] {
+            store
+                .upsert_contact(chat, None, None, Some("group"), now)
+                .unwrap();
+            store
+                .set_topics_enabled(chat, chat.starts_with("enabled"))
+                .unwrap();
+        }
+        for (id, chat, time) in [
+            ("recent", "enabled@g.us", now),
+            ("lost-id", "enabled@g.us", now),
+            ("old", "enabled@g.us", now - 8 * 86_400_000),
+            ("future", "enabled@g.us", now + 1),
+            ("paused", "paused@g.us", now),
+            ("saved", "enabled@g.us", now),
+        ] {
+            let mut m = test_message(id, time);
+            m.contact_id = chat.into();
+            m.is_from_me = true;
+            m.content_json = json!({"type":"text","body":"See you at the hospital."}).to_string();
+            store.add_message(&m).unwrap();
+        }
+        while let Some(batch) = store.next_topic_batch().unwrap() {
+            finish(&store, &batch, "Hospital");
+        }
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute("UPDATE messages SET original_text=NULL WHERE id IN ('recent','old','future','paused')", []).unwrap();
+            conn.execute(
+                "DELETE FROM topic_assignments WHERE message_id='lost-id'",
+                [],
+            )
+            .unwrap();
+            conn.execute("DELETE FROM topic_jobs", []).unwrap();
+            conn.execute(
+                "DELETE FROM app_settings WHERE key='topic_outgoing_context_v1'",
+                [],
+            )
+            .unwrap();
+        }
+        store.recover_outgoing_topics(now).unwrap();
+        let batch = store.next_topic_batch().unwrap().unwrap();
+        let ids: Vec<_> = batch.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["lost-id", "recent"]);
+        assert_eq!(
+            batch.messages[1].original_text.as_deref(),
+            Some("See you at the hospital.")
+        );
+        assert_eq!(
+            store.message_topics(&["saved".into()]).unwrap()[0]
+                .title
+                .as_deref(),
+            Some("Hospital")
+        );
+        finish(&store, &batch, "Hospital");
+        store
+            .recover_outgoing_topics(now + 10 * 86_400_000)
+            .unwrap();
+        assert!(store.next_topic_batch().unwrap().is_none());
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

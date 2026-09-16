@@ -2,6 +2,22 @@ import XCTest
 
 @MainActor
 final class ConversationTranslationUITests: XCTestCase {
+    func testOutgoingMessageShowsSavedTopicInItsMenu() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoTopics", "-demoOutgoingTopic"]
+        app.launch()
+        let target = app.staticTexts["The replay is brilliant too."].firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: 10))
+        target.press(forDuration: 1)
+        let label = app.buttons["Football"].firstMatch
+        XCTAssertTrue(label.waitForExistence(timeout: 5))
+        XCTAssertFalse(label.isEnabled)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Outgoing message with its saved Football category"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testLongPressShowsSavedTopicInCombinedMessagesAndChat() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoTopics"]

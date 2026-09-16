@@ -1162,6 +1162,29 @@ impl MessageStore {
             msg.is_from_me,
             msg.translated_text.as_deref(),
         );
+        // Every send path (native/web, MCP and original-language follow-ups)
+        // must retain its text for search and topic classification.
+        let outgoing_text = if msg.is_from_me
+            && msg
+                .original_text
+                .as_deref()
+                .is_none_or(|s| s.trim().is_empty())
+        {
+            serde_json::from_str::<serde_json::Value>(&msg.content_json)
+                .ok()
+                .and_then(|content| {
+                    match content.get("type").and_then(serde_json::Value::as_str) {
+                        Some("text") => content.get("body"),
+                        Some("image" | "video" | "document") => content.get("caption"),
+                        _ => None,
+                    }
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                })
+        } else {
+            None
+        };
+        let original_text = outgoing_text.as_ref().or(msg.original_text.as_ref());
 
         let inserted = tx.execute(
             r#"
@@ -1182,7 +1205,7 @@ impl MessageStore {
                 msg.chat_type,
                 msg.content_type,
                 msg.content_json,
-                msg.original_text,
+                original_text,
                 msg.translated_text,
                 msg.source_language,
                 msg.is_translated,

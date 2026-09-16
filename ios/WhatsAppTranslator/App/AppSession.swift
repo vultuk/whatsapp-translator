@@ -1462,7 +1462,7 @@ final class AppSession {
             let football = ChatMessage.demo(id: "topic-football", contactID: "family@g.us", timestamp: base + 1000, fromMe: false, body: "What a goal in last night’s match!", translated: nil, sender: "Jamie", chatType: "group")
             let brunch = ChatMessage.demo(id: "topic-brunch", contactID: "friends@g.us", timestamp: base + 2000, fromMe: false, body: "Sunday brunch at eleven?", translated: nil, sender: "Sam", chatType: "group")
             let picnicReply = ChatMessage.demo(id: "topic-picnic-reply", contactID: "family@g.us", timestamp: base + 4000, fromMe: false, body: "I’ll bring the picnic blanket and sandwiches.", translated: nil, sender: "Alex", chatType: "group", reply: MessageReplyTarget(messageID: "unloaded-original", senderJID: nil, senderName: "Sam", text: "Could someone bring lunch?"))
-            let footballReply = ChatMessage.demo(id: "topic-football-reply", contactID: "family@g.us", timestamp: base + 5000, fromMe: false, body: "The replay is brilliant too.", translated: nil, sender: "Jamie", chatType: "group")
+            let footballReply = ChatMessage.demo(id: "topic-football-reply", contactID: "family@g.us", timestamp: base + 5000, fromMe: ProcessInfo.processInfo.arguments.contains("-demoOutgoingTopic"), body: "The replay is brilliant too.", translated: nil, sender: "Jamie", chatType: "group")
             messages = ["family@g.us": [picnic, football, picnicReply, footballReply], "friends@g.us": [brunch]]
             topicCatalog = TopicCatalog(topics: [
                 ChatTopic(id: "family-weekend", contactId: "family@g.us", contactName: "Family", title: "Weekend plans", messageCount: 2, lastMessageTime: base + 4000, categoryId: "category:weekend"),
