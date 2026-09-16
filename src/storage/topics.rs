@@ -80,6 +80,32 @@ impl MessageStore {
             CREATE TRIGGER IF NOT EXISTS topics_delete AFTER DELETE ON messages
             BEGIN DELETE FROM topic_assignments WHERE message_id=OLD.id; DELETE FROM topic_jobs WHERE message_id=OLD.id; END;
         "#)?;
+        self.recover_topic_json_input_jobs()?;
+        Ok(())
+    }
+
+    /// Build 62 omitted the Responses JSON-mode input instruction. Retry existing opted-in jobs once.
+    fn recover_topic_json_input_jobs(&self) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let first_run = tx.execute(
+            "INSERT OR IGNORE INTO app_settings(key,value) VALUES('topic_json_input_v1','1')",
+            [],
+        )? > 0;
+        let recovered = if first_run {
+            Some(tx.execute(r#"UPDATE topic_jobs SET attempts=0,retry_at=0 WHERE attempts>0
+                AND message_id IN (SELECT m.id FROM messages m JOIN topic_settings s ON s.contact_id=m.contact_id AND s.enabled=1)
+                AND NOT EXISTS(SELECT 1 FROM topic_assignments a WHERE a.message_id=topic_jobs.message_id)"#, [])?)
+        } else {
+            None
+        };
+        tx.commit()?;
+        if let Some(count) = recovered {
+            tracing::info!(
+                messages = count,
+                "Recovered topic jobs after JSON request fix"
+            );
+        }
         Ok(())
     }
 
@@ -199,7 +225,7 @@ impl MessageStore {
         &self,
         batch: &TopicBatch,
         assignments: &[TopicAssignment],
-    ) -> Result<()> {
+    ) -> Result<usize> {
         // Validate ownership and completeness again at the persistence boundary.
         let mut seen = std::collections::HashSet::new();
         anyhow::ensure!(
@@ -218,7 +244,8 @@ impl MessageStore {
         }
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        if !tx.query_row("SELECT EXISTS(SELECT 1 FROM topic_settings WHERE contact_id=? AND enabled=1 AND epoch=?)",params![batch.contact_id,batch.epoch],|r|r.get::<_,bool>(0))? {return Ok(())}
+        if !tx.query_row("SELECT EXISTS(SELECT 1 FROM topic_settings WHERE contact_id=? AND enabled=1 AND epoch=?)",params![batch.contact_id,batch.epoch],|r|r.get::<_,bool>(0))? {return Ok(0)}
+        let mut assigned = 0;
         for a in assignments {
             let message = batch
                 .messages
@@ -253,9 +280,10 @@ impl MessageStore {
             )?;
             tx.execute("INSERT INTO topic_assignments VALUES(?,?) ON CONFLICT(message_id) DO UPDATE SET topic_id=excluded.topic_id",params![message.id,topic_id])?;
             tx.execute("DELETE FROM topic_jobs WHERE message_id=?", [&message.id])?;
+            assigned += 1;
         }
         tx.commit()?;
-        Ok(())
+        Ok(assigned)
     }
 
     pub fn retry_topic_batch(&self, batch: &TopicBatch) -> Result<()> {
@@ -323,6 +351,98 @@ mod tests {
             })
             .collect::<Vec<_>>();
         store.finish_topic_batch(batch, &assignments).unwrap();
+    }
+
+    #[test]
+    fn topic_json_fix_recovers_only_existing_enabled_jobs_once_across_restarts() {
+        let (store, path) = test_store();
+        add(&store, "enabled@g.us", "assigned", 100);
+        store.set_topics_enabled("enabled@g.us", true).unwrap();
+        finish(
+            &store,
+            &store.next_topic_batch().unwrap().unwrap(),
+            "Saved topic",
+        );
+        add(&store, "enabled@g.us", "failed", 200);
+        add(&store, "enabled@g.us", "waiting", 300);
+        add(&store, "disabled@g.us", "disabled", 400);
+        store.set_topics_enabled("disabled@g.us", true).unwrap();
+        add(&store, "never-enabled@g.us", "untouched", 500);
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "DELETE FROM app_settings WHERE key='topic_json_input_v1'",
+                [],
+            )
+            .unwrap();
+            conn.execute("UPDATE topic_jobs SET attempts=3,retry_at=9999999999", [])
+                .unwrap();
+            conn.execute(
+                "UPDATE topic_jobs SET attempts=1 WHERE message_id='waiting'",
+                [],
+            )
+            .unwrap();
+            // A stale disabled-chat job is deliberately retained to verify the recovery scope.
+            conn.execute(
+                "UPDATE topic_settings SET enabled=0 WHERE contact_id='disabled@g.us'",
+                [],
+            )
+            .unwrap();
+        }
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        let enabled = store
+            .topic_settings()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.contact_id == "enabled@g.us")
+            .unwrap();
+        assert_eq!((enabled.pending_count, enabled.failed_count), (2, 0));
+        assert_eq!(store.list_topics().unwrap()[0].message_count, 1);
+        let batch = store.next_topic_batch().unwrap().unwrap();
+        assert_eq!(
+            batch
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["failed", "waiting"]
+        );
+        {
+            let conn = store.conn.lock().unwrap();
+            assert_eq!(
+                conn.query_row(
+                    "SELECT attempts FROM topic_jobs WHERE message_id='disabled'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+                3
+            );
+            assert!(!conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM topic_jobs WHERE message_id='untouched')",
+                    [],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap());
+        }
+        for _ in 0..3 {
+            store.retry_topic_batch(&batch).unwrap();
+        }
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        assert!(store.next_topic_batch().unwrap().is_none()); // Restart must not create endless retries.
+        let enabled = store
+            .topic_settings()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.contact_id == "enabled@g.us")
+            .unwrap();
+        assert_eq!((enabled.pending_count, enabled.failed_count), (0, 2));
+        assert_eq!(store.list_topics().unwrap()[0].title, "Saved topic");
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

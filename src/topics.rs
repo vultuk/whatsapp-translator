@@ -1,6 +1,7 @@
 //! Optional, persisted topic views. A single background worker never delays message delivery.
 use crate::{
     storage::StoredMessage,
+    translation::OpenAiApiFailure,
     web::{AppState, WebSocketEvent},
 };
 use anyhow::{ensure, Context, Result};
@@ -17,6 +18,15 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 pub const INITIAL_MESSAGES: usize = 200;
 pub const BATCH_SIZE: usize = 24;
 pub const IMPORT_DAYS: i64 = 7;
+
+#[derive(Debug)]
+struct TopicStage(&'static str);
+impl std::fmt::Display for TopicStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for TopicStage {}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,10 +119,43 @@ pub fn start(state: Arc<AppState>) {
                     let result =
                         tokio::time::timeout(Duration::from_secs(120), classify(&state, &batch))
                             .await;
-                    if !matches!(result, Ok(Ok(()))) {
-                        // Avoid logging private source text or model output.
-                        tracing::warn!("Topic classification deferred; retry state saved");
-                        let _ = state.store.retry_topic_batch(&batch);
+                    match result {
+                        Ok(Ok(assigned)) => {
+                            tracing::info!(messages = assigned, "Topic classification completed")
+                        }
+                        failure => {
+                            // Only fixed labels and counts are logged, never source text or model output.
+                            let (stage, reason, http_status) = match &failure {
+                                Ok(Err(error)) => {
+                                    let stage = error
+                                        .downcast_ref::<TopicStage>()
+                                        .map(|s| s.0)
+                                        .unwrap_or("internal");
+                                    let upstream = error.downcast_ref::<OpenAiApiFailure>();
+                                    (
+                                        stage,
+                                        upstream.map(|e| e.reason).unwrap_or("operation_failed"),
+                                        upstream.map(|e| e.status),
+                                    )
+                                }
+                                _ => ("ai_request", "timeout", None),
+                            };
+                            match state.store.retry_topic_batch(&batch) {
+                                Ok(()) => tracing::warn!(
+                                    stage,
+                                    reason,
+                                    http_status,
+                                    messages = batch.messages.len(),
+                                    "Topic classification deferred; retry state saved"
+                                ),
+                                Err(_) => tracing::error!(
+                                    stage,
+                                    reason,
+                                    http_status,
+                                    "Topic classification failed; could not save retry state"
+                                ),
+                            }
+                        }
                     }
                     let _ = state.broadcast_tx.send(WebSocketEvent::TopicsUpdated);
                 }
@@ -123,11 +166,17 @@ pub fn start(state: Arc<AppState>) {
     });
 }
 
-async fn classify(state: &AppState, batch: &TopicBatch) -> Result<()> {
+async fn classify(state: &AppState, batch: &TopicBatch) -> Result<usize> {
     let account_epoch = state.voice_epoch.load(std::sync::atomic::Ordering::SeqCst);
     let translator = state.translator.as_ref().context("AI is unavailable")?;
-    let existing = state.store.topic_names(&batch.contact_id)?;
-    let context = state.store.topic_context(&batch.contact_id)?;
+    let existing = state
+        .store
+        .topic_names(&batch.contact_id)
+        .context(TopicStage("read_topics"))?;
+    let context = state
+        .store
+        .topic_context(&batch.contact_id)
+        .context(TopicStage("read_context"))?;
     let messages: Vec<Value> = batch.messages.iter().map(|m| {
         let content: Value = serde_json::from_str(&m.content_json).unwrap_or(Value::Null);
         json!({"messageId":m.id,"text":m.original_text.as_deref().unwrap_or("").chars().take(2000).collect::<String>(),
@@ -135,20 +184,25 @@ async fn classify(state: &AppState, batch: &TopicBatch) -> Result<()> {
     }).collect();
     let (output, usage) = translator.classify_topics(json!({
         "labelLanguage":translator.default_language(),"existingTopics":existing,"context":context,"messages":messages
-    })).await?;
+    })).await.context(TopicStage("ai_request"))?;
     if account_epoch != state.voice_epoch.load(std::sync::atomic::Ordering::SeqCst) {
-        return Ok(());
+        return Ok(0);
     }
     // Record real usage even if the response fails validation or the chat was disabled in flight.
-    state.store.record_usage(
-        Some(&batch.contact_id),
-        None,
-        &usage,
-        "topic_classification",
-    )?;
-    let assignments = parse_assignments(&output, batch)?;
-    state.store.finish_topic_batch(batch, &assignments)?;
-    Ok(())
+    state
+        .store
+        .record_usage(
+            Some(&batch.contact_id),
+            None,
+            &usage,
+            "topic_classification",
+        )
+        .context(TopicStage("record_usage"))?;
+    let assignments = parse_assignments(&output, batch).context(TopicStage("validate_response"))?;
+    state
+        .store
+        .finish_topic_batch(batch, &assignments)
+        .context(TopicStage("save_assignments"))
 }
 
 pub async fn catalog(State(state): State<Arc<AppState>>) -> Response {
