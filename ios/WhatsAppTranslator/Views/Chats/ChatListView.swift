@@ -23,6 +23,7 @@ struct ChatListView: View {
             )
             #endif
             .navigationTitle("Chats")
+            .platformInlineNavigationTitle()
             .platformChatNavigationBackground()
             #if os(iOS)
             .toolbar {
@@ -129,32 +130,40 @@ struct ChatListView: View {
         VStack(spacing: 0) {
             filterBar
             contactList(selection: selection)
+                .refreshable { await session.refresh() }
         }
-            .searchable(text: searchText, prompt: "Search chats")
-            .refreshable { await session.refresh() }
+        .searchable(text: searchText, prompt: "Search chats")
         #endif
     }
 
     private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
-                ForEach(ChatFilter.allCases, id: \.self) { item in
-                    Button { filter = item } label: {
-                        Text(item.rawValue)
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .foregroundStyle(filter == item ? palette.deepAccent : Color.secondary)
-                            .background(filter == item ? palette.accent.opacity(0.14) : Color.primary.opacity(0.045), in: Capsule())
-                            .frame(minHeight: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(filter == item ? .isSelected : [])
-                }
+                filterButtons
             }
-            .padding(.horizontal, 14)
+            .fixedSize(horizontal: true, vertical: false)
+            VStack(alignment: .leading, spacing: 4) { filterButtons }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
         .padding(.bottom, 6)
+    }
+
+    private var filterButtons: some View {
+        ForEach(ChatFilter.allCases, id: \.self) { item in
+            Button { filter = item } label: {
+                Text(item.rawValue)
+                    .font(.subheadline.weight(.semibold))
+                    .fixedSize()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .foregroundStyle(filter == item ? palette.deepAccent : Color.secondary)
+                    .background(filter == item ? palette.accent.opacity(0.14) : Color.primary.opacity(0.045), in: Capsule())
+                    .frame(minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(filter == item ? .isSelected : [])
+        }
     }
 
     private func contactList(selection: Binding<String?>) -> some View {
@@ -188,6 +197,9 @@ struct ChatListView: View {
                     }
                 }
                 .task { await session.loadAvatar(for: contact.id) }
+                #if os(iOS)
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                #endif
                 .listRowSeparator(.hidden)
                 .listRowBackground(
                     session.selectedContactID == contact.id

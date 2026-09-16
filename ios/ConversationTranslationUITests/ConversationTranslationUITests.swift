@@ -2,6 +2,37 @@ import XCTest
 
 @MainActor
 final class ConversationTranslationUITests: XCTestCase {
+    func testChatListKeepsCompactRowsAndVisibleFiltersWhenScrolling() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoChatList"]
+        app.launch()
+        app.buttons["Chats"].firstMatch.tap()
+        let groups = app.buttons["Groups"].firstMatch
+        XCTAssertTrue(groups.waitForExistence(timeout: 5))
+        let first = app.staticTexts["Community group 1"].firstMatch
+        let second = app.staticTexts["Community group 2"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        let initial = XCTAttachment(screenshot: app.screenshot())
+        initial.name = "Chat list initial spacing"
+        initial.lifetime = .keepAlways
+        add(initial)
+        XCTAssertTrue(groups.isHittable, "Chat filters must remain visible below the navigation bar")
+        XCTAssertGreaterThanOrEqual(groups.frame.minY, app.navigationBars.firstMatch.frame.maxY - 1)
+        XCTAssertLessThan(first.frame.minY - groups.frame.maxY, 60, "The first chat must sit directly below the filters")
+        XCTAssertLessThan(second.frame.minY - first.frame.minY, 100, "Standard chat rows must not stack list padding on top of row padding")
+        groups.tap()
+        let filterY = groups.frame.minY
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)))
+        XCTAssertEqual(groups.frame.minY, filterY, accuracy: 2, "Pulling the list must not expand a blank navigation title")
+        app.swipeUp()
+        XCTAssertTrue(groups.isHittable)
+        XCTAssertEqual(groups.frame.minY, filterY, accuracy: 2)
+        let scrolled = XCTAttachment(screenshot: app.screenshot())
+        scrolled.name = "Chat list after scrolling"
+        scrolled.lifetime = .keepAlways
+        add(scrolled)
+    }
+
     func testTopicFilterStaysFixedWhenPullingShortTimeline() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoTopics"]

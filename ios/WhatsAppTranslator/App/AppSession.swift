@@ -1374,6 +1374,12 @@ final class AppSession {
         backendStatus = BackendStatus(connected: true, phone: "447853803055", name: "Simon Skinner")
         contacts = Contact.demoContacts
         messages = ChatMessage.demoMessages
+        if ProcessInfo.processInfo.arguments.contains("-demoChatList") {
+            contacts = (1...20).map { index in
+                Contact(id: "demo-chat-\(index)@g.us", name: "Community group \(index)", phone: nil, type: "group", lastMessageTime: 1_789_540_000_000 - Int64(index * 60_000), unreadCount: index == 1 ? 2 : 0, pinnedAt: nil, lastMessagePreview: "Alex: Looking forward to seeing everyone this weekend.")
+            }
+            messages = [:]
+        }
         if ProcessInfo.processInfo.arguments.contains("-demoUnifiedFeed") {
             let base: Int64 = 1_783_940_000_000
             contacts = [
