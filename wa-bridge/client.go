@@ -361,10 +361,12 @@ func (c *Client) handleMessage(evt *events.Message) {
 	if id, editedAt, content, ok := c.extractMessageEdit(evt); ok {
 		msg.ID = id
 		msg.Content = c.buildMessageContent(content)
+		msg.ReplyContext = c.incomingReplyContext(content)
 		SendEvent(NewMessageEditEvent(msg, editedAt))
 		return
 	}
 	msg.Content = c.buildMessageContent(evt.Message)
+	msg.ReplyContext = c.incomingReplyContext(evt.Message)
 
 	// Skip protocol messages and unknown types - these shouldn't be displayed
 	if msg.Content.Type == "protocol" || msg.Content.Type == "unknown" {
@@ -513,6 +515,7 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 				if id, editedAt, content, ok := c.extractMessageEdit(parsed); ok {
 					msg.ID = id
 					msg.Content = c.buildMessageContent(content)
+					msg.ReplyContext = c.incomingReplyContext(content)
 					msg.IsHistory = true
 					SendEvent(NewMessageEditEvent(msg, editedAt))
 					continue
@@ -520,6 +523,7 @@ func (c *Client) processHistorySync(data *waHistorySync.HistorySync) {
 				waMessage = parsed.Message
 			}
 			msg.Content = c.buildMessageContent(waMessage)
+			msg.ReplyContext = c.incomingReplyContext(waMessage)
 
 			// Skip protocol/unknown messages
 			if msg.Content.Type == "protocol" || msg.Content.Type == "unknown" {

@@ -77,17 +77,39 @@ final class MessageEditDeliveryTests: XCTestCase {
         XCTAssertEqual(session.messages[original.contactId]?.first?.displayText, "Grr")
     }
 
-    func testSameNamedTopicsRemainSeparateByChatAndDisablingDropsTheirPages() throws {
+    func testSameNamedTopicsCombineAcrossChatsAndDisablingPrunesTheSharedPage() throws {
         let session = AppSession(demoMode: true)
-        let family = ChatTopic(id: "family-plan", contactId: "family@g.us", contactName: "Family", title: "Weekend plans", messageCount: 1, lastMessageTime: 100)
-        let friends = ChatTopic(id: "friends-plan", contactId: "friends@g.us", contactName: "Friends", title: "Weekend plans", messageCount: 1, lastMessageTime: 100)
+        let family = ChatTopic(id: "family-plan", contactId: "family@g.us", contactName: "Family", title: "Weekend plans", messageCount: 1, lastMessageTime: 100, categoryId: "category:weekend")
+        let friends = ChatTopic(id: "friends-plan", contactId: "friends@g.us", contactName: "Friends", title: "Weekend plans", messageCount: 1, lastMessageTime: 110, categoryId: "category:weekend")
         session.applyTopicCatalog(TopicCatalog(topics: [family, friends], settings: [], available: true))
-        XCTAssertEqual(session.topics().count, 2)
+        XCTAssertEqual(session.topics().count, 1)
+        XCTAssertEqual(session.topics().first?.messageCount, 2)
+        XCTAssertEqual(session.topics().first?.lastMessageTime, 110)
+        XCTAssertEqual(session.topicCatalog.contactIDs(for: "category:weekend"), ["family@g.us", "friends@g.us"])
         XCTAssertEqual(session.topics(for: "family@g.us").map(\.id), ["family-plan"])
         XCTAssertFalse(session.topicSetting(for: "unconfigured@g.us").enabled)
         session.topicPages[family.id] = TopicPage(messages: [try message(body: "Picnic")])
+        session.topicPages["category:weekend"] = TopicPage(messages: [try message(body: "Picnic"), try message(chat: "friends@g.us", body: "Brunch")])
         session.applyTopicCatalog(TopicCatalog(topics: [friends], settings: [], available: true))
         XCTAssertNil(session.topicPages[family.id])
-        XCTAssertEqual(session.topics().map(\.id), [friends.id])
+        XCTAssertEqual(session.topics().map(\.id), ["category:weekend"])
+        XCTAssertEqual(session.topicPages["category:weekend"]?.messages.map(\.contactId), ["friends@g.us"])
+        session.applyTopicCatalog(.empty)
+        XCTAssertNil(session.topicPages["category:weekend"])
+    }
+
+    func testEmbeddedReplyQuoteSurvivesLiveDeliveryAndCacheWithoutOriginalHistory() throws {
+        var value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(message(body: "Thanks!"))) as! [String: Any]
+        value["content"] = ["type": "text", "body": "Thanks!", "reply_context": ["messageId": "not-in-history", "senderName": "Alex", "text": "Yep I can"]]
+        let reply = try JSONDecoder().decode(ChatMessage.self, from: JSONSerialization.data(withJSONObject: value))
+        let session = AppSession(demoMode: false)
+        session.phase = .ready
+        let live = try JSONDecoder().decode(LiveEvent.self, from: JSONSerialization.data(withJSONObject: ["type": "message", "message": value]))
+        session.handle(live)
+        XCTAssertEqual(session.unifiedMessages.first?.content?.replyContext?.text, "Yep I can")
+        XCTAssertEqual(session.messages[reply.contactId]?.first?.content?.replyContext?.senderName, "Alex")
+        XCTAssertFalse(session.unifiedMessages.contains { $0.id == "not-in-history" })
+        let cached = try JSONDecoder().decode(ChatMessage.self, from: JSONEncoder().encode(reply))
+        XCTAssertEqual(cached.content?.replyContext?.messageId, "not-in-history")
     }
 }

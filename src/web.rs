@@ -5241,6 +5241,7 @@ mod tests {
             "/api/topics",
             "/api/topics/import",
             "/api/topics/example/messages",
+            "/api/topics/category:cGxhbnM/messages",
         ] {
             assert_eq!(
                 locked_router
@@ -5376,6 +5377,39 @@ mod tests {
         .unwrap();
         assert_eq!(body["messages"][0]["id"], "a");
         assert_eq!(body["hasMore"], false);
+        state
+            .store
+            .set_topics_enabled("friends@g.us", true)
+            .unwrap();
+        let batch = state.store.next_topic_batch().unwrap().unwrap();
+        state
+            .store
+            .finish_topic_batch(
+                &batch,
+                &[crate::topics::TopicAssignment {
+                    message_id: "c".into(),
+                    topic: "Plans".into(),
+                }],
+            )
+            .unwrap();
+        let response = app
+            .clone()
+            .oneshot(empty_request(&format!(
+                "/api/topics/{}/messages?limit=3",
+                urlencoding::encode(&topic.category_id)
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["messages"].as_array().unwrap().len(), 3);
+        assert_eq!(body["messages"][0]["contactId"], "family@g.us");
+        assert_eq!(body["messages"][2]["contactId"], "friends@g.us");
         state
             .store
             .set_topics_enabled("family@g.us", false)

@@ -157,7 +157,7 @@ struct TopicFilterBar: View {
                         Divider()
                         ForEach(topics) { topic in
                             Button { selection = topic.id } label: {
-                                Label(contactID == nil ? "\(topic.title) · \(topic.contactName)" : topic.title,
+                                Label(topic.title,
                                       systemImage: selection == topic.id ? "checkmark" : "number")
                             }
                         }
@@ -166,13 +166,12 @@ struct TopicFilterBar: View {
                     Button("Manage topics", systemImage: "slider.horizontal.3") { showManagement = true }
                 } label: {
                     #if os(macOS)
-                    Label(selected.map { contactID == nil ? "\($0.title) · \($0.contactName)" : $0.title } ?? "All messages", systemImage: "line.3.horizontal.decrease.circle")
+                    Label(selected?.title ?? "All messages", systemImage: "line.3.horizontal.decrease.circle")
                     #else
                     HStack(spacing: 6) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                         VStack(alignment: .leading, spacing: 1) {
                             Text(selected?.title ?? "All messages").font(.subheadline.weight(.semibold)).lineLimit(1)
-                            if contactID == nil, let selected { Text(selected.contactName).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                         }
                         Image(systemName: "chevron.down").font(.caption2)
                     }
@@ -444,6 +443,7 @@ private struct UnifiedMessagesView: View {
                 }
             }
             .navigationTitle("Messages")
+            .platformInlineNavigationTitle()
             .platformChatNavigationBackground()
             .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -464,7 +464,7 @@ private struct UnifiedMessagesView: View {
         }
         .onChange(of: selectedTopicID) { _, _ in cancelReply() }
         .onChange(of: session.topicCatalog.topics) { _, topics in
-            if let selectedTopicID, !topics.contains(where: { $0.id == selectedTopicID }) { self.selectedTopicID = nil }
+            if let selectedTopicID, !session.topics().contains(where: { $0.id == selectedTopicID }) { self.selectedTopicID = nil }
         }
         .onChange(of: session.mainTab) { _, tab in
             if tab != .messages { composerFocused = false }

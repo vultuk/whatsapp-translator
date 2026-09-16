@@ -2,7 +2,25 @@ import XCTest
 
 @MainActor
 final class ConversationTranslationUITests: XCTestCase {
-    func testTopicsFilterUnifiedAndNormalViewsAndKeepIdenticalNamesSeparate() throws {
+    func testTopicFilterStaysFixedWhenPullingShortTimeline() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoTopics"]
+        app.launch()
+        let filter = app.buttons["topic-filter"].firstMatch
+        XCTAssertTrue(filter.waitForExistence(timeout: 10))
+        filter.tap()
+        let combined = app.buttons["Football"].firstMatch
+        (combined.exists ? combined : app.buttons["Football · Family"].firstMatch).tap()
+        XCTAssertTrue(app.staticTexts["The replay is brilliant too."].firstMatch.waitForExistence(timeout: 5))
+        app.swipeUp()
+        let initialY = filter.frame.minY
+        let before = XCTAttachment(screenshot: app.screenshot()); before.name = "Topic header before pulling timeline"; before.lifetime = .keepAlways; add(before)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)))
+        let after = XCTAttachment(screenshot: app.screenshot()); after.name = "Topic header after pulling timeline"; after.lifetime = .keepAlways; add(after)
+        XCTAssertEqual(filter.frame.minY, initialY, accuracy: 2, "Pulling messages must not expand the header or move the topic filter")
+    }
+
+    func testTopicsCombineChatsAndShowQuotesOutsideLoadedHistory() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoTopics"]
         app.launch()
@@ -10,14 +28,15 @@ final class ConversationTranslationUITests: XCTestCase {
         XCTAssertTrue(filter.waitForExistence(timeout: 10))
         let before = XCTAttachment(screenshot: app.screenshot()); before.name = "All group discussions in the unified feed"; before.lifetime = .keepAlways; add(before)
         filter.tap()
-        let familyTopic = app.buttons["Weekend plans · Family"].firstMatch
+        let familyTopic = app.buttons["Weekend plans"].firstMatch
         XCTAssertTrue(familyTopic.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Weekend plans · Friends"].exists)
+        XCTAssertEqual(app.buttons.matching(identifier: "Weekend plans").count, 1)
         familyTopic.tap()
         XCTAssertTrue(app.staticTexts["I’ll bring the picnic blanket and sandwiches."].firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["What a goal in last night’s match!"].exists)
-        XCTAssertFalse(app.staticTexts["Sunday brunch at eleven?"].exists)
-        let filtered = XCTAttachment(screenshot: app.screenshot()); filtered.name = "Unified feed focused on Weekend plans in Family"; filtered.lifetime = .keepAlways; add(filtered)
+        XCTAssertTrue(app.staticTexts["Sunday brunch at eleven?"].exists)
+        XCTAssertTrue(app.staticTexts["Could someone bring lunch?"].exists)
+        let filtered = XCTAttachment(screenshot: app.screenshot()); filtered.name = "Weekend plans combines Family and Friends and preserves the original quote"; filtered.lifetime = .keepAlways; add(filtered)
         app.buttons["Open chat: Family"].firstMatch.tap()
         XCTAssertTrue(app.buttons["topic-filter"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["topic-filter"].firstMatch.tap()

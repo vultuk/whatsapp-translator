@@ -40,7 +40,8 @@ final class AppSession {
     private var demoTopicPages: [String: TopicPage] = [:]
 
     func topics(for contactID: String? = nil) -> [ChatTopic] {
-        topicCatalog.topics.filter { contactID == nil || $0.contactId == contactID }
+        guard let contactID else { return topicCatalog.unifiedTopics }
+        return topicCatalog.topics.filter { $0.contactId == contactID }
     }
 
     func topicSetting(for contactID: String) -> TopicSetting {
@@ -50,8 +51,12 @@ final class AppSession {
 
     func applyTopicCatalog(_ catalog: TopicCatalog) {
         topicCatalog = catalog
-        let ids = Set(catalog.topics.map(\.id))
+        let ids = catalog.allTopicIDs
         topicPages = topicPages.filter { ids.contains($0.key) }
+        for id in topicPages.keys {
+            let contacts = catalog.contactIDs(for: id)
+            topicPages[id]?.messages.removeAll { !contacts.contains($0.contactId) }
+        }
         topicRevision = UUID()
     }
 
@@ -110,7 +115,12 @@ final class AppSession {
     }
 
     func loadTopicMessages(_ id: String, older: Bool = false) async {
-        guard topicCatalog.topics.contains(where: { $0.id == id }) else { return }
+        guard topicCatalog.allTopicIDs.contains(id) else { return }
+        if demoMode {
+            let members = topicCatalog.topics.filter { $0.id == id || $0.categoryId == id }
+            topicPages[id] = TopicPage(messages: normalizeMessages(members.flatMap { demoTopicPages[$0.id]?.messages ?? [] }))
+            return
+        }
         guard !topicLoading.contains(id) else {
             if !older { topicReloadAfterLoad.insert(id) }
             return
@@ -126,10 +136,11 @@ final class AppSession {
             let cursor = older ? topicPages[id]?.messages.first : nil
             let response = try await api.topicMessages(id: id, before: cursor?.timestamp, beforeID: cursor?.id)
             guard revision == topicRevision else {
-                if topicCatalog.topics.contains(where: { $0.id == id }) { topicReloadAfterLoad.insert(id) }
+                if topicCatalog.allTopicIDs.contains(id) { topicReloadAfterLoad.insert(id) }
                 return
             }
-            guard let topic = topicCatalog.topics.first(where: { $0.id == id }), response.messages.allSatisfy({ $0.contactId == topic.contactId }) else { return }
+            let contacts = topicCatalog.contactIDs(for: id)
+            guard !contacts.isEmpty, response.messages.allSatisfy({ contacts.contains($0.contactId) }) else { return }
             let incoming = normalizeMessages(response.messages)
             // An edit received during this HTTP request invalidates the old assignment.
             let valid = incoming.filter { updated in response.messages.contains { $0.id == updated.id && $0.editRevision == updated.editRevision } }
@@ -1388,13 +1399,13 @@ final class AppSession {
             let picnic = ChatMessage.demo(id: "topic-picnic", contactID: "family@g.us", timestamp: base, fromMe: false, body: "Shall we have a picnic on Saturday?", translated: nil, sender: "Alex", chatType: "group")
             let football = ChatMessage.demo(id: "topic-football", contactID: "family@g.us", timestamp: base + 1000, fromMe: false, body: "What a goal in last night’s match!", translated: nil, sender: "Jamie", chatType: "group")
             let brunch = ChatMessage.demo(id: "topic-brunch", contactID: "friends@g.us", timestamp: base + 2000, fromMe: false, body: "Sunday brunch at eleven?", translated: nil, sender: "Sam", chatType: "group")
-            let picnicReply = ChatMessage.demo(id: "topic-picnic-reply", contactID: "family@g.us", timestamp: base + 4000, fromMe: false, body: "I’ll bring the picnic blanket and sandwiches.", translated: nil, sender: "Alex", chatType: "group")
+            let picnicReply = ChatMessage.demo(id: "topic-picnic-reply", contactID: "family@g.us", timestamp: base + 4000, fromMe: false, body: "I’ll bring the picnic blanket and sandwiches.", translated: nil, sender: "Alex", chatType: "group", reply: MessageReplyTarget(messageID: "unloaded-original", senderJID: nil, senderName: "Sam", text: "Could someone bring lunch?"))
             let footballReply = ChatMessage.demo(id: "topic-football-reply", contactID: "family@g.us", timestamp: base + 5000, fromMe: false, body: "The replay is brilliant too.", translated: nil, sender: "Jamie", chatType: "group")
             messages = ["family@g.us": [picnic, football, picnicReply, footballReply], "friends@g.us": [brunch]]
             topicCatalog = TopicCatalog(topics: [
-                ChatTopic(id: "family-weekend", contactId: "family@g.us", contactName: "Family", title: "Weekend plans", messageCount: 2, lastMessageTime: base + 4000),
-                ChatTopic(id: "family-football", contactId: "family@g.us", contactName: "Family", title: "Football", messageCount: 2, lastMessageTime: base + 5000),
-                ChatTopic(id: "friends-weekend", contactId: "friends@g.us", contactName: "Friends", title: "Weekend plans", messageCount: 1, lastMessageTime: base + 2000)
+                ChatTopic(id: "family-weekend", contactId: "family@g.us", contactName: "Family", title: "Weekend plans", messageCount: 2, lastMessageTime: base + 4000, categoryId: "category:weekend"),
+                ChatTopic(id: "family-football", contactId: "family@g.us", contactName: "Family", title: "Football", messageCount: 2, lastMessageTime: base + 5000, categoryId: "category:football"),
+                ChatTopic(id: "friends-weekend", contactId: "friends@g.us", contactName: "Friends", title: "Weekend plans", messageCount: 1, lastMessageTime: base + 2000, categoryId: "category:weekend")
             ], settings: contacts.map { TopicSetting(contactId: $0.id, enabled: true, pendingCount: 0, failedCount: 0) }, available: true)
             topicPages = ["family-weekend": TopicPage(messages: [picnic, picnicReply]), "family-football": TopicPage(messages: [football, footballReply]), "friends-weekend": TopicPage(messages: [brunch])]
             demoTopicCatalog = topicCatalog

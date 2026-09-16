@@ -989,6 +989,20 @@ impl MessageStore {
             .filter(|value| *value > 0))
     }
 
+    /// A replay/history sync can restore a quote that an older bridge dropped.
+    /// Enrich only missing metadata in the same chat; never replace edits/media.
+    pub fn recover_reply_context(&self, message: &StoredMessage) -> Result<()> {
+        let incoming: serde_json::Value = serde_json::from_str(&message.content_json)?;
+        let Some(quote) = incoming.get("reply_context").filter(|q| q.is_object()) else {
+            return Ok(());
+        };
+        self.conn.lock().unwrap().execute(
+            "UPDATE messages SET content_json=json_set(content_json,'$.reply_context',json(?1)) WHERE id=?2 AND contact_id=?3 AND is_from_me=?4 AND sender_phone IS ?5 AND json_extract(content_json,'$.reply_context') IS NULL",
+            params![quote.to_string(), message.id, canonical_chat_id(&message.contact_id).as_ref(), message.is_from_me, message.sender_phone],
+        )?;
+        Ok(())
+    }
+
     /// Add or update a contact
     pub fn upsert_contact(
         &self,

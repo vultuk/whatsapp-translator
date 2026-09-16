@@ -131,6 +131,10 @@ pub struct Message {
     /// Message content
     pub content: MessageContent,
 
+    /// Embedded quote, independent of whether its original message is stored.
+    #[serde(default)]
+    pub reply_context: Option<ReplyContext>,
+
     /// Whether this message was sent by us
     pub is_from_me: bool,
 
@@ -146,6 +150,14 @@ pub struct Message {
 
     /// Unread count from WhatsApp (only set on first message of history sync conversations)
     pub unread_count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyContext {
+    pub message_id: String,
+    pub sender_name: String,
+    pub text: String,
 }
 
 /// Contact information

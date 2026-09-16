@@ -69,16 +69,24 @@ type LoggedOutEvent struct {
 
 // Message represents a WhatsApp message with full metadata
 type Message struct {
-	ID          string         `json:"id"`
-	Timestamp   int64          `json:"timestamp"`
-	From        Contact        `json:"from"`
-	Chat        Chat           `json:"chat"`
-	Content     MessageContent `json:"content"`
-	IsFromMe    bool           `json:"is_from_me"`
-	IsForwarded bool           `json:"is_forwarded"`
-	IsHistory   bool           `json:"is_history,omitempty"` // True for history sync messages (no translation)
-	PushName    string         `json:"push_name,omitempty"`
-	UnreadCount *uint32        `json:"unread_count,omitempty"` // Unread count from WhatsApp (history sync only)
+	ID           string         `json:"id"`
+	Timestamp    int64          `json:"timestamp"`
+	From         Contact        `json:"from"`
+	Chat         Chat           `json:"chat"`
+	Content      MessageContent `json:"content"`
+	ReplyContext *ReplyContext  `json:"reply_context,omitempty"`
+	IsFromMe     bool           `json:"is_from_me"`
+	IsForwarded  bool           `json:"is_forwarded"`
+	IsHistory    bool           `json:"is_history,omitempty"` // True for history sync messages (no translation)
+	PushName     string         `json:"push_name,omitempty"`
+	UnreadCount  *uint32        `json:"unread_count,omitempty"` // Unread count from WhatsApp (history sync only)
+}
+
+// ReplyContext is WhatsApp's embedded quote; the original need not be in history.
+type ReplyContext struct {
+	MessageID  string `json:"messageId"`
+	SenderName string `json:"senderName"`
+	Text       string `json:"text"`
 }
 
 // Contact represents a WhatsApp contact
@@ -248,6 +256,9 @@ func NewMessageEvent(msg Message) map[string]interface{} {
 	}
 	if msg.UnreadCount != nil {
 		event["unread_count"] = *msg.UnreadCount
+	}
+	if msg.ReplyContext != nil {
+		event["reply_context"] = msg.ReplyContext
 	}
 	return event
 }

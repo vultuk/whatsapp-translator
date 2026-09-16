@@ -87,6 +87,11 @@ impl MessageStore {
         };
         object.insert(field.into(), edit[field].clone());
         object.insert("mentions".into(), edit["mentions"].clone());
+        if object.get("reply_context").is_none_or(Value::is_null) {
+            if let Some(quote) = edit.get("reply_context").filter(|q| q.is_object()) {
+                object.insert("reply_context".into(), quote.clone());
+            }
+        }
         object.insert("edited_at_ms".into(), Value::from(revision));
         tx.execute(
             "UPDATE messages SET content_json=?,original_text=?,translated_text=NULL,source_language=NULL,is_translated=0 WHERE id=?",

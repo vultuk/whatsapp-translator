@@ -666,6 +666,7 @@ struct ChatTopic: Codable, Equatable, Identifiable, Sendable {
     let title: String
     let messageCount: Int
     let lastMessageTime: Int64
+    var categoryId: String? = nil
 }
 
 struct TopicSetting: Codable, Equatable, Sendable {
@@ -680,6 +681,22 @@ struct TopicCatalog: Codable, Sendable {
     var settings: [TopicSetting]
     var available: Bool
     static let empty = TopicCatalog(topics: [], settings: [], available: false)
+
+    var unifiedTopics: [ChatTopic] {
+        Dictionary(grouping: topics, by: { $0.categoryId ?? $0.id }).map { id, members in
+            let first = members.sorted { $0.id < $1.id }[0]
+            return ChatTopic(id: id, contactId: "", contactName: "", title: first.title,
+                             messageCount: members.reduce(0) { $0 + $1.messageCount },
+                             lastMessageTime: members.map(\.lastMessageTime).max() ?? 0,
+                             categoryId: first.categoryId)
+        }.sorted { $0.lastMessageTime == $1.lastMessageTime ? $0.id < $1.id : $0.lastMessageTime > $1.lastMessageTime }
+    }
+
+    var allTopicIDs: Set<String> { Set(topics.map(\.id) + unifiedTopics.map(\.id)) }
+
+    func contactIDs(for topicID: String) -> Set<String> {
+        Set(topics.filter { $0.id == topicID || $0.categoryId == topicID }.map(\.contactId))
+    }
 }
 
 struct TopicImportSummary: Codable, Sendable {

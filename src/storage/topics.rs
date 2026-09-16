@@ -156,7 +156,7 @@ impl MessageStore {
 
     pub fn list_topics(&self) -> Result<Vec<ChatTopic>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt=conn.prepare(r#"SELECT t.id,t.contact_id,COALESCE(c.name,c.phone,t.contact_id),t.title,count(*),max(m.timestamp)
+        let mut stmt=conn.prepare(r#"SELECT t.id,t.contact_id,COALESCE(c.name,c.phone,t.contact_id),t.title,count(*),max(m.timestamp),t.name_key
             FROM chat_topics t JOIN topic_assignments a ON a.topic_id=t.id JOIN messages m ON m.id=a.message_id AND m.contact_id=t.contact_id
             JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1 JOIN contacts c ON c.id=t.contact_id
             GROUP BY t.id ORDER BY max(m.timestamp) DESC,t.id"#)?;
@@ -164,6 +164,7 @@ impl MessageStore {
             .query_map([], |r| {
                 Ok(ChatTopic {
                     id: r.get(0)?,
+                    category_id: crate::topics::category_id(&r.get::<_, String>(6)?),
                     contact_id: r.get(1)?,
                     contact_name: r.get(2)?,
                     title: r.get(3)?,
@@ -176,10 +177,13 @@ impl MessageStore {
     }
 
     pub fn topic_names(&self, contact_id: &str) -> Result<Vec<String>> {
-        Ok(self
-            .list_topics()?
+        let mut topics = self.list_topics()?;
+        // Reuse labels across chats while keeping this chat's useful labels first.
+        topics.sort_by_key(|t| t.contact_id != contact_id);
+        let mut seen = std::collections::HashSet::new();
+        Ok(topics
             .into_iter()
-            .filter(|t| t.contact_id == contact_id)
+            .filter(|t| seen.insert(t.category_id.clone()))
             .take(60)
             .map(|t| t.title)
             .collect())
@@ -306,14 +310,18 @@ impl MessageStore {
         before_id: Option<&str>,
     ) -> Result<Option<Vec<StoredMessage>>> {
         let conn = self.conn.lock().unwrap();
-        if !conn.query_row("SELECT EXISTS(SELECT 1 FROM chat_topics t JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1 WHERE t.id=?)",[topic_id],|r|r.get::<_,bool>(0))? {return Ok(None)}
+        let category = crate::topics::category_key(topic_id);
+        let is_category = category.is_some();
+        let key = category.as_deref().unwrap_or(topic_id);
+        if !conn.query_row("SELECT EXISTS(SELECT 1 FROM chat_topics t JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1 WHERE (?2=1 AND t.name_key=?1) OR (?2=0 AND t.id=?1))",params![key,is_category],|r|r.get::<_,bool>(0))? {return Ok(None)}
         let mut stmt=conn.prepare(r#"SELECT m.id,m.contact_id,m.timestamp,m.is_from_me,m.is_forwarded,m.sender_name,m.sender_phone,m.chat_type,m.content_type,
             m.content_json,m.original_text,m.translated_text,m.source_language,m.is_translated,m.delivery_status,c.name,c.phone
             FROM messages m JOIN topic_assignments a ON a.message_id=m.id JOIN chat_topics t ON t.id=a.topic_id AND t.contact_id=m.contact_id
-            LEFT JOIN contacts c ON c.id=m.contact_id WHERE t.id=?1 AND (?2 IS NULL OR m.timestamp<?2 OR(m.timestamp=?2 AND ?3 IS NOT NULL AND m.id<?3))
+            JOIN topic_settings s ON s.contact_id=m.contact_id AND s.enabled=1
+            LEFT JOIN contacts c ON c.id=m.contact_id WHERE ((?5=1 AND t.name_key=?1) OR (?5=0 AND t.id=?1)) AND (?2 IS NULL OR m.timestamp<?2 OR(m.timestamp=?2 AND ?3 IS NOT NULL AND m.id<?3))
             ORDER BY m.timestamp DESC,m.id DESC LIMIT ?4"#)?;
         let mut messages = stmt
-            .query_map(params![topic_id, before, before_id, limit], |r| {
+            .query_map(params![key, before, before_id, limit, is_category], |r| {
                 Self::row_to_stored_message(r, r.get(15)?, r.get(16)?)
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -351,6 +359,79 @@ mod tests {
             })
             .collect::<Vec<_>>();
         store.finish_topic_batch(batch, &assignments).unwrap();
+    }
+
+    #[test]
+    fn unified_categories_merge_people_and_groups_with_stable_pagination_and_opt_out() {
+        let (store, path) = test_store();
+        for (chat, id, title) in [
+            ("family@g.us", "a", "Birthday wishes"),
+            ("447700900123@s.whatsapp.net", "b", "birthday wishes"),
+            ("friends@g.us", "c", "Birthday wishes"),
+        ] {
+            add(&store, chat, id, 100);
+            store.set_topics_enabled(chat, true).unwrap();
+            finish(&store, &store.next_topic_batch().unwrap().unwrap(), title);
+        }
+        let topics = store.list_topics().unwrap();
+        let category = crate::topics::category_id("birthday wishes");
+        assert!(topics.iter().all(|t| t.category_id == category));
+        assert_eq!(store.topic_names("new@g.us").unwrap().len(), 1);
+        let recent = store
+            .topic_messages(&category, 2, None, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            recent.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["b", "c"]
+        );
+        let earlier = store
+            .topic_messages(&category, 2, Some(100), Some("b"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(earlier[0].id, "a");
+        assert_eq!(earlier[0].contact_id, "family@g.us");
+        let per_chat = topics
+            .iter()
+            .find(|t| t.contact_id == "family@g.us")
+            .unwrap();
+        assert_eq!(
+            store
+                .topic_messages(&per_chat.id, 10, None, None)
+                .unwrap()
+                .unwrap()
+                .len(),
+            1
+        );
+        store.set_topics_enabled("family@g.us", false).unwrap();
+        assert_eq!(
+            store
+                .topic_messages(&category, 10, None, None)
+                .unwrap()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(store
+            .topic_messages(&per_chat.id, 10, None, None)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .topic_messages("category:not-valid!", 10, None, None)
+            .unwrap()
+            .is_none());
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        assert_eq!(
+            store
+                .topic_messages(&category, 10, None, None)
+                .unwrap()
+                .unwrap()
+                .len(),
+            2
+        );
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

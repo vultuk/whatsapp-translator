@@ -371,6 +371,8 @@ async fn handle_web_event(
                 let notification = (!stored_msg.is_from_me && !is_history)
                     .then_some(translator.is_some() && stored_msg.original_text.is_some());
                 store.add_message_with_notification(&stored_msg, notification)?;
+            } else {
+                store.recover_reply_context(&stored_msg)?;
             }
 
             if !stored_msg.is_from_me
@@ -613,8 +615,12 @@ async fn process_message(
         };
 
     // Serialize content to JSON
-    let content_json = serde_json::to_string(&msg.content).unwrap_or_default();
-    let content: Option<serde_json::Value> = serde_json::from_str(&content_json).ok();
+    let mut payload = serde_json::to_value(&msg.content).unwrap_or_default();
+    if let Some(quote) = &msg.reply_context {
+        payload["reply_context"] = serde_json::to_value(quote).unwrap_or_default();
+    }
+    let content_json = payload.to_string();
+    let content = Some(payload);
     let content_type = msg.content.type_name().to_string();
 
     // Get contact name and phone from chat info
@@ -1107,12 +1113,13 @@ impl serde::Serialize for bridge::Message {
     {
         use serde::ser::SerializeStruct;
 
-        let mut s = serializer.serialize_struct("Message", 8)?;
+        let mut s = serializer.serialize_struct("Message", 9)?;
         s.serialize_field("id", &self.id)?;
         s.serialize_field("timestamp", &self.timestamp.timestamp())?;
         s.serialize_field("from", &self.from)?;
         s.serialize_field("chat", &self.chat)?;
         s.serialize_field("content", &self.content)?;
+        s.serialize_field("reply_context", &self.reply_context)?;
         s.serialize_field("is_from_me", &self.is_from_me)?;
         s.serialize_field("is_forwarded", &self.is_forwarded)?;
         s.serialize_field("push_name", &self.push_name)?;
@@ -1352,6 +1359,100 @@ impl serde::Serialize for bridge::MessageContent {
 #[cfg(test)]
 mod identity_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn incoming_embedded_quotes_survive_storage_and_restore_missing_metadata_only() {
+        let path = std::env::temp_dir().join(format!("reply-quotes-{}", uuid::Uuid::new_v4()));
+        let store = MessageStore::new(&path).unwrap();
+        for chat in ["family@g.us", "friends@g.us"] {
+            store
+                .upsert_contact(chat, Some("Test chat"), None, Some("group"), 100)
+                .unwrap();
+        }
+        for history in [false, true] {
+            for content in [
+                serde_json::json!({"type":"text","body":"Thanks!"}),
+                serde_json::json!({"type":"image","mime_type":"image/jpeg","file_size":10}),
+            ] {
+                let id = format!("reply-{history}-{}", content["type"]);
+                let wire = serde_json::json!({"id":id,"timestamp":1_700_000_000,
+                    "from":{"jid":"447700900123@s.whatsapp.net","phone":"447700900123"},
+                    "chat":{"type":"group","jid":"family@g.us","name":"Family"},
+                    "content":content,"is_from_me":false,"is_forwarded":false,"is_history":history,
+                    "reply_context":{"messageId":"outside-history","senderName":"Alex","text":"Yep I can"}});
+                let stored =
+                    process_message(serde_json::from_value(wire).unwrap(), None, None).await;
+                assert_eq!(
+                    stored.content.as_ref().unwrap()["reply_context"]["text"],
+                    "Yep I can"
+                );
+                let mut old = stored.clone();
+                old.content_json = r#"{"type":"text","body":"Edited thanks","edited_at_ms":200,"media_data":"retained"}"#.into();
+                old.translated_text = Some("Translation retained".into());
+                store.add_message(&old).unwrap();
+                store.recover_reply_context(&stored).unwrap();
+                let recovered = store.get_message_by_id(&id).unwrap().unwrap();
+                let payload: serde_json::Value =
+                    serde_json::from_str(&recovered.content_json).unwrap();
+                assert_eq!(payload["reply_context"]["messageId"], "outside-history");
+                assert_eq!(payload["body"], "Edited thanks");
+                assert_eq!(payload["edited_at_ms"], 200);
+                assert_eq!(payload["media_data"], "retained");
+                assert_eq!(
+                    recovered.translated_text.as_deref(),
+                    Some("Translation retained")
+                );
+                let mut other = stored.clone();
+                other.content_json = r#"{"reply_context":{"text":"Must not replace"}}"#.into();
+                store.recover_reply_context(&other).unwrap();
+                assert_eq!(
+                    store
+                        .get_message_by_id(&id)
+                        .unwrap()
+                        .unwrap()
+                        .content
+                        .unwrap()["reply_context"]["text"],
+                    "Yep I can"
+                );
+            }
+        }
+        assert!(store
+            .get_message_by_id("outside-history")
+            .unwrap()
+            .is_none());
+        let mut original = store
+            .get_message_by_id("reply-false-\"text\"")
+            .unwrap()
+            .unwrap();
+        original.id = "different-chat".into();
+        original.contact_id = "friends@g.us".into();
+        original.content_json = r#"{"type":"text","body":"Hello"}"#.into();
+        store.add_message(&original).unwrap();
+        let mut spoof = original.clone();
+        spoof.contact_id = "family@g.us".into();
+        spoof.content_json = r#"{"reply_context":{"text":"Wrong chat"}}"#.into();
+        store.recover_reply_context(&spoof).unwrap();
+        spoof.contact_id = original.contact_id.clone();
+        spoof.sender_phone = Some("447700900456".into());
+        store.recover_reply_context(&spoof).unwrap();
+        assert!(store
+            .get_message_by_id("different-chat")
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap()
+            .get("reply_context")
+            .is_none());
+        let mut edit = original.clone();
+        edit.content_json = r#"{"type":"text","body":"Edited hello","reply_context":{"messageId":"outside-history","senderName":"Alex","text":"Yep I can"}}"#.into();
+        let updated = store.record_message_edit(&edit, 500).unwrap().unwrap();
+        assert_eq!(
+            updated.content.unwrap()["reply_context"]["text"],
+            "Yep I can"
+        );
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
 
     #[tokio::test]
     async fn device_identity_live_and_history_messages_use_account_contact_and_phone() {

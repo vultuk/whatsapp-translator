@@ -261,3 +261,21 @@ test('a history response captured before a live edit cannot restore its old text
   app.normalizeLoadedMessages = new Function('contactId','rawMessages','additionalReactionTargets',extractMethodBody(appJs,'normalizeLoadedMessages'));
   assert.deepEqual(app.normalizeLoadedMessages('chat',[original],[]),[edited]);
 });
+
+test('incoming embedded quotes reach web rendering without an original history message', () => {
+  const app = {
+    getMessageSenderJid: () => '447700900123@s.whatsapp.net',
+    formatMessageTime: () => '09:41', renderContent: () => '<p>Thanks!</p>', renderReactions: () => '',
+    escapeHtml: text => String(text || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
+  };
+  app.prepareMessageForCache = new Function('message', extractMethodBody(appJs, 'prepareMessageForCache'));
+  app.renderMessage = new Function('message', 'isMessageStarred', extractMethodBody(appJs, 'renderMessage'));
+  const quote = {messageId: 'outside-history', senderName: 'Alex', text: 'Yep I can <bring lunch>'};
+  const message = app.prepareMessageForCache({id:'reply',contactId:'family@g.us',isFromMe:false,chatType:'group',senderName:'Sam',content:{type:'text',body:'Thanks!',reply_context:quote}});
+  const restored = JSON.parse(JSON.stringify(message));
+  const html = app.renderMessage(restored, () => false);
+  assert.match(html, /class="quoted-sender">Alex</);
+  assert.match(html, /class="quoted-text">Yep I can &lt;bring lunch&gt;</);
+  assert.match(html, /data-message-id="reply"/);
+  assert.equal(restored.replyContext.messageId, 'outside-history');
+});

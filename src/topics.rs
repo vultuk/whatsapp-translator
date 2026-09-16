@@ -11,6 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc, time::Duration};
@@ -40,11 +41,20 @@ pub struct TopicImportSummary {
 #[serde(rename_all = "camelCase")]
 pub struct ChatTopic {
     pub id: String,
+    pub category_id: String,
     pub contact_id: String,
     pub contact_name: String,
     pub title: String,
     pub message_count: i64,
     pub last_message_time: i64,
+}
+
+pub fn category_id(name_key: &str) -> String {
+    format!("category:{}", URL_SAFE_NO_PAD.encode(name_key))
+}
+
+pub fn category_key(id: &str) -> Option<String> {
+    String::from_utf8(URL_SAFE_NO_PAD.decode(id.strip_prefix("category:")?).ok()?).ok()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -180,7 +190,7 @@ async fn classify(state: &AppState, batch: &TopicBatch) -> Result<usize> {
     let messages: Vec<Value> = batch.messages.iter().map(|m| {
         let content: Value = serde_json::from_str(&m.content_json).unwrap_or(Value::Null);
         json!({"messageId":m.id,"text":m.original_text.as_deref().unwrap_or("").chars().take(2000).collect::<String>(),
-               "replyTo":content.get("reply_to").or_else(|| content.get("replyTo")),"timestamp":m.timestamp})
+               "replyTo":content.get("reply_context").or_else(|| content.get("reply_to")).or_else(|| content.get("replyTo")),"timestamp":m.timestamp})
     }).collect();
     let (output, usage) = translator.classify_topics(json!({
         "labelLanguage":translator.default_language(),"existingTopics":existing,"context":context,"messages":messages
