@@ -1,7 +1,7 @@
 use super::*;
 use crate::topics::{
     revision, valid_title, ChatTopic, TopicAssignment, TopicBatch, TopicLabel, TopicSetting,
-    BATCH_SIZE, INITIAL_MESSAGES,
+    BATCH_SIZE, INITIAL_MESSAGES, LABEL_BATCH_SIZE,
 };
 use serde_json::{json, Value};
 
@@ -84,6 +84,7 @@ impl MessageStore {
         "#)?;
         self.recover_topic_jobs("topic_json_input_v1", "json_input")?;
         self.recover_topic_jobs("topic_background_timeout_v1", "background_timeout")?;
+        self.recover_topic_jobs("topic_compact_batches_v1", "compact_batches")?;
         self.queue_legacy_topic_labels()?;
         Ok(())
     }
@@ -112,14 +113,17 @@ impl MessageStore {
             WHERE j.attempts<3 AND j.retry_at<=?1 AND EXISTS(SELECT 1 FROM topic_assignments a JOIN messages m ON m.id=a.message_id AND m.contact_id=t.contact_id WHERE a.topic_id=t.id)
             ORDER BY j.retry_at,t.name_key,t.id LIMIT ?2"#)?;
         let labels = stmt
-            .query_map(params![chrono::Utc::now().timestamp(), BATCH_SIZE], |r| {
-                Ok(TopicLabel {
-                    id: r.get(0)?,
-                    contact_id: r.get(1)?,
-                    epoch: r.get(2)?,
-                    title: r.get(3)?,
-                })
-            })?
+            .query_map(
+                params![chrono::Utc::now().timestamp(), LABEL_BATCH_SIZE],
+                |r| {
+                    Ok(TopicLabel {
+                        id: r.get(0)?,
+                        contact_id: r.get(1)?,
+                        epoch: r.get(2)?,
+                        title: r.get(3)?,
+                    })
+                },
+            )?
             .collect::<rusqlite::Result<_>>()?;
         Ok(labels)
     }
@@ -195,16 +199,19 @@ impl MessageStore {
             [marker],
         )? > 0;
         let recovered = if first_run {
-            Some(tx.execute(r#"UPDATE topic_jobs SET attempts=0,retry_at=0 WHERE attempts>0
+            Some((tx.execute(r#"UPDATE topic_jobs SET attempts=0,retry_at=0 WHERE attempts>0
                 AND message_id IN (SELECT m.id FROM messages m JOIN topic_settings s ON s.contact_id=m.contact_id AND s.enabled=1)
-                AND NOT EXISTS(SELECT 1 FROM topic_assignments a WHERE a.message_id=topic_jobs.message_id)"#, [])?)
+                AND NOT EXISTS(SELECT 1 FROM topic_assignments a WHERE a.message_id=topic_jobs.message_id)"#, [])?,
+                tx.execute(r#"UPDATE topic_label_jobs SET attempts=0,retry_at=0 WHERE attempts>0 AND topic_id IN
+                    (SELECT t.id FROM chat_topics t JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1)"#,[])?))
         } else {
             None
         };
         tx.commit()?;
-        if let Some(count) = recovered {
+        if let Some((messages, topics)) = recovered {
             tracing::info!(
-                messages = count,
+                messages,
+                topics,
                 reason,
                 "Recovered topic jobs after request fix"
             );
@@ -729,6 +736,111 @@ mod tests {
                 .len(),
             2
         );
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn compact_batch_fix_recovers_only_enabled_label_jobs_once() {
+        let (store, path) = test_store();
+        legacy_topic(&store, "family@g.us", "a", "Hospital support");
+        legacy_topic(&store, "disabled@g.us", "b", "Hospital recovery");
+        seed_legacy_migration(&store);
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE topic_label_jobs SET attempts=3,retry_at=9999999999",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE topic_settings SET enabled=0 WHERE contact_id='disabled@g.us'",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "DELETE FROM app_settings WHERE key='topic_compact_batches_v1'",
+                [],
+            )
+            .unwrap();
+        }
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        let batch = store.next_topic_labels().unwrap();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].contact_id, "family@g.us");
+        assert_eq!(
+            store
+                .topic_settings()
+                .unwrap()
+                .iter()
+                .find(|s| s.contact_id == "disabled@g.us")
+                .unwrap()
+                .failed_count,
+            1
+        );
+        assert_eq!(store.list_topics().unwrap()[0].title, "Hospital support");
+        for _ in 0..3 {
+            store.retry_topic_labels(&batch).unwrap();
+        }
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        assert!(store.next_topic_labels().unwrap().is_empty());
+        assert_eq!(
+            store
+                .topic_settings()
+                .unwrap()
+                .iter()
+                .find(|s| s.contact_id == "family@g.us")
+                .unwrap()
+                .failed_count,
+            1
+        );
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn compact_batch_recovery_completes_the_queue_in_bounded_chunks() {
+        let (store, path) = test_store();
+        for n in 0..19 {
+            add(&store, "family@g.us", &format!("m{n:02}"), n);
+        }
+        store.set_topics_enabled("family@g.us", true).unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute("UPDATE topic_jobs SET attempts=3,retry_at=9999999999", [])
+                .unwrap();
+            conn.execute(
+                "DELETE FROM app_settings WHERE key='topic_compact_batches_v1'",
+                [],
+            )
+            .unwrap();
+        }
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        let mut sizes = Vec::new();
+        let mut ids = std::collections::HashSet::new();
+        while let Some(batch) = store.next_topic_batch().unwrap() {
+            sizes.push(batch.messages.len());
+            for message in &batch.messages {
+                assert!(ids.insert(message.id.clone()));
+            }
+            finish(&store, &batch, "Hospital");
+        }
+        assert_eq!(sizes, [8, 8, 3]);
+        assert_eq!(ids.len(), 19);
+        assert_eq!(store.list_topics().unwrap()[0].message_count, 19);
+        assert_eq!(store.topic_settings().unwrap()[0].pending_count, 0);
+        add(&store, "family@g.us", "later", 100);
+        let later = store.next_topic_batch().unwrap().unwrap();
+        for _ in 0..3 {
+            store.retry_topic_batch(&later).unwrap();
+        }
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        assert!(store.next_topic_batch().unwrap().is_none());
+        assert_eq!(store.topic_settings().unwrap()[0].failed_count, 1);
         drop(store);
         std::fs::remove_dir_all(path).unwrap();
     }

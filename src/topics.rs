@@ -17,7 +17,9 @@ use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 pub const INITIAL_MESSAGES: usize = 200;
-pub const BATCH_SIZE: usize = 24;
+// Keep both tasks small enough to leave room for reasoning and complete JSON output.
+pub const BATCH_SIZE: usize = 8;
+pub const LABEL_BATCH_SIZE: usize = 8;
 pub const IMPORT_DAYS: i64 = 7;
 
 #[derive(Debug)]
