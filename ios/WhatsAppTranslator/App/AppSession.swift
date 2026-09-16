@@ -1017,6 +1017,9 @@ final class AppSession {
         guard phase == .ready, !demoMode, !isConnecting else { return }
         _ = await restoreCachedState()
         await refresh()
+        // Topic assignments may finish while the app is suspended, without a live
+        // event reaching this session. Refresh both the catalog and loaded pages.
+        await loadTopics()
         if mainTab == .messages { await loadFeed() }
     }
 

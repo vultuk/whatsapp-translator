@@ -1858,6 +1858,14 @@ class WhatsAppClient {
     } finally { this.liveRecoveryRunning = false; }
   }
 
+  async refreshAfterBecomingVisible() {
+    if (document.visibilityState !== 'visible' || this.demoMode || this.authExpired) return;
+    if (!this.ws || this.ws.readyState === WebSocket.CLOSED) this.connectWebSocket();
+    // A topic can finish while the page is suspended, even if its socket still
+    // appears open. Reload the catalog and selected page independently.
+    await this.topics?.load();
+  }
+
   handleMessageUpdate(message) {
     if (this.liveRecoveryRunning) this.liveRecoveryPending = true;
     this.prepareMessageForCache(message);
@@ -5240,12 +5248,7 @@ class WhatsAppClient {
 
     // Handle visibility change (for reconnecting on mobile)
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        // Try to reconnect WebSocket if disconnected
-        if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
-          this.connectWebSocket();
-        }
-      }
+      void this.refreshAfterBecomingVisible();
     });
     window.addEventListener('online', () => this.connectWebSocket());
 

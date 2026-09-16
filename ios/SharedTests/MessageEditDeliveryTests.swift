@@ -7,10 +7,10 @@ import XCTest
 
 @MainActor
 final class MessageEditDeliveryTests: XCTestCase {
-    private func message(chat: String = "family@g.us", fromMe: Bool = false, body: String, revision: Int64 = 0) throws -> ChatMessage {
+    private func message(id: String = "original", chat: String = "family@g.us", fromMe: Bool = false, body: String, revision: Int64 = 0) throws -> ChatMessage {
         var content: [String: Any] = ["type": "text", "body": body]
         if revision > 0 { content["edited_at_ms"] = revision }
-        let json: [String: Any] = ["id": "original", "contactId": chat, "timestamp": 100,
+        let json: [String: Any] = ["id": id, "contactId": chat, "timestamp": 100,
             "isFromMe": fromMe, "isForwarded": false, "chatType": chat.hasSuffix("@g.us") ? "group" : "private",
             "contentType": "Text", "content": content, "originalText": body, "isTranslated": false]
         return try JSONDecoder().decode(ChatMessage.self, from: JSONSerialization.data(withJSONObject: json))
@@ -112,4 +112,66 @@ final class MessageEditDeliveryTests: XCTestCase {
         let cached = try JSONDecoder().decode(ChatMessage.self, from: JSONEncoder().encode(reply))
         XCTAssertEqual(cached.content?.replyContext?.messageId, "not-in-history")
     }
+
+    func testForegroundRefreshRecoversTopicsClassifiedWithoutALiveEvent() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [TopicRefreshProtocol.self]
+        let urlSession = URLSession(configuration: configuration)
+        defer { urlSession.invalidateAndCancel(); TopicRefreshProtocol.state.reset() }
+        let api = APIClient(session: urlSession)
+        await api.configure(try ServerConfiguration.make(address: "https://topic-refresh.example.test", password: "test"))
+        let session = AppSession(api: api, demoMode: false)
+        session.phase = .ready
+        session.mainTab = .chats
+        let old = try message(body: "Visiting the hospital")
+        let incoming = try message(id: "newly-classified", body: "The visit went well")
+        let topic = ChatTopic(id: "hospital", contactId: old.contactId, contactName: "Family", title: "Hospital", messageCount: 1, lastMessageTime: 100, categoryId: "category:hospital")
+        session.applyTopicCatalog(TopicCatalog(topics: [topic], settings: [], available: true))
+        session.topicPages[topic.id] = TopicPage(messages: [old])
+        session.topicPages["category:hospital"] = TopicPage(messages: [old])
+        let page = try JSONSerialization.data(withJSONObject: ["messages": [old, incoming].map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }, "hasMore": false])
+        TopicRefreshProtocol.state.responses = [
+            "/api/status": Data(#"{"connected":true}"#.utf8),
+            "/api/contacts": Data("[]".utf8),
+            "/api/topics": Data(#"{"available":true,"settings":[{"contactId":"family@g.us","enabled":true,"pendingCount":0,"failedCount":0}],"topics":[{"id":"hospital","categoryId":"category:hospital","contactId":"family@g.us","contactName":"Family","title":"Hospital","messageCount":2,"lastMessageTime":200}]}"#.utf8),
+            "/api/topics/hospital/messages": page,
+            "/api/topics/category:hospital/messages": page,
+        ]
+        // No topics_updated event is delivered: returning to the app must catch up itself.
+        await session.becameActive()
+        XCTAssertEqual(session.topics().first?.messageCount, 2)
+        XCTAssertEqual(session.topicPages[topic.id]?.messages.map(\.id), [old.id, incoming.id].sorted())
+        XCTAssertEqual(session.topicPages["category:hospital"]?.messages.count, 2)
+        XCTAssertTrue(TopicRefreshProtocol.state.requests.contains("/api/topics"))
+        XCTAssertFalse(TopicRefreshProtocol.state.requests.contains { $0.contains("mark-read") })
+    }
+}
+
+private final class TopicRefreshProtocol: URLProtocol, @unchecked Sendable {
+    static let state = TopicRefreshState()
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "topic-refresh.example.test" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let data = Self.state.respond(to: request)
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+private final class TopicRefreshState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var payloads: [String: Data] = [:]
+    private var recorded: [String] = []
+    var responses: [String: Data] { get { lock.withLock { payloads } } set { lock.withLock { payloads = newValue } } }
+    var requests: [String] { lock.withLock { recorded } }
+    func respond(to request: URLRequest) -> Data {
+        lock.withLock {
+            let path = request.url?.path ?? ""
+            recorded.append(path)
+            return payloads[path] ?? Data("{}".utf8)
+        }
+    }
+    func reset() { lock.withLock { payloads = [:]; recorded = [] } }
 }

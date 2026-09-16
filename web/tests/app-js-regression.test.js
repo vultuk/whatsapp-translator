@@ -32,6 +32,29 @@ function extractMethodBody(source, methodName) {
   assert.fail(`${methodName} body should terminate`);
 }
 
+test('foreground topic recovery refreshes a still-open socket session without marking messages read', async () => {
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const recover = new AsyncFunction('document', 'WebSocket', extractMethodBody(appJs, 'refreshAfterBecomingVisible'));
+  for (const readyState of [1, 3]) {
+    const calls = [];
+    const app = {ws: {readyState}, demoMode: false, authExpired: false,
+      connectWebSocket() { calls.push('connect'); },
+      topics: {async load() { calls.push('topics-and-selected-page'); }},
+      loadMessages() { assert.fail('A foreground topic refresh must not mark a conversation read'); },
+    };
+    await recover.call(app, {visibilityState: 'visible'}, {CLOSED: 3});
+    assert.deepEqual(calls, readyState === 3 ? ['connect', 'topics-and-selected-page'] : ['topics-and-selected-page']);
+    calls.length = 0;
+    await recover.call(app, {visibilityState: 'hidden'}, {CLOSED: 3});
+    app.authExpired = true;
+    await recover.call(app, {visibilityState: 'visible'}, {CLOSED: 3});
+    app.authExpired = false; app.demoMode = true;
+    await recover.call(app, {visibilityState: 'visible'}, {CLOSED: 3});
+    assert.deepEqual(calls, []);
+  }
+  assert.match(extractMethodBody(appJs, 'bindEvents'), /this\.refreshAfterBecomingVisible\(\)/);
+});
+
 test('workspace export carries portable local state but not auth', () => {
   const exportBody = extractMethodBody(appJs, 'getWorkspaceStateExport');
 
