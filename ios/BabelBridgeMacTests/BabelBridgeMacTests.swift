@@ -482,7 +482,9 @@ final class LiveReactionTests: XCTestCase {
             let started = expectation(description: "Snapshot request started")
             let pending = ReactionRequestState()
             ReactionSnapshotProtocol.state.handler = { request in
-                if request.request.url?.path.hasSuffix("/read") == true {
+                if request.request.url?.path == "/api/topics/messages" {
+                    request.respond(Data(#"{"topics":[]}"#.utf8))
+                } else if request.request.url?.path.hasSuffix("/read") == true {
                     request.respond(Data(#"{"success":true}"#.utf8))
                 } else {
                     pending.request = request

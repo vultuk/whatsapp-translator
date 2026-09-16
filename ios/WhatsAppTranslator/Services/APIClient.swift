@@ -151,6 +151,11 @@ actor APIClient {
         try await authorizedRequest("/api/topics")
     }
 
+    func messageTopics(ids: [String]) async throws -> MessageTopicsResponse {
+        try await authorizedRequest("/api/topics/messages", method: "POST",
+                                    body: JSONSerialization.data(withJSONObject: ["messageIds": ids]))
+    }
+
     func topicImportPreview() async throws -> TopicImportSummary {
         try await authorizedRequest("/api/topics/import")
     }

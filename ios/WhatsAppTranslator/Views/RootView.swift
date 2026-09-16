@@ -144,7 +144,7 @@ struct TopicFilterBar: View {
 
     private var topics: [ChatTopic] { session.topics(for: contactID) }
     private var selected: ChatTopic? { topics.first { $0.id == selection } }
-    private var pending: Int { session.topicCatalog.settings.filter { contactID == nil || $0.contactId == contactID }.reduce(0) { $0 + $1.pendingCount } }
+    private var pending: Int { session.topicCatalog.pendingCount(contactID: contactID) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {

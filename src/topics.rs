@@ -80,15 +80,28 @@ pub struct MessageTopic {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MessageTopicsRequest { message_ids: Vec<String> }
+pub struct MessageTopicsRequest {
+    message_ids: Vec<String>,
+}
 
-pub async fn message_topics(State(state): State<Arc<AppState>>, Json(request): Json<MessageTopicsRequest>) -> Response {
-    if request.message_ids.len() > 200 || request.message_ids.iter().any(|id| id.len()>512) {
-        return (StatusCode::BAD_REQUEST, "Request at most 200 message topics").into_response();
+pub async fn message_topics(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<MessageTopicsRequest>,
+) -> Response {
+    if request.message_ids.len() > 200 || request.message_ids.iter().any(|id| id.len() > 512) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Request at most 200 message topics",
+        )
+            .into_response();
     }
     match state.store.message_topics(&request.message_ids) {
         Ok(topics) => Json(json!({"topics":topics})).into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Could not load message topics").into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not load message topics",
+        )
+            .into_response(),
     }
 }
 

@@ -105,6 +105,7 @@ private struct MessageSwipeReplyModifier: ViewModifier {
 }
 
 struct MessageBubble: View {
+    @Environment(AppSession.self) private var session
     @Environment(\.translatorPalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let message: ChatMessage
@@ -543,6 +544,8 @@ struct MessageBubble: View {
         .controlGroupStyle(.palette)
         .menuActionDismissBehavior(.enabled)
         .disabled(isBusy)
+        Divider()
+        Label(session.messageTopicLabel(for: message), systemImage: "tag")
         Divider()
         Button("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
         if message.canTranslate {

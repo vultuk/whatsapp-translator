@@ -2,6 +2,26 @@ import XCTest
 
 @MainActor
 final class ConversationTranslationUITests: XCTestCase {
+    func testLongPressShowsSavedTopicInCombinedMessagesAndChat() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoTopics"]
+        app.launch()
+        let target = app.staticTexts["The replay is brilliant too."].firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: 10))
+        target.press(forDuration: 1)
+        let label = app.staticTexts["Topic: Football"].firstMatch
+        XCTAssertTrue(label.waitForExistence(timeout: 5))
+        let combined = XCTAttachment(screenshot: app.screenshot())
+        combined.name = "Saved topic in combined message long press menu"; combined.lifetime = .keepAlways; add(combined)
+        app.buttons["React with ❤️"].firstMatch.tap()
+        app.buttons["Open chat: Family"].firstMatch.tap()
+        XCTAssertTrue(target.waitForExistence(timeout: 5))
+        target.press(forDuration: 1)
+        XCTAssertTrue(label.waitForExistence(timeout: 5))
+        let chat = XCTAttachment(screenshot: app.screenshot())
+        chat.name = "Saved topic in conversation long press menu"; chat.lifetime = .keepAlways; add(chat)
+    }
+
     func testChatListKeepsCompactRowsAndVisibleFiltersWhenScrolling() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoChatList"]

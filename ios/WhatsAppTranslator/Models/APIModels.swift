@@ -676,11 +676,35 @@ struct TopicSetting: Codable, Equatable, Sendable {
     var failedCount: Int
 }
 
+struct MessageTopic: Decodable, Sendable {
+    let messageId: String
+    let contactId: String
+    let revision: Int64
+    let title: String?
+    let state: String
+
+    var menuLabel: String {
+        if let title = title?.nilIfBlank { return "Topic: \(title)" }
+        return switch state {
+        case "pending": "Topic: Organising…"
+        case "failed": "Topic: Needs retry"
+        case "off": "Topic: Off for this chat"
+        default: "Topic: Not categorised"
+        }
+    }
+}
+
+struct MessageTopicsResponse: Decodable, Sendable { let topics: [MessageTopic] }
+
 struct TopicCatalog: Codable, Sendable {
     var topics: [ChatTopic]
     var settings: [TopicSetting]
     var available: Bool
     static let empty = TopicCatalog(topics: [], settings: [], available: false)
+
+    func pendingCount(contactID: String? = nil) -> Int {
+        settings.filter { $0.enabled && (contactID == nil || $0.contactId == contactID) }.reduce(0) { $0 + $1.pendingCount }
+    }
 
     var unifiedTopics: [ChatTopic] {
         Dictionary(grouping: topics, by: { $0.categoryId ?? $0.id }).map { id, members in

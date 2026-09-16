@@ -113,6 +113,47 @@ final class MessageEditDeliveryTests: XCTestCase {
         XCTAssertEqual(cached.content?.replyContext?.messageId, "not-in-history")
     }
 
+    func testCombinedOrganisingCountIgnoresPausedChats() {
+        let catalog = TopicCatalog(topics: [], settings: [
+            TopicSetting(contactId: "paused", enabled: false, pendingCount: 3, failedCount: 1),
+            TopicSetting(contactId: "active", enabled: true, pendingCount: 2, failedCount: 0)
+        ], available: true)
+        XCTAssertEqual(catalog.pendingCount(), 2)
+        XCTAssertEqual(catalog.pendingCount(contactID: "paused"), 0)
+        XCTAssertEqual(catalog.pendingCount(contactID: "active"), 2)
+    }
+
+    func testMessageTopicMenuLoadsSavedAssignmentAndRejectsStaleEditMetadata() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [TopicRefreshProtocol.self]
+        let urlSession = URLSession(configuration: configuration)
+        defer { urlSession.invalidateAndCancel(); TopicRefreshProtocol.state.reset() }
+        let api = APIClient(session: urlSession)
+        await api.configure(try ServerConfiguration.make(address: "https://topic-refresh.example.test", password: "test"))
+        let session = AppSession(api: api, demoMode: false)
+        let original = try message(body: "Hospital visit")
+        session.messages[original.contactId] = [original]
+        session.feedByID[original.id] = original
+        TopicRefreshProtocol.state.responses = ["/api/topics/messages": Data(#"{"topics":[{"messageId":"original","contactId":"family@g.us","revision":0,"title":"Hospital","state":"assigned"}]}"#.utf8)]
+        await session.refreshMessageTopics([original])
+        XCTAssertEqual(session.messageTopicLabel(for: original), "Topic: Hospital")
+        let edit = try message(body: "Shopping now", revision: 200)
+        try session.handle(update(edit))
+        XCTAssertNotEqual(session.messageTopicLabel(for: edit), "Topic: Hospital")
+        await session.refreshMessageTopics([edit]) // old HTTP response is rejected
+        XCTAssertNotEqual(session.messageTopicLabel(for: edit), "Topic: Hospital")
+        TopicRefreshProtocol.state.responses = ["/api/topics/messages": Data(#"{"topics":[{"messageId":"original","contactId":"family@g.us","revision":200,"title":null,"state":"pending"}]}"#.utf8)]
+        await session.refreshMessageTopics([edit])
+        XCTAssertEqual(session.messageTopicLabel(for: edit), "Topic: Organising…")
+        TopicRefreshProtocol.state.responses = ["/api/topics/messages": Data(#"{"topics":[{"messageId":"original","contactId":"family@g.us","revision":200,"title":"Shopping","state":"assigned"}]}"#.utf8)]
+        await session.refreshMessageTopics([edit])
+        XCTAssertEqual(session.messageTopicLabel(for: edit), "Topic: Shopping")
+        XCTAssertFalse(TopicRefreshProtocol.state.requests.contains { $0.contains("/read") })
+        for (state, label) in [("failed", "Needs retry"), ("off", "Off for this chat"), ("unassigned", "Not categorised")] {
+            XCTAssertEqual(MessageTopic(messageId: "a", contactId: "x", revision: 0, title: nil, state: state).menuLabel, "Topic: \(label)")
+        }
+    }
+
     func testForegroundRefreshRecoversTopicsClassifiedWithoutALiveEvent() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [TopicRefreshProtocol.self]

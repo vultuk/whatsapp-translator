@@ -39,6 +39,50 @@ final class AppSession {
     private var demoTopicCatalog = TopicCatalog.empty
     private var demoTopicPages: [String: TopicPage] = [:]
 
+    var messageTopicStates: [String: MessageTopic] = [:]
+    private var messageTopicRequests: [String: UUID] = [:]
+    private var messageTopicFailures: Set<String> = []
+
+    func messageTopicLabel(for message: ChatMessage) -> String {
+        if demoMode {
+            if let topic = demoTopicCatalog.topics.first(where: { topic in
+                demoTopicPages[topic.id]?.messages.contains(where: { $0.id == message.id && $0.contactId == message.contactId }) == true
+            }) { return "Topic: \(topic.title)" }
+            return "Topic: Not categorised"
+        }
+        if let status = messageTopicStates[message.id], status.contactId == message.contactId, status.revision == message.editRevision {
+            return status.menuLabel
+        }
+        if messageTopicFailures.contains(message.id) { return "Topic: Unavailable" }
+        return "Topic: Checking…"
+    }
+
+    func refreshMessageTopics(_ values: [ChatMessage]) async {
+        guard !demoMode else { return }
+        let unique = Dictionary(values.filter { !$0.isReaction }.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.editRevision > b.editRevision ? a : b })
+        let ids = unique.keys.sorted()
+        let epoch = topicAccountEpoch
+        let request = UUID()
+        for id in ids { messageTopicRequests[id] = request }
+        for start in stride(from: 0, to: ids.count, by: 200) {
+            let batch = Array(ids[start..<min(start + 200, ids.count)])
+            do {
+                let response = try await api.messageTopics(ids: batch)
+                guard epoch == topicAccountEpoch else { return }
+                for status in response.topics {
+                    guard messageTopicRequests[status.messageId] == request,
+                          let message = unique[status.messageId], status.contactId == message.contactId,
+                          status.revision == message.editRevision else { continue }
+                    messageTopicStates[status.messageId] = status
+                    messageTopicFailures.remove(status.messageId)
+                }
+            } catch {
+                guard epoch == topicAccountEpoch else { return }
+                for id in batch where messageTopicRequests[id] == request { messageTopicFailures.insert(id) }
+            }
+        }
+    }
+
     func topics(for contactID: String? = nil) -> [ChatTopic] {
         guard let contactID else { return topicCatalog.unifiedTopics }
         return topicCatalog.topics.filter { $0.contactId == contactID }
@@ -69,6 +113,7 @@ final class AppSession {
             guard topicCatalogRequest == request else { return }
             applyTopicCatalog(catalog)
             topicCatalogError = nil
+            await refreshMessageTopics(Array(feedByID.values) + messages.values.flatMap { $0 } + topicPages.values.flatMap { $0.messages })
             for id in Set(topicPages.keys).union(topicLoading) {
                 await loadTopicMessages(id)
             }
@@ -148,6 +193,7 @@ final class AppSession {
             for message in valid {
                 messages[message.contactId] = normalizeMessages((messages[message.contactId] ?? []) + [message])
             }
+            await refreshMessageTopics(response.messages)
         } catch {
             guard revision == topicRevision, !Self.isExpectedCancellation(error) else { return }
             var page = topicPages[id] ?? TopicPage()
@@ -216,6 +262,7 @@ final class AppSession {
             for (id, page) in Dictionary(grouping: pageMessages, by: \.contactId) {
                 messages[id] = normalizeMessages((messages[id] ?? []) + page)
             }
+            await refreshMessageTopics(response.messages)
         } catch {
             guard generation == feedGeneration, !Self.isExpectedCancellation(error) else { return }
             feedError = error.localizedDescription
@@ -452,6 +499,7 @@ final class AppSession {
             )
             #endif
             await persistCache()
+            await refreshMessageTopics(response.messages)
         } catch {
             guard !Self.isExpectedCancellation(error) else { return }
             presentError("Couldn’t load messages", error)
@@ -467,6 +515,7 @@ final class AppSession {
             messages[contactID] = normalizeMessages(response.messages + (messages[contactID] ?? []))
             messageHistoryHasMore[contactID] = false
             await persistCache()
+            await refreshMessageTopics(response.messages)
         } catch {
             guard !Self.isExpectedCancellation(error) else { return }
             presentError("Couldn’t load the full conversation", error)
@@ -954,6 +1003,9 @@ final class AppSession {
         reactionEvents = [:]
         topicCatalog = .empty
         topicPages = [:]
+        messageTopicStates = [:]
+        messageTopicRequests = [:]
+        messageTopicFailures = []
         topicAccountEpoch = UUID()
         topicCatalogRequest = UUID()
         topicRevision = UUID()
@@ -1081,6 +1133,7 @@ final class AppSession {
                 if feedLoading { feedEventsDuringLoad.insert(affectedID) }
             }
             if !message.isReaction, let updated = normalized.first(where: { $0.id == message.id }) {
+                if topicCatalog.available { Task { await refreshMessageTopics([updated]) } }
                 updateContactPreview(
                     contactID: updated.contactId,
                     preview: updated.displayText,

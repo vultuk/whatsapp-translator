@@ -256,9 +256,16 @@ impl MessageStore {
             (SELECT count(*) FROM topic_jobs j JOIN messages m ON m.id=j.message_id WHERE m.contact_id=s.contact_id AND j.attempts>=3) +
             (SELECT count(*) FROM topic_assignments a JOIN messages m ON m.id=a.message_id JOIN chat_topics t ON t.id=a.topic_id AND t.contact_id=m.contact_id JOIN topic_label_jobs j ON j.topic_id=t.id WHERE t.contact_id=s.contact_id AND j.attempts>=3) ELSE 0 END
             FROM topic_settings s JOIN contacts c ON c.id=s.contact_id ORDER BY s.contact_id"#)?;
-        let result = stmt.query_map([], |r| Ok(TopicSetting {
-            contact_id: r.get(0)?, enabled: r.get(1)?, pending_count: r.get(2)?, failed_count: r.get(3)?,
-        }))?.collect::<rusqlite::Result<_>>()?;
+        let result = stmt
+            .query_map([], |r| {
+                Ok(TopicSetting {
+                    contact_id: r.get(0)?,
+                    enabled: r.get(1)?,
+                    pending_count: r.get(2)?,
+                    failed_count: r.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
         Ok(result)
     }
 
@@ -274,7 +281,17 @@ impl MessageStore {
             (SELECT count(*) FROM topic_label_jobs j JOIN chat_topics t ON t.id=j.topic_id JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1 WHERE j.attempts>=3 AND EXISTS(SELECT 1 FROM topic_assignments a JOIN messages m ON m.id=a.message_id AND m.contact_id=t.contact_id WHERE a.topic_id=t.id)),
             (SELECT count(*) FROM topic_assignments a JOIN chat_topics t ON t.id=a.topic_id JOIN topic_label_jobs j ON j.topic_id=t.id JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=0 WHERE j.attempts<3),
             (SELECT count(*) FROM topic_assignments a JOIN chat_topics t ON t.id=a.topic_id JOIN topic_label_jobs j ON j.topic_id=t.id WHERE j.attempts<3 AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=a.message_id AND m.contact_id=t.contact_id))"#, [chrono::Utc::now().timestamp()], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
-        tracing::info!(ready, delayed, failed, label_ready, label_delayed, label_failed, disabled_label_messages, invalid_label_assignments, "Topic queue health");
+        tracing::info!(
+            ready,
+            delayed,
+            failed,
+            label_ready,
+            label_delayed,
+            label_failed,
+            disabled_label_messages,
+            invalid_label_assignments,
+            "Topic queue health"
+        );
         Ok(())
     }
 
@@ -288,9 +305,17 @@ impl MessageStore {
             LEFT JOIN chat_topics t ON t.id=a.topic_id AND t.contact_id=m.contact_id
             LEFT JOIN topic_jobs j ON j.message_id=m.id
             WHERE m.id IN (SELECT value FROM json_each(?1)) ORDER BY m.id"#)?;
-        let result = stmt.query_map([serde_json::to_string(ids)?], |r| Ok(crate::topics::MessageTopic {
-            message_id:r.get(0)?, contact_id:r.get(1)?, revision:r.get(2)?, title:r.get(3)?, state:r.get(4)?,
-        }))?.collect::<rusqlite::Result<_>>()?;
+        let result = stmt
+            .query_map([serde_json::to_string(ids)?], |r| {
+                Ok(crate::topics::MessageTopic {
+                    message_id: r.get(0)?,
+                    contact_id: r.get(1)?,
+                    revision: r.get(2)?,
+                    title: r.get(3)?,
+                    state: r.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
         Ok(result)
     }
 
@@ -523,9 +548,15 @@ mod tests {
     #[test]
     fn organising_counts_exclude_disabled_and_invalid_legacy_assignments() {
         let (store, path) = test_store();
-        for id in ["a", "b", "c"] { add(&store, "disabled@g.us", id, 100); }
+        for id in ["a", "b", "c"] {
+            add(&store, "disabled@g.us", id, 100);
+        }
         store.set_topics_enabled("disabled@g.us", true).unwrap();
-        finish(&store, &store.next_topic_batch().unwrap().unwrap(), "Hospital");
+        finish(
+            &store,
+            &store.next_topic_batch().unwrap().unwrap(),
+            "Hospital",
+        );
         seed_legacy_migration(&store);
         assert_eq!(store.topic_settings().unwrap()[0].pending_count, 3);
         store.set_topics_enabled("disabled@g.us", false).unwrap();
@@ -534,15 +565,31 @@ mod tests {
         // Retaining paused work is intentional: opting back in resumes it.
         store.set_topics_enabled("disabled@g.us", true).unwrap();
         assert_eq!(store.topic_settings().unwrap()[0].pending_count, 3);
-        store.upsert_contact("wrong@g.us", None, None, Some("group"), 100).unwrap();
-        store.conn.lock().unwrap().execute("UPDATE messages SET contact_id='wrong@g.us' WHERE id='a'", []).unwrap();
+        store
+            .upsert_contact("wrong@g.us", None, None, Some("group"), 100)
+            .unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE messages SET contact_id='wrong@g.us' WHERE id='a'",
+                [],
+            )
+            .unwrap();
         assert_eq!(store.topic_settings().unwrap()[0].pending_count, 2);
-        store.conn.lock().unwrap().execute("UPDATE topic_label_jobs SET attempts=3", []).unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE topic_label_jobs SET attempts=3", [])
+            .unwrap();
         assert_eq!(store.topic_settings().unwrap()[0].failed_count, 2);
         store.set_topics_enabled("disabled@g.us", false).unwrap();
         assert_eq!(store.topic_settings().unwrap()[0].failed_count, 0);
         store.log_topic_queue_health().unwrap();
-        drop(store); std::fs::remove_dir_all(path).unwrap();
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
@@ -555,7 +602,11 @@ mod tests {
         assert_eq!(status().state, "off");
         store.set_topics_enabled("family@g.us", true).unwrap();
         assert_eq!(status().state, "pending");
-        finish(&store, &store.next_topic_batch().unwrap().unwrap(), "Hospital");
+        finish(
+            &store,
+            &store.next_topic_batch().unwrap().unwrap(),
+            "Hospital",
+        );
         assert_eq!(status().title.as_deref(), Some("Hospital"));
         store.set_topics_enabled("family@g.us", false).unwrap();
         assert_eq!(status().title.as_deref(), Some("Hospital"));
@@ -565,16 +616,31 @@ mod tests {
         assert!(status().title.is_none());
         assert_eq!(status().revision, 200);
         let batch = store.next_topic_batch().unwrap().unwrap();
-        for _ in 0..3 { store.retry_topic_batch(&batch).unwrap(); }
+        for _ in 0..3 {
+            store.retry_topic_batch(&batch).unwrap();
+        }
         assert_eq!(status().state, "failed");
         store.set_topics_enabled("family@g.us", true).unwrap();
-        finish(&store, &store.next_topic_batch().unwrap().unwrap(), "Shopping");
+        finish(
+            &store,
+            &store.next_topic_batch().unwrap().unwrap(),
+            "Shopping",
+        );
         assert_eq!(status().title.as_deref(), Some("Shopping"));
         // A corrupt cross-chat assignment must never leak a misleading title.
-        store.conn.lock().unwrap().execute("UPDATE chat_topics SET contact_id='other@g.us' WHERE title='Shopping'", []).unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE chat_topics SET contact_id='other@g.us' WHERE title='Shopping'",
+                [],
+            )
+            .unwrap();
         assert!(status().title.is_none());
         assert_eq!(status().state, "unassigned");
-        drop(store); std::fs::remove_dir_all(path).unwrap();
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
