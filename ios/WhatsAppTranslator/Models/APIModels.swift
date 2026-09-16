@@ -659,7 +659,7 @@ struct ConversationSettings: Codable, Equatable, Sendable {
     }
 }
 
-struct ChatCodable, Equatable, Identifiable, Sendable {
+struct ChatTopic: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let contactId: String
     let contactName: String
@@ -676,7 +676,7 @@ struct TopicSetting: Codable, Equatable, Sendable {
     var failedCount: Int
 }
 
-struct MessageDecodable, Sendable {
+struct MessageTopic: Decodable, Sendable {
     let messageId: String
     let contactId: String
     let revision: Int64

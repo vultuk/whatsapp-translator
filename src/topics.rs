@@ -218,6 +218,7 @@ pub fn start(state: Arc<AppState>) {
                             }
                         }
                     }
+                    let _ = state.store.log_topic_queue_health();
                     let _ = state.broadcast_tx.send(WebSocketEvent::TopicsUpdated);
                 }
                 Ok(_) => {}
@@ -282,6 +283,7 @@ pub fn start(state: Arc<AppState>) {
                             }
                         }
                     }
+                    let _ = state.store.log_topic_queue_health();
                     let _ = state.broadcast_tx.send(WebSocketEvent::TopicsUpdated);
                 }
                 Ok(None) => {}
