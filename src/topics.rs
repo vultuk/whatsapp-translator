@@ -142,9 +142,20 @@ pub fn start(state: Arc<AppState>) {
                                         .map(|s| s.0)
                                         .unwrap_or("internal");
                                     let upstream = error.downcast_ref::<OpenAiApiFailure>();
+                                    let transport = error.downcast_ref::<reqwest::Error>();
                                     (
                                         stage,
-                                        upstream.map(|e| e.reason).unwrap_or("operation_failed"),
+                                        upstream.map(|e| e.reason).unwrap_or_else(|| {
+                                            if transport.is_some_and(reqwest::Error::is_timeout) {
+                                                "request_timeout"
+                                            } else if transport
+                                                .is_some_and(reqwest::Error::is_connect)
+                                            {
+                                                "connection_failed"
+                                            } else {
+                                                "operation_failed"
+                                            }
+                                        }),
                                         upstream.map(|e| e.status),
                                     )
                                 }

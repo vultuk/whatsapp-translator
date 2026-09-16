@@ -80,17 +80,18 @@ impl MessageStore {
             CREATE TRIGGER IF NOT EXISTS topics_delete AFTER DELETE ON messages
             BEGIN DELETE FROM topic_assignments WHERE message_id=OLD.id; DELETE FROM topic_jobs WHERE message_id=OLD.id; END;
         "#)?;
-        self.recover_topic_json_input_jobs()?;
+        self.recover_topic_jobs("topic_json_input_v1", "json_input")?;
+        self.recover_topic_jobs("topic_background_timeout_v1", "background_timeout")?;
         Ok(())
     }
 
-    /// Build 62 omitted the Responses JSON-mode input instruction. Retry existing opted-in jobs once.
-    fn recover_topic_json_input_jobs(&self) -> Result<()> {
+    /// Retry existing opted-in jobs once after a known request failure is fixed.
+    fn recover_topic_jobs(&self, marker: &str, reason: &str) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let first_run = tx.execute(
-            "INSERT OR IGNORE INTO app_settings(key,value) VALUES('topic_json_input_v1','1')",
-            [],
+            "INSERT OR IGNORE INTO app_settings(key,value) VALUES(?1,'1')",
+            [marker],
         )? > 0;
         let recovered = if first_run {
             Some(tx.execute(r#"UPDATE topic_jobs SET attempts=0,retry_at=0 WHERE attempts>0
@@ -103,7 +104,8 @@ impl MessageStore {
         if let Some(count) = recovered {
             tracing::info!(
                 messages = count,
-                "Recovered topic jobs after JSON request fix"
+                reason,
+                "Recovered topic jobs after request fix"
             );
         }
         Ok(())
@@ -430,6 +432,42 @@ mod tests {
                 .len(),
             2
         );
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn timeout_fix_recovers_exhausted_jobs_once_without_enabling_other_chats() {
+        let (store, path) = test_store();
+        add(&store, "family@g.us", "pending", 100);
+        add(&store, "friends@g.us", "disabled", 100);
+        store.set_topics_enabled("family@g.us", true).unwrap();
+        let batch = store.next_topic_batch().unwrap().unwrap();
+        for _ in 0..3 {
+            store.retry_topic_batch(&batch).unwrap();
+        }
+        assert!(store.next_topic_batch().unwrap().is_none());
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM app_settings WHERE key='topic_background_timeout_v1'",
+                [],
+            )
+            .unwrap();
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        let batch = store.next_topic_batch().unwrap().unwrap();
+        assert_eq!(batch.messages.len(), 1);
+        assert_eq!(batch.messages[0].id, "pending");
+        assert_eq!(store.topic_settings().unwrap().len(), 1);
+        for _ in 0..3 {
+            store.retry_topic_batch(&batch).unwrap();
+        }
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        assert!(store.next_topic_batch().unwrap().is_none());
         drop(store);
         std::fs::remove_dir_all(path).unwrap();
     }
