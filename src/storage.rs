@@ -2174,6 +2174,7 @@ impl MessageStore {
             r#"
             DELETE FROM message_edits;
             DELETE FROM topic_jobs;
+            DELETE FROM topic_label_jobs;
             DELETE FROM topic_assignments;
             DELETE FROM chat_topics;
             DELETE FROM topic_settings;

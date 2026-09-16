@@ -1,7 +1,7 @@
 //! Optional, persisted topic views. A single background worker never delays message delivery.
 use crate::{
     storage::StoredMessage,
-    translation::OpenAiApiFailure,
+    translation::{OpenAiApiFailure, OpenAiOutputFailure},
     web::{AppState, WebSocketEvent},
 };
 use anyhow::{ensure, Context, Result};
@@ -73,6 +73,21 @@ pub struct TopicBatch {
     pub messages: Vec<StoredMessage>,
 }
 
+#[derive(Clone, Debug)]
+pub struct TopicLabel {
+    pub id: String,
+    pub contact_id: String,
+    pub epoch: String,
+    pub title: String,
+}
+
+pub fn valid_title(title: &str) -> bool {
+    !title.trim().is_empty()
+        && title.chars().count() <= 32
+        && title.split_whitespace().count() <= 3
+        && !title.chars().any(char::is_control)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TopicAssignment {
@@ -81,13 +96,20 @@ pub struct TopicAssignment {
 }
 
 pub fn parse_assignments(text: &str, batch: &TopicBatch) -> Result<Vec<TopicAssignment>> {
+    parse_title_assignments(text, batch.messages.iter().map(|m| m.id.as_str()))
+}
+
+pub fn parse_title_assignments<'a>(
+    text: &str,
+    ids: impl Iterator<Item = &'a str>,
+) -> Result<Vec<TopicAssignment>> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Output {
         assignments: Vec<TopicAssignment>,
     }
     let result: Output = serde_json::from_str(text).context("Invalid topic response")?;
-    let expected: HashSet<&str> = batch.messages.iter().map(|m| m.id.as_str()).collect();
+    let expected: HashSet<&str> = ids.collect();
     ensure!(
         result.assignments.len() == expected.len(),
         "Incomplete topic response"
@@ -99,12 +121,7 @@ pub fn parse_assignments(text: &str, batch: &TopicBatch) -> Result<Vec<TopicAssi
                 && seen.insert(&assignment.message_id),
             "Invalid topic message ID"
         );
-        ensure!(
-            !assignment.topic.trim().is_empty()
-                && assignment.topic.chars().count() <= 60
-                && !assignment.topic.chars().any(char::is_control),
-            "Invalid topic title"
-        );
+        ensure!(valid_title(&assignment.topic), "Invalid topic title");
     }
     Ok(result.assignments)
 }
@@ -124,6 +141,46 @@ pub fn start(state: Arc<AppState>) {
         loop {
             // Also batches bursts of messages into a single request.
             tokio::time::sleep(Duration::from_secs(5)).await;
+            // Simplify a bounded batch of existing labels, retaining all assignments until
+            // a complete response is validated. New messages still get a turn each cycle.
+            match state.store.next_topic_labels() {
+                Ok(labels) if !labels.is_empty() => {
+                    match tokio::time::timeout(
+                        Duration::from_secs(120),
+                        simplify_labels(&state, &labels),
+                    )
+                    .await
+                    {
+                        Ok(Ok(count)) => {
+                            tracing::info!(topics = count, "Topic simplification completed")
+                        }
+                        failure => {
+                            let reason = match &failure {
+                                Ok(Err(error)) => error
+                                    .downcast_ref::<OpenAiOutputFailure>()
+                                    .map(|e| e.0)
+                                    .or_else(|| {
+                                        error.downcast_ref::<OpenAiApiFailure>().map(|e| e.reason)
+                                    })
+                                    .unwrap_or("operation_failed"),
+                                _ => "timeout",
+                            };
+                            if state.store.retry_topic_labels(&labels).is_ok() {
+                                tracing::warn!(
+                                    topics = labels.len(),
+                                    reason,
+                                    "Topic simplification deferred; retry state saved"
+                                );
+                            } else {
+                                tracing::error!("Could not save topic simplification retry state");
+                            }
+                        }
+                    }
+                    let _ = state.broadcast_tx.send(WebSocketEvent::TopicsUpdated);
+                }
+                Ok(_) => {}
+                Err(_) => tracing::warn!("Could not read topic simplification queue"),
+            }
             match state.store.next_topic_batch() {
                 Ok(Some(batch)) => {
                     let result =
@@ -143,10 +200,15 @@ pub fn start(state: Arc<AppState>) {
                                         .unwrap_or("internal");
                                     let upstream = error.downcast_ref::<OpenAiApiFailure>();
                                     let transport = error.downcast_ref::<reqwest::Error>();
+                                    let output = error.downcast_ref::<OpenAiOutputFailure>();
                                     (
                                         stage,
                                         upstream.map(|e| e.reason).unwrap_or_else(|| {
-                                            if transport.is_some_and(reqwest::Error::is_timeout) {
+                                            if let Some(output) = output {
+                                                output.0
+                                            } else if transport
+                                                .is_some_and(reqwest::Error::is_timeout)
+                                            {
                                                 "request_timeout"
                                             } else if transport
                                                 .is_some_and(reqwest::Error::is_connect)
@@ -185,6 +247,26 @@ pub fn start(state: Arc<AppState>) {
             }
         }
     });
+}
+
+async fn simplify_labels(state: &AppState, labels: &[TopicLabel]) -> Result<usize> {
+    let account_epoch = state.voice_epoch.load(std::sync::atomic::Ordering::SeqCst);
+    let translator = state.translator.as_ref().context("AI is unavailable")?;
+    let existing = state.store.topic_names("")?;
+    let input: Vec<Value> = labels
+        .iter()
+        .map(|label| json!({"messageId":label.id,"title":label.title}))
+        .collect();
+    let (output, usage) = translator.simplify_topic_labels(json!({"labelLanguage":translator.default_language(),"existingTopics":existing,"labels":input})).await?;
+    if account_epoch != state.voice_epoch.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(0);
+    }
+    state
+        .store
+        .record_usage(None, None, &usage, "topic_simplification")?;
+    let assignments =
+        parse_title_assignments(&output, labels.iter().map(|label| label.id.as_str()))?;
+    state.store.finish_topic_labels(labels, &assignments)
 }
 
 async fn classify(state: &AppState, batch: &TopicBatch) -> Result<usize> {

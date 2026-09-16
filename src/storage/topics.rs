@@ -1,6 +1,7 @@
 use super::*;
 use crate::topics::{
-    revision, ChatTopic, TopicAssignment, TopicBatch, TopicSetting, BATCH_SIZE, INITIAL_MESSAGES,
+    revision, valid_title, ChatTopic, TopicAssignment, TopicBatch, TopicLabel, TopicSetting,
+    BATCH_SIZE, INITIAL_MESSAGES,
 };
 use serde_json::{json, Value};
 
@@ -62,6 +63,7 @@ impl MessageStore {
             CREATE TABLE IF NOT EXISTS topic_assignments(message_id TEXT PRIMARY KEY, topic_id TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS topic_assignments_topic ON topic_assignments(topic_id);
             CREATE TABLE IF NOT EXISTS topic_jobs(message_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, retry_at INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS topic_label_jobs(topic_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, retry_at INTEGER NOT NULL DEFAULT 0);
             CREATE TRIGGER IF NOT EXISTS topics_insert AFTER INSERT ON messages
             WHEN EXISTS(SELECT 1 FROM topic_settings WHERE contact_id=NEW.contact_id AND enabled=1)
                 AND length(trim(COALESCE(NEW.original_text,'')))>0
@@ -82,6 +84,105 @@ impl MessageStore {
         "#)?;
         self.recover_topic_jobs("topic_json_input_v1", "json_input")?;
         self.recover_topic_jobs("topic_background_timeout_v1", "background_timeout")?;
+        self.queue_legacy_topic_labels()?;
+        Ok(())
+    }
+
+    fn queue_legacy_topic_labels(&self) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        if tx.execute(
+            "INSERT OR IGNORE INTO app_settings(key,value) VALUES('topic_broad_labels_v1','1')",
+            [],
+        )? > 0
+        {
+            tx.execute(
+                "INSERT OR IGNORE INTO topic_label_jobs(topic_id) SELECT id FROM chat_topics",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn next_topic_labels(&self) -> Result<Vec<TopicLabel>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(r#"SELECT t.id,t.contact_id,s.epoch,t.title FROM topic_label_jobs j
+            JOIN chat_topics t ON t.id=j.topic_id JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1
+            WHERE j.attempts<3 AND j.retry_at<=?1 AND EXISTS(SELECT 1 FROM topic_assignments a JOIN messages m ON m.id=a.message_id AND m.contact_id=t.contact_id WHERE a.topic_id=t.id)
+            ORDER BY j.retry_at,t.name_key,t.id LIMIT ?2"#)?;
+        let labels = stmt
+            .query_map(params![chrono::Utc::now().timestamp(), BATCH_SIZE], |r| {
+                Ok(TopicLabel {
+                    id: r.get(0)?,
+                    contact_id: r.get(1)?,
+                    epoch: r.get(2)?,
+                    title: r.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(labels)
+    }
+
+    pub fn finish_topic_labels(
+        &self,
+        labels: &[TopicLabel],
+        assignments: &[TopicAssignment],
+    ) -> Result<usize> {
+        let mut seen = std::collections::HashSet::new();
+        anyhow::ensure!(
+            assignments.len() == labels.len(),
+            "Incomplete topic label assignments"
+        );
+        for assignment in assignments {
+            anyhow::ensure!(
+                seen.insert(&assignment.message_id)
+                    && labels.iter().any(|label| label.id == assignment.message_id)
+                    && valid_title(&assignment.topic),
+                "Invalid topic label assignment"
+            );
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut moves = Vec::new();
+        for assignment in assignments {
+            let label = labels
+                .iter()
+                .find(|label| label.id == assignment.message_id)
+                .unwrap();
+            // Opt-out, reset, and stale responses cannot change a conversation's assignments.
+            if !tx.query_row(r#"SELECT EXISTS(SELECT 1 FROM chat_topics t JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1
+                JOIN topic_label_jobs j ON j.topic_id=t.id WHERE t.id=?1 AND t.contact_id=?2 AND t.title=?3 AND s.epoch=?4)"#,
+                params![label.id,label.contact_id,label.title,label.epoch], |r| r.get::<_,bool>(0))? { continue; }
+            let title = assignment.topic.trim();
+            let key = title.to_lowercase();
+            tx.execute("INSERT OR IGNORE INTO chat_topics(id,contact_id,title,name_key) VALUES(?1,?2,?3,?4)",params![uuid::Uuid::new_v4().to_string(),label.contact_id,title,key])?;
+            let target: String = tx.query_row(
+                "SELECT id FROM chat_topics WHERE contact_id=?1 AND name_key=?2",
+                params![label.contact_id, key],
+                |r| r.get(0),
+            )?;
+            moves.push(json!({"source":label.id,"target":target,"chat":label.contact_id}));
+            tx.execute("DELETE FROM topic_label_jobs WHERE topic_id=?", [&label.id])?;
+        }
+        // Apply all mappings in one statement so an A -> B mapping cannot be moved again by B -> C.
+        tx.execute(r#"UPDATE topic_assignments AS a SET topic_id=(SELECT json_extract(value,'$.target') FROM json_each(?1) WHERE json_extract(value,'$.source')=a.topic_id)
+            WHERE EXISTS(SELECT 1 FROM json_each(?1) j JOIN messages m ON m.id=a.message_id
+                WHERE json_extract(j.value,'$.source')=a.topic_id AND json_extract(j.value,'$.chat')=m.contact_id)"#, [serde_json::to_string(&moves)?])?;
+        tx.commit()?;
+        Ok(moves.len())
+    }
+
+    pub fn retry_topic_labels(&self, labels: &[TopicLabel]) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        for label in labels {
+            tx.execute(r#"UPDATE topic_label_jobs SET attempts=attempts+1,retry_at=?1+(30*(attempts+1)*(attempts+1)) WHERE topic_id=?2
+                AND EXISTS(SELECT 1 FROM chat_topics t JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1
+                    WHERE t.id=?2 AND t.contact_id=?3 AND t.title=?4 AND s.epoch=?5)"#,
+                params![chrono::Utc::now().timestamp(),label.id,label.contact_id,label.title,label.epoch])?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -124,6 +225,7 @@ impl MessageStore {
         );
         tx.execute("INSERT INTO topic_settings VALUES (?1,?2,?3) ON CONFLICT(contact_id) DO UPDATE SET enabled=excluded.enabled,epoch=excluded.epoch", params![id,enabled,uuid::Uuid::new_v4().to_string()])?;
         if enabled {
+            tx.execute("UPDATE topic_label_jobs SET attempts=0,retry_at=0 WHERE topic_id IN (SELECT id FROM chat_topics WHERE contact_id=?)", [id])?;
             tx.execute("UPDATE topic_jobs SET attempts=0,retry_at=0 WHERE message_id IN (SELECT id FROM messages WHERE contact_id=?)", [id])?;
             tx.execute(r#"INSERT OR IGNORE INTO topic_jobs(message_id)
                 SELECT id FROM (SELECT id, original_text,content_type,content_json FROM messages WHERE contact_id=?1
@@ -140,8 +242,10 @@ impl MessageStore {
     pub fn topic_settings(&self) -> Result<Vec<TopicSetting>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt=conn.prepare(r#"SELECT s.contact_id,s.enabled,
-            (SELECT count(*) FROM topic_jobs j JOIN messages m ON m.id=j.message_id WHERE m.contact_id=s.contact_id AND j.attempts<3),
-            (SELECT count(*) FROM topic_jobs j JOIN messages m ON m.id=j.message_id WHERE m.contact_id=s.contact_id AND j.attempts>=3)
+            (SELECT count(*) FROM topic_jobs j JOIN messages m ON m.id=j.message_id WHERE m.contact_id=s.contact_id AND j.attempts<3) +
+            (SELECT count(*) FROM topic_assignments a JOIN chat_topics t ON t.id=a.topic_id JOIN topic_label_jobs j ON j.topic_id=t.id WHERE t.contact_id=s.contact_id AND j.attempts<3),
+            (SELECT count(*) FROM topic_jobs j JOIN messages m ON m.id=j.message_id WHERE m.contact_id=s.contact_id AND j.attempts>=3) +
+            (SELECT count(*) FROM topic_assignments a JOIN chat_topics t ON t.id=a.topic_id JOIN topic_label_jobs j ON j.topic_id=t.id WHERE t.contact_id=s.contact_id AND j.attempts>=3)
             FROM topic_settings s JOIN contacts c ON c.id=s.contact_id ORDER BY s.contact_id"#)?;
         let result = stmt
             .query_map([], |r| {
@@ -263,12 +367,7 @@ impl MessageStore {
                 continue;
             }
             let title = a.topic.trim();
-            anyhow::ensure!(
-                !title.is_empty()
-                    && title.chars().count() <= 60
-                    && !title.chars().any(char::is_control),
-                "Invalid topic title"
-            );
+            anyhow::ensure!(valid_title(title), "Invalid topic title");
             let key = title.to_lowercase();
             tx.execute(
                 "INSERT OR IGNORE INTO chat_topics(id,contact_id,title,name_key) VALUES(?,?,?,?)",
@@ -361,6 +460,204 @@ mod tests {
             })
             .collect::<Vec<_>>();
         store.finish_topic_batch(batch, &assignments).unwrap();
+    }
+
+    fn legacy_topic(store: &MessageStore, chat: &str, id: &str, title: &str) {
+        add(store, chat, id, 100);
+        store.set_topics_enabled(chat, true).unwrap();
+        finish(
+            store,
+            &store.next_topic_batch().unwrap().unwrap(),
+            "Temporary",
+        );
+        store.conn.lock().unwrap().execute("UPDATE chat_topics SET title=?1,name_key=?2 WHERE contact_id=?3 AND name_key='temporary'",params![title,title.to_lowercase(),chat]).unwrap();
+    }
+
+    fn seed_legacy_migration(store: &MessageStore) {
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM app_settings WHERE key='topic_broad_labels_v1'",
+                [],
+            )
+            .unwrap();
+        store.queue_legacy_topic_labels().unwrap();
+    }
+
+    #[test]
+    fn broad_labels_merge_existing_topics_and_preserve_messages_across_restart() {
+        let (store, path) = test_store();
+        legacy_topic(
+            &store,
+            "family@g.us",
+            "a",
+            "Hospital support during recovery",
+        );
+        legacy_topic(
+            &store,
+            "family@g.us",
+            "b",
+            "Procedure delay and discharge plans",
+        );
+        legacy_topic(
+            &store,
+            "friend@s.whatsapp.net",
+            "c",
+            "Hospital recovery and surgery",
+        );
+        legacy_topic(
+            &store,
+            "family@g.us",
+            "d",
+            "Grocery shopping and meal requests",
+        );
+        seed_legacy_migration(&store);
+        let batch = store.next_topic_labels().unwrap();
+        assert_eq!(batch.len(), 4);
+        let before = store.get_message_by_id("b").unwrap().unwrap().content_json;
+        let assignments: Vec<_> = batch
+            .iter()
+            .map(|label| TopicAssignment {
+                message_id: label.id.clone(),
+                topic: if label.title.starts_with("Grocery") {
+                    "Shopping"
+                } else {
+                    "Hospital"
+                }
+                .into(),
+            })
+            .collect();
+        assert_eq!(store.finish_topic_labels(&batch, &assignments).unwrap(), 4);
+        assert!(store.next_topic_labels().unwrap().is_empty());
+        assert_eq!(
+            store.get_message_by_id("b").unwrap().unwrap().content_json,
+            before
+        );
+        let topics = store.list_topics().unwrap();
+        assert_eq!(topics.len(), 3);
+        let category = crate::topics::category_id("hospital");
+        let messages = store
+            .topic_messages(&category, 10, None, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+        assert_eq!(messages[2].contact_id, "friend@s.whatsapp.net");
+        assert!(store
+            .topic_settings()
+            .unwrap()
+            .iter()
+            .all(|s| s.pending_count == 0));
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        assert!(store.next_topic_labels().unwrap().is_empty());
+        assert_eq!(
+            store
+                .topic_messages(&category, 10, None, None)
+                .unwrap()
+                .unwrap()
+                .len(),
+            3
+        );
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn broad_label_migration_rejects_invalid_output_and_in_flight_opt_out() {
+        let (store, path) = test_store();
+        legacy_topic(&store, "family@g.us", "a", "Hospital support");
+        legacy_topic(&store, "disabled@g.us", "b", "Hospital recovery");
+        store.set_topics_enabled("disabled@g.us", false).unwrap();
+        seed_legacy_migration(&store);
+        let batch = store.next_topic_labels().unwrap();
+        assert_eq!(batch.len(), 1);
+        let bad = [TopicAssignment {
+            message_id: batch[0].id.clone(),
+            topic: "A label with too many words".into(),
+        }];
+        assert!(store.finish_topic_labels(&batch, &bad).is_err());
+        assert_eq!(store.list_topics().unwrap()[0].title, "Hospital support");
+        let valid = [TopicAssignment {
+            message_id: batch[0].id.clone(),
+            topic: "Hospital".into(),
+        }];
+        store.set_topics_enabled("family@g.us", false).unwrap();
+        assert_eq!(store.finish_topic_labels(&batch, &valid).unwrap(), 0);
+        store.set_topics_enabled("family@g.us", true).unwrap();
+        assert_eq!(store.finish_topic_labels(&batch, &valid).unwrap(), 0); // epoch changed
+        let current = store.next_topic_labels().unwrap();
+        assert_eq!(store.finish_topic_labels(&current, &valid).unwrap(), 1);
+        store.set_topics_enabled("disabled@g.us", true).unwrap();
+        let retry = store.next_topic_labels().unwrap();
+        assert_eq!(retry.len(), 1);
+        for _ in 0..3 {
+            store.retry_topic_labels(&retry).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute("UPDATE topic_label_jobs SET retry_at=0", [])
+                .unwrap();
+        }
+        assert!(store.next_topic_labels().unwrap().is_empty());
+        assert_eq!(
+            store
+                .topic_settings()
+                .unwrap()
+                .iter()
+                .find(|s| s.contact_id == "disabled@g.us")
+                .unwrap()
+                .failed_count,
+            1
+        );
+        store.clear_all().unwrap();
+        assert!(store.next_topic_labels().unwrap().is_empty());
+        let count: i64 = store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT count(*) FROM topic_label_jobs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn label_mappings_apply_simultaneously_without_cascading_between_sources() {
+        let (store, path) = test_store();
+        legacy_topic(&store, "family@g.us", "a", "Travel");
+        legacy_topic(&store, "family@g.us", "b", "Holidays");
+        seed_legacy_migration(&store);
+        let batch = store.next_topic_labels().unwrap();
+        let assignments: Vec<_> = batch
+            .iter()
+            .map(|label| TopicAssignment {
+                message_id: label.id.clone(),
+                topic: if label.title == "Travel" {
+                    "Holidays"
+                } else {
+                    "Weekend plans"
+                }
+                .into(),
+            })
+            .collect();
+        store.finish_topic_labels(&batch, &assignments).unwrap();
+        for (key, id) in [("holidays", "a"), ("weekend plans", "b")] {
+            let messages = store
+                .topic_messages(&crate::topics::category_id(key), 10, None, None)
+                .unwrap()
+                .unwrap();
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].id, id);
+        }
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
