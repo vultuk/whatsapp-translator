@@ -1210,6 +1210,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/messages/:contact_id", get(get_messages))
         .route("/api/feed", get(get_unified_messages))
         .route("/api/topics", get(crate::topics::catalog))
+        .route("/api/topics/messages", post(crate::topics::message_topics))
         .route(
             "/api/topics/import",
             get(crate::topics::import_preview).post(crate::topics::import_recent),
@@ -5231,6 +5232,23 @@ mod tests {
             account
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn message_topic_inspection_is_authenticated_bounded_and_read_only() {
+        let (state, dir) = test_state(Some("private"));
+        let request = |count: usize| HttpRequest::builder().method("POST").uri("/api/topics/messages")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"messageIds":vec!["missing"; count]}).to_string())).unwrap();
+        assert_eq!(create_router(state).oneshot(request(1)).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        let (state, other_dir) = test_state(None);
+        let app = create_router(state);
+        assert_eq!(app.clone().oneshot(request(201)).await.unwrap().status(), StatusCode::BAD_REQUEST);
+        let response = app.oneshot(request(1)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), serde_json::json!({"topics":[]}));
+        let _ = std::fs::remove_dir_all(dir); let _ = std::fs::remove_dir_all(other_dir);
     }
 
     #[tokio::test]

@@ -249,21 +249,48 @@ impl MessageStore {
     pub fn topic_settings(&self) -> Result<Vec<TopicSetting>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt=conn.prepare(r#"SELECT s.contact_id,s.enabled,
+            CASE WHEN s.enabled=1 THEN
             (SELECT count(*) FROM topic_jobs j JOIN messages m ON m.id=j.message_id WHERE m.contact_id=s.contact_id AND j.attempts<3) +
-            (SELECT count(*) FROM topic_assignments a JOIN chat_topics t ON t.id=a.topic_id JOIN topic_label_jobs j ON j.topic_id=t.id WHERE t.contact_id=s.contact_id AND j.attempts<3),
+            (SELECT count(*) FROM topic_assignments a JOIN messages m ON m.id=a.message_id JOIN chat_topics t ON t.id=a.topic_id AND t.contact_id=m.contact_id JOIN topic_label_jobs j ON j.topic_id=t.id WHERE t.contact_id=s.contact_id AND j.attempts<3) ELSE 0 END,
+            CASE WHEN s.enabled=1 THEN
             (SELECT count(*) FROM topic_jobs j JOIN messages m ON m.id=j.message_id WHERE m.contact_id=s.contact_id AND j.attempts>=3) +
-            (SELECT count(*) FROM topic_assignments a JOIN chat_topics t ON t.id=a.topic_id JOIN topic_label_jobs j ON j.topic_id=t.id WHERE t.contact_id=s.contact_id AND j.attempts>=3)
+            (SELECT count(*) FROM topic_assignments a JOIN messages m ON m.id=a.message_id JOIN chat_topics t ON t.id=a.topic_id AND t.contact_id=m.contact_id JOIN topic_label_jobs j ON j.topic_id=t.id WHERE t.contact_id=s.contact_id AND j.attempts>=3) ELSE 0 END
             FROM topic_settings s JOIN contacts c ON c.id=s.contact_id ORDER BY s.contact_id"#)?;
-        let result = stmt
-            .query_map([], |r| {
-                Ok(TopicSetting {
-                    contact_id: r.get(0)?,
-                    enabled: r.get(1)?,
-                    pending_count: r.get(2)?,
-                    failed_count: r.get(3)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
+        let result = stmt.query_map([], |r| Ok(TopicSetting {
+            contact_id: r.get(0)?, enabled: r.get(1)?, pending_count: r.get(2)?, failed_count: r.get(3)?,
+        }))?.collect::<rusqlite::Result<_>>()?;
+        Ok(result)
+    }
+
+    /// Counts only: no chat identifiers, text, or topic titles in operational logs.
+    pub fn log_topic_queue_health(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let (ready, delayed, failed): (i64,i64,i64) = conn.query_row(r#"SELECT
+            COALESCE(sum(j.attempts<3 AND j.retry_at<=?1),0), COALESCE(sum(j.attempts<3 AND j.retry_at>?1),0), COALESCE(sum(j.attempts>=3),0)
+            FROM topic_jobs j JOIN messages m ON m.id=j.message_id JOIN topic_settings s ON s.contact_id=m.contact_id AND s.enabled=1"#, [chrono::Utc::now().timestamp()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        let (label_ready, label_delayed, label_failed, disabled_label_messages, invalid_label_assignments): (i64,i64,i64,i64,i64) = conn.query_row(r#"SELECT
+            (SELECT count(*) FROM topic_label_jobs j JOIN chat_topics t ON t.id=j.topic_id JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1 WHERE j.attempts<3 AND j.retry_at<=?1 AND EXISTS(SELECT 1 FROM topic_assignments a JOIN messages m ON m.id=a.message_id AND m.contact_id=t.contact_id WHERE a.topic_id=t.id)),
+            (SELECT count(*) FROM topic_label_jobs j JOIN chat_topics t ON t.id=j.topic_id JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1 WHERE j.attempts<3 AND j.retry_at>?1 AND EXISTS(SELECT 1 FROM topic_assignments a JOIN messages m ON m.id=a.message_id AND m.contact_id=t.contact_id WHERE a.topic_id=t.id)),
+            (SELECT count(*) FROM topic_label_jobs j JOIN chat_topics t ON t.id=j.topic_id JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=1 WHERE j.attempts>=3 AND EXISTS(SELECT 1 FROM topic_assignments a JOIN messages m ON m.id=a.message_id AND m.contact_id=t.contact_id WHERE a.topic_id=t.id)),
+            (SELECT count(*) FROM topic_assignments a JOIN chat_topics t ON t.id=a.topic_id JOIN topic_label_jobs j ON j.topic_id=t.id JOIN topic_settings s ON s.contact_id=t.contact_id AND s.enabled=0 WHERE j.attempts<3),
+            (SELECT count(*) FROM topic_assignments a JOIN chat_topics t ON t.id=a.topic_id JOIN topic_label_jobs j ON j.topic_id=t.id WHERE j.attempts<3 AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=a.message_id AND m.contact_id=t.contact_id))"#, [chrono::Utc::now().timestamp()], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
+        tracing::info!(ready, delayed, failed, label_ready, label_delayed, label_failed, disabled_label_messages, invalid_label_assignments, "Topic queue health");
+        Ok(())
+    }
+
+    pub fn message_topics(&self, ids: &[String]) -> Result<Vec<crate::topics::MessageTopic>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(r#"SELECT m.id,m.contact_id,COALESCE(json_extract(m.content_json,'$.edited_at_ms'),0),t.title,
+            CASE WHEN t.id IS NOT NULL THEN 'assigned' WHEN COALESCE(s.enabled,0)=0 THEN 'off'
+                 WHEN j.attempts>=3 THEN 'failed' WHEN j.message_id IS NOT NULL THEN 'pending' ELSE 'unassigned' END
+            FROM messages m LEFT JOIN topic_settings s ON s.contact_id=m.contact_id
+            LEFT JOIN topic_assignments a ON a.message_id=m.id
+            LEFT JOIN chat_topics t ON t.id=a.topic_id AND t.contact_id=m.contact_id
+            LEFT JOIN topic_jobs j ON j.message_id=m.id
+            WHERE m.id IN (SELECT value FROM json_each(?1)) ORDER BY m.id"#)?;
+        let result = stmt.query_map([serde_json::to_string(ids)?], |r| Ok(crate::topics::MessageTopic {
+            message_id:r.get(0)?, contact_id:r.get(1)?, revision:r.get(2)?, title:r.get(3)?, state:r.get(4)?,
+        }))?.collect::<rusqlite::Result<_>>()?;
         Ok(result)
     }
 
@@ -491,6 +518,63 @@ mod tests {
             )
             .unwrap();
         store.queue_legacy_topic_labels().unwrap();
+    }
+
+    #[test]
+    fn organising_counts_exclude_disabled_and_invalid_legacy_assignments() {
+        let (store, path) = test_store();
+        for id in ["a", "b", "c"] { add(&store, "disabled@g.us", id, 100); }
+        store.set_topics_enabled("disabled@g.us", true).unwrap();
+        finish(&store, &store.next_topic_batch().unwrap().unwrap(), "Hospital");
+        seed_legacy_migration(&store);
+        assert_eq!(store.topic_settings().unwrap()[0].pending_count, 3);
+        store.set_topics_enabled("disabled@g.us", false).unwrap();
+        assert!(store.next_topic_labels().unwrap().is_empty());
+        assert_eq!(store.topic_settings().unwrap()[0].pending_count, 0);
+        // Retaining paused work is intentional: opting back in resumes it.
+        store.set_topics_enabled("disabled@g.us", true).unwrap();
+        assert_eq!(store.topic_settings().unwrap()[0].pending_count, 3);
+        store.upsert_contact("wrong@g.us", None, None, Some("group"), 100).unwrap();
+        store.conn.lock().unwrap().execute("UPDATE messages SET contact_id='wrong@g.us' WHERE id='a'", []).unwrap();
+        assert_eq!(store.topic_settings().unwrap()[0].pending_count, 2);
+        store.conn.lock().unwrap().execute("UPDATE topic_label_jobs SET attempts=3", []).unwrap();
+        assert_eq!(store.topic_settings().unwrap()[0].failed_count, 2);
+        store.set_topics_enabled("disabled@g.us", false).unwrap();
+        assert_eq!(store.topic_settings().unwrap()[0].failed_count, 0);
+        store.log_topic_queue_health().unwrap();
+        drop(store); std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn message_topic_inspection_tracks_saved_assignment_edit_retry_and_opt_out() {
+        let (store, path) = test_store();
+        add(&store, "family@g.us", "a", 100);
+        let ids = vec!["a".into(), "missing".into()];
+        let status = || store.message_topics(&ids).unwrap().remove(0);
+        assert_eq!(store.message_topics(&ids).unwrap().len(), 1);
+        assert_eq!(status().state, "off");
+        store.set_topics_enabled("family@g.us", true).unwrap();
+        assert_eq!(status().state, "pending");
+        finish(&store, &store.next_topic_batch().unwrap().unwrap(), "Hospital");
+        assert_eq!(status().title.as_deref(), Some("Hospital"));
+        store.set_topics_enabled("family@g.us", false).unwrap();
+        assert_eq!(status().title.as_deref(), Some("Hospital"));
+        store.set_topics_enabled("family@g.us", true).unwrap();
+        store.conn.lock().unwrap().execute("UPDATE messages SET original_text='Shopping now',content_json=json_set(content_json,'$.edited_at_ms',200) WHERE id='a'", []).unwrap();
+        assert_eq!(status().state, "pending");
+        assert!(status().title.is_none());
+        assert_eq!(status().revision, 200);
+        let batch = store.next_topic_batch().unwrap().unwrap();
+        for _ in 0..3 { store.retry_topic_batch(&batch).unwrap(); }
+        assert_eq!(status().state, "failed");
+        store.set_topics_enabled("family@g.us", true).unwrap();
+        finish(&store, &store.next_topic_batch().unwrap().unwrap(), "Shopping");
+        assert_eq!(status().title.as_deref(), Some("Shopping"));
+        // A corrupt cross-chat assignment must never leak a misleading title.
+        store.conn.lock().unwrap().execute("UPDATE chat_topics SET contact_id='other@g.us' WHERE title='Shopping'", []).unwrap();
+        assert!(status().title.is_none());
+        assert_eq!(status().state, "unassigned");
+        drop(store); std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
@@ -777,8 +861,9 @@ mod tests {
                 .find(|s| s.contact_id == "disabled@g.us")
                 .unwrap()
                 .failed_count,
-            1
+            0
         );
+        assert_eq!(store.conn.lock().unwrap().query_row("SELECT attempts FROM topic_label_jobs j JOIN chat_topics t ON t.id=j.topic_id WHERE t.contact_id='disabled@g.us'", [], |r| r.get::<_,i64>(0)).unwrap(), 3);
         assert_eq!(store.list_topics().unwrap()[0].title, "Hospital support");
         for _ in 0..3 {
             store.retry_topic_labels(&batch).unwrap();

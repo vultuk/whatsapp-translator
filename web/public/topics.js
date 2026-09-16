@@ -40,7 +40,7 @@ export function setupTopics(app) {
     earlier.hidden = !state.selectedId || !state.hasMore;
     earlier.disabled = loading;
     const setting = state.catalog.settings.find(item => item.contactId === app.currentContactId);
-    status.textContent = error || (loading ? 'Loading topic…' : setting?.pendingCount ? `Organising ${setting.pendingCount} messages…` : setting?.failedCount ? 'Some messages need retrying. Open Topics.' : '');
+    status.textContent = error || (loading ? 'Loading topic…' : setting?.enabled && setting.pendingCount ? `Organising ${setting.pendingCount} messages…` : setting?.enabled && setting.failedCount ? 'Some messages need retrying. Open Topics.' : '');
     retry.hidden = !error;
   }
 

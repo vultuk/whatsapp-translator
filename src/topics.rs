@@ -68,6 +68,30 @@ pub struct TopicSetting {
     pub failed_count: i64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageTopic {
+    pub message_id: String,
+    pub contact_id: String,
+    pub revision: i64,
+    pub title: Option<String>,
+    pub state: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MessageTopicsRequest { message_ids: Vec<String> }
+
+pub async fn message_topics(State(state): State<Arc<AppState>>, Json(request): Json<MessageTopicsRequest>) -> Response {
+    if request.message_ids.len() > 200 || request.message_ids.iter().any(|id| id.len()>512) {
+        return (StatusCode::BAD_REQUEST, "Request at most 200 message topics").into_response();
+    }
+    match state.store.message_topics(&request.message_ids) {
+        Ok(topics) => Json(json!({"topics":topics})).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Could not load message topics").into_response(),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TopicBatch {
     pub contact_id: String,
@@ -136,6 +160,9 @@ pub fn revision(message: &StoredMessage) -> i64 {
 }
 
 pub fn start(state: Arc<AppState>) {
+    if state.store.log_topic_queue_health().is_err() {
+        tracing::warn!("Could not read topic queue health");
+    }
     if state.translator.is_none() {
         return;
     }
