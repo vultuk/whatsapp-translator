@@ -2,6 +2,53 @@ import XCTest
 
 @MainActor
 final class ConversationTranslationUITests: XCTestCase {
+    func testTopicsFilterUnifiedAndNormalViewsAndKeepIdenticalNamesSeparate() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoTopics"]
+        app.launch()
+        let filter = app.buttons["topic-filter"].firstMatch
+        XCTAssertTrue(filter.waitForExistence(timeout: 10))
+        let before = XCTAttachment(screenshot: app.screenshot()); before.name = "All group discussions in the unified feed"; before.lifetime = .keepAlways; add(before)
+        filter.tap()
+        let familyTopic = app.buttons["Weekend plans · Family"].firstMatch
+        XCTAssertTrue(familyTopic.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Weekend plans · Friends"].exists)
+        familyTopic.tap()
+        XCTAssertTrue(app.staticTexts["I’ll bring the picnic blanket and sandwiches."].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["What a goal in last night’s match!"].exists)
+        XCTAssertFalse(app.staticTexts["Sunday brunch at eleven?"].exists)
+        let filtered = XCTAttachment(screenshot: app.screenshot()); filtered.name = "Unified feed focused on Weekend plans in Family"; filtered.lifetime = .keepAlways; add(filtered)
+        app.buttons["Open chat: Family"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["topic-filter"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["topic-filter"].firstMatch.tap()
+        app.buttons["Football"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["The replay is brilliant too."].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["I’ll bring the picnic blanket and sandwiches."].exists)
+        let conversation = XCTAttachment(screenshot: app.screenshot()); conversation.name = "Conversation focused on the Football topic"; conversation.lifetime = .keepAlways; add(conversation)
+        app.buttons["manage-topics"].firstMatch.tap()
+        let topicToggle = app.switches["topics-enabled-family@g.us"].firstMatch
+        XCTAssertTrue(topicToggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(topicToggle.value as? String, "1")
+        topicToggle.switches.firstMatch.tap()
+        XCTAssertEqual(topicToggle.value as? String, "0")
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["I’ll bring the picnic blanket and sandwiches."].firstMatch.waitForExistence(timeout: 5))
+        let restored = XCTAttachment(screenshot: app.screenshot()); restored.name = "Disabling topics restores all messages"; restored.lifetime = .keepAlways; add(restored)
+        app.buttons["manage-topics"].firstMatch.tap()
+        let initialImport = app.buttons["import-recent-topics"].firstMatch
+        if !initialImport.isHittable { app.swipeUp() }
+        XCTAssertTrue(initialImport.waitForExistence(timeout: 5))
+        initialImport.tap()
+        XCTAssertTrue(app.buttons["Start import"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "5 messages across 2 chats")).firstMatch.exists)
+        let preview = XCTAttachment(screenshot: app.screenshot()); preview.name = "Initial import previews seven days across all chats"; preview.lifetime = .keepAlways; add(preview)
+        app.buttons["Start import"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Queued 5 messages across 2 chats")).firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Done"].firstMatch.tap()
+        app.buttons["topic-filter"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Football"].firstMatch.waitForExistence(timeout: 5))
+    }
+
     func testLiveEditChangesGetToGrrInUnifiedAndNormalViewsWithoutRelaunch() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoLiveEdits"]

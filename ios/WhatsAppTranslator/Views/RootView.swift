@@ -136,6 +136,201 @@ struct MainNavigationToolbar: ToolbarContent {
     }
 }
 
+struct TopicFilterBar: View {
+    @Environment(AppSession.self) private var session
+    let contactID: String?
+    @Binding var selection: String?
+    @State private var showManagement = false
+
+    private var topics: [ChatTopic] { session.topics(for: contactID) }
+    private var selected: ChatTopic? { topics.first { $0.id == selection } }
+    private var pending: Int { session.topicCatalog.settings.filter { contactID == nil || $0.contactId == contactID }.reduce(0) { $0 + $1.pendingCount } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 10) {
+                Menu {
+                    Button { selection = nil } label: {
+                        Label("All messages", systemImage: selection == nil ? "checkmark" : "text.bubble")
+                    }
+                    if !topics.isEmpty {
+                        Divider()
+                        ForEach(topics) { topic in
+                            Button { selection = topic.id } label: {
+                                Label(contactID == nil ? "\(topic.title) · \(topic.contactName)" : topic.title,
+                                      systemImage: selection == topic.id ? "checkmark" : "number")
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("Manage topics", systemImage: "slider.horizontal.3") { showManagement = true }
+                } label: {
+                    #if os(macOS)
+                    Label(selected.map { contactID == nil ? "\($0.title) · \($0.contactName)" : $0.title } ?? "All messages", systemImage: "line.3.horizontal.decrease.circle")
+                    #else
+                    HStack(spacing: 6) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(selected?.title ?? "All messages").font(.subheadline.weight(.semibold)).lineLimit(1)
+                            if contactID == nil, let selected { Text(selected.contactName).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                        }
+                        Image(systemName: "chevron.down").font(.caption2)
+                    }
+                    #endif
+                }
+                .accessibilityIdentifier("topic-filter")
+                Spacer(minLength: 4)
+                if pending > 0 {
+                    ProgressView().controlSize(.mini)
+                    Text("Organising \(pending)").font(.caption2).foregroundStyle(.secondary)
+                }
+                Button("Topics", systemImage: "sparkles") { showManagement = true }
+                    .font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("manage-topics")
+            }
+            if let error = session.topicCatalogError {
+                HStack {
+                    Text(error).font(.caption2).foregroundStyle(.secondary)
+                    Button("Retry") { Task { await session.loadTopics() } }.font(.caption)
+                }
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(.regularMaterial)
+        .sheet(isPresented: $showManagement) { TopicManagementView(contactID: contactID) }
+    }
+}
+
+struct TopicPageControls: View {
+    @Environment(AppSession.self) private var session
+    let topicID: String
+    var body: some View {
+        VStack(spacing: 8) {
+            if session.topicLoading.contains(topicID) { ProgressView("Loading topic…").font(.caption) }
+            if let error = session.topicPages[topicID]?.error {
+                Text(error).font(.caption).foregroundStyle(.secondary)
+                Button("Retry") { Task { await session.loadTopicMessages(topicID) } }
+            }
+            if session.topicPages[topicID]?.hasMore == true {
+                Button("Load earlier topic messages") { Task { await session.loadTopicMessages(topicID, older: true) } }
+                    .disabled(session.topicLoading.contains(topicID))
+                    .font(.caption.weight(.semibold)).buttonStyle(.bordered)
+            }
+        }
+    }
+}
+
+struct TopicManagementView: View {
+    @Environment(AppSession.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    let contactID: String?
+    @State private var saving: Set<String> = []
+    @State private var error: String?
+    @State private var importing = false
+    @State private var importPreview: TopicImportSummary?
+    @State private var showImportConfirmation = false
+    @State private var importStatus: String?
+    private var contacts: [Contact] {
+        session.contacts.filter { !$0.isUpdates && (contactID == nil || $0.id == contactID) }
+            .sorted { session.displayName(for: $0).localizedStandardCompare(session.displayName(for: $1)) == .orderedAscending }
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text("Follow one discussion at a time in Chats and Messages. Topics always stay separate by chat.")
+                        .font(.subheadline)
+                }
+                Section {
+                    ForEach(contacts) { contact in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Toggle(session.displayName(for: contact), isOn: Binding(
+                                get: { session.topicSetting(for: contact.id).enabled },
+                                set: { setEnabled($0, for: contact.id) }
+                            ))
+                            .disabled(importing || saving.contains(contact.id) || (!session.topicCatalog.available && !session.topicSetting(for: contact.id).enabled))
+                            .accessibilityIdentifier("topics-enabled-\(contact.id)")
+                            if saving.contains(contact.id) { ProgressView().controlSize(.small) }
+                            let status = session.topicSetting(for: contact.id)
+                            if status.pendingCount > 0 { Text("Organising \(status.pendingCount) messages…").font(.caption).foregroundStyle(.secondary) }
+                            if status.failedCount > 0 {
+                                HStack {
+                                    Text("\(status.failedCount) messages couldn’t be organised.").font(.caption)
+                                    Button("Retry") { setEnabled(true, for: contact.id) }.disabled(saving.contains(contact.id))
+                                }
+                            }
+                        }
+                    }
+                } header: { Text("Organise by topic") } footer: {
+                    Text("Off by default. Enabling sends the latest 200 text messages and captions to your configured AI, then processes new messages and edits. This adds AI usage. Existing topics are saved; everyone else continues using their normal WhatsApp chat.")
+                }
+                Section {
+                    Button {
+                        importing = true
+                        error = nil
+                        Task {
+                            defer { importing = false }
+                            do {
+                                importPreview = try await session.topicImportPreview()
+                                if importPreview?.messageCount == 0 { importStatus = "No unorganised text messages or captions from the last 7 days are stored on this server." }
+                                else { showImportConfirmation = true }
+                            } catch { self.error = error.localizedDescription }
+                        }
+                    } label: {
+                        Label("Organise last 7 days from all chats", systemImage: "tray.and.arrow.down")
+                    }
+                    .accessibilityIdentifier("import-recent-topics")
+                    .disabled(importing || !saving.isEmpty || !session.topicCatalog.available)
+                    if importing { ProgressView("Preparing import…") }
+                    if let importStatus { Text(importStatus).font(.caption).foregroundStyle(.secondary) }
+                } header: { Text("Initial import") } footer: {
+                    Text("Uses text and captions already stored on the server. Skips messages already organised. Enables topics for the included chats so new messages stay organised, with topics kept separate by chat.")
+                }
+                if !session.topicCatalog.available {
+                    Text("OpenAI is unavailable on this server. Configure it before enabling topics.").font(.caption).foregroundStyle(.secondary)
+                }
+                if let error { Text(error).foregroundStyle(.red).font(.caption) }
+                if let error = session.topicCatalogError {
+                    Text(error).font(.caption)
+                    Button("Retry loading topics") { Task { await session.loadTopics() } }
+                }
+            }
+            .platformGroupedFormStyle()
+            .navigationTitle("Topics")
+            .platformInlineNavigationTitle()
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(importing || !saving.isEmpty) } }
+            .task { await session.loadTopics() }
+            .interactiveDismissDisabled(importing || !saving.isEmpty)
+            .confirmationDialog("Organise the last 7 days?", isPresented: $showImportConfirmation, titleVisibility: .visible) {
+                Button("Start import") {
+                    importing = true
+                    Task {
+                        defer { importing = false }
+                        do {
+                            let result = try await session.importRecentTopics()
+                            importStatus = "Queued \(result.messageCount) messages across \(result.chatCount) chats. Topics will appear as processing finishes."
+                        } catch { self.error = error.localizedDescription }
+                    }
+                }
+            } message: {
+                Text("\(importPreview?.messageCount ?? 0) messages across \(importPreview?.chatCount ?? 0) chats will be sent to your configured AI. This adds AI usage and enables topics for those chats.")
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 440, minHeight: 400)
+        #endif
+    }
+    private func setEnabled(_ enabled: Bool, for id: String) {
+        saving.insert(id)
+        error = nil
+        Task {
+            defer { saving.remove(id) }
+            do { try await session.setTopicsEnabled(enabled, contactID: id) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
 private struct UnifiedMessagesView: View {
     @Environment(AppSession.self) private var session
     @Environment(\.translatorPalette) private var palette
@@ -143,13 +338,18 @@ private struct UnifiedMessagesView: View {
     @Binding var sending: Bool
     @State private var showSettings = false
     @State private var settingsContact: Contact?
+    @State private var selectedTopicID: String?
+    private var displayedMessages: [ChatMessage] {
+        if let selectedTopicID { return session.topicPages[selectedTopicID]?.messages ?? [] }
+        return session.unifiedMessages
+    }
     @State private var atBottom = true
     @FocusState private var composerFocused: Bool
 
     private var draft: Binding<String> {
         Binding(get: { replyDraft.text }, set: { value in
             guard !sending else { return }
-            replyDraft.updateText(value, latestMessage: session.unifiedMessages.last)
+            replyDraft.updateText(value, latestMessage: displayedMessages.last)
         })
     }
 
@@ -160,7 +360,7 @@ private struct UnifiedMessagesView: View {
     }
 
     private func messagesContent(bottomSafeArea: CGFloat) -> some View {
-        let items = ConversationTimelineBuilder.items(from: session.unifiedMessages)
+        let items = ConversationTimelineBuilder.items(from: displayedMessages)
         return NavigationStack {
             ZStack {
                 ChatWallpaper()
@@ -168,7 +368,8 @@ private struct UnifiedMessagesView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 6) {
-                            if session.feedHasMore {
+                            if let selectedTopicID { TopicPageControls(topicID: selectedTopicID) }
+                            if selectedTopicID == nil, session.feedHasMore {
                                 Button("Load earlier messages") {
                                     let anchor = session.unifiedMessages.first?.id
                                     Task {
@@ -177,15 +378,15 @@ private struct UnifiedMessagesView: View {
                                     }
                                 }.disabled(session.feedLoading)
                             }
-                            if session.feedLoading { ProgressView().padding() }
-                            if let error = session.feedError {
+                            if selectedTopicID == nil, session.feedLoading { ProgressView().padding() }
+                            if selectedTopicID == nil, let error = session.feedError {
                                 VStack(spacing: 8) {
                                     Text(error).font(.caption).foregroundStyle(.secondary)
                                     Button("Retry") { Task { await session.loadFeed() } }
                                 }.padding()
                             }
-                            if session.unifiedMessages.isEmpty && !session.feedLoading && session.feedError == nil {
-                                ContentUnavailableView("All your messages, together", systemImage: "text.bubble", description: Text("Messages from your chats will appear here. Swipe a message to choose where your reply goes."))
+                            if displayedMessages.isEmpty && !session.feedLoading && session.feedError == nil {
+                                ContentUnavailableView(selectedTopicID == nil ? "All your messages, together" : "No messages in this topic", systemImage: "text.bubble", description: Text(selectedTopicID == nil ? "Messages from your chats will appear here. Swipe a message to choose where your reply goes." : "New messages will appear here after they’re organised. All messages remains available."))
                             }
                             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                                 let message = item.primaryMessage
@@ -223,8 +424,12 @@ private struct UnifiedMessagesView: View {
                     .platformDismissesKeyboard()
                     .platformSwipeDownDismissesKeyboard()
                     .defaultScrollAnchor(.bottom)
-                    .refreshable { await session.loadFeed() }
-                    .onChange(of: session.unifiedMessages.last?.id) { _, _ in
+                    .refreshable {
+                        await session.loadTopics()
+                        if let selectedTopicID { await session.loadTopicMessages(selectedTopicID) }
+                        else { await session.loadFeed() }
+                    }
+                    .onChange(of: displayedMessages.last?.id) { _, _ in
                         if atBottom { withAnimation { proxy.scrollTo("feed-bottom", anchor: .bottom) } }
                     }
                 }
@@ -241,13 +446,26 @@ private struct UnifiedMessagesView: View {
             .navigationTitle("Messages")
             .platformChatNavigationBackground()
             .toolbar { MainNavigationToolbar(showSettings: $showSettings) }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                TopicFilterBar(contactID: nil, selection: $selectedTopicID)
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 composer.padding(.bottom, ComposerLayout.bottomAdjustment(for: bottomSafeArea))
             }
             .sheet(isPresented: $showSettings) { AppSettingsView() }
             .sheet(item: $settingsContact) { ConversationSettingsView(contact: $0) }
         }
-        .task { if !session.feedHasLoaded { await session.loadFeed() } }
+        .task {
+            if !session.feedHasLoaded { await session.loadFeed() }
+            await session.loadTopics()
+        }
+        .task(id: selectedTopicID) {
+            if let selectedTopicID { await session.loadTopicMessages(selectedTopicID) }
+        }
+        .onChange(of: selectedTopicID) { _, _ in cancelReply() }
+        .onChange(of: session.topicCatalog.topics) { _, topics in
+            if let selectedTopicID, !topics.contains(where: { $0.id == selectedTopicID }) { self.selectedTopicID = nil }
+        }
         .onChange(of: session.mainTab) { _, tab in
             if tab != .messages { composerFocused = false }
         }
@@ -353,7 +571,7 @@ private struct UnifiedMessagesView: View {
                 }.fixedSize(horizontal: false, vertical: true)
                     .padding(12)
                     .translatorGlass(in: RoundedRectangle(cornerRadius: 20))
-            } else if replyDraft.selected == nil && session.unifiedMessages.isEmpty {
+            } else if replyDraft.selected == nil && displayedMessages.isEmpty {
                 Text("Waiting for messages")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -363,9 +581,9 @@ private struct UnifiedMessagesView: View {
             ComposerGlassGroup {
                 HStack(alignment: .bottom, spacing: 7) {
                     UnifiedMediaControls(
-                        disabled: sending || session.sendingContactIDs.contains((replyDraft.selected ?? session.unifiedMessages.last)?.contactId ?? "") || (replyDraft.selected == nil && session.unifiedMessages.isEmpty),
+                        disabled: sending || session.sendingContactIDs.contains((replyDraft.selected ?? displayedMessages.last)?.contactId ?? "") || (replyDraft.selected == nil && displayedMessages.isEmpty),
                         begin: {
-                            guard let target = replyDraft.beginAttachment(latestMessage: session.unifiedMessages.last) else { return nil }
+                            guard let target = replyDraft.beginAttachment(latestMessage: displayedMessages.last) else { return nil }
                             composerFocused = false
                             return UnifiedMediaContext(message: target, reply: session.replyTarget(for: target), destination: name(target))
                         },
@@ -379,7 +597,7 @@ private struct UnifiedMessagesView: View {
                         .frame(minHeight: 46)
                         .translatorGlassControl(in: RoundedRectangle(cornerRadius: 24))
                         .focused($composerFocused)
-                        .disabled(sending || (replyDraft.selected == nil && session.unifiedMessages.isEmpty))
+                        .disabled(sending || (replyDraft.selected == nil && displayedMessages.isEmpty))
                     Button(action: send) {
                         Group {
                             if sending { ProgressView().tint(.white) }

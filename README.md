@@ -17,6 +17,7 @@ Railway is the easiest hosted option for this app because it supports long-runni
 - Listen to translated voice notes and record, preview, and send translated WhatsApp audio
 - Generate AI-composed messages and AI replies in your writing style
 - Per-chat translation settings, including an option to send the translation followed by the original text
+- Optional AI topics in conversations and the native unified Messages feed, with matching topic names kept separate by chat
 - Six original message ringtones with in-app previews, a global default, per-conversation overrides, and a silent option
 - Local SQLite storage for messages, usage, and session data
 - MCP endpoint with OAuth support
@@ -51,6 +52,10 @@ Text AI defaults to GPT-6 Astra with low reasoning. The shared OpenAI settings o
 Translation defaults **off for every person and group**, including existing conversations. Open **Conversation settings → Translate messages** to enable it for a particular chat. The server saves the choice by conversation ID and shares it across web, iOS/iPadOS, macOS, and unified **Messages**. In Messages, long-press or right-click a message's conversation heading to open those same settings. Disabled conversations send text and captions as written and voice notes as original recordings, without language detection or other translation AI calls. Disabling also cancels queued incoming translations and releases pending notifications; saved language, style, and original-follow-up preferences are retained.
 
 For enabled conversations, incoming text and media captions translate into `WA_DEFAULT_LANGUAGE`. Outgoing text, captions, and voice use a conversation override first, then the replied-to incoming message's language, then the predominant recent incoming language. Unknown chat language is resolved from recent incoming text before sending. Language-neutral messages stay unchanged. Translation failures prevent outgoing sends and incoming jobs retry with backoff; opening an enabled conversation queues previously undetected text and captions.
+
+Open **Topics** in a conversation or the native unified **Messages** feed to enable automatic organisation for individual chats. Topic classification uses the existing OpenAI key and shared model settings, independently of translation. It starts with the latest 200 text messages and captions, then processes new messages and edits in background batches. Topic labels appear in the configured default language; matching labels from different chats remain separate, with the chat name shown in Messages. **All messages** always restores the full timeline, and replies and reactions still address the original WhatsApp message. Classifications are stored on the server, survive restarts, and refresh across clients. Disabling topics stops new classification and hides that chat's topic views while retaining saved assignments. Failed batches retry up to three times; re-enabling or choosing retry starts another attempt. Enabling topics adds AI usage and does not alter anyone else's WhatsApp interface.
+
+For an initial import, choose **Topics → Organise last 7 days from all chats**. The app previews the number of unorganised text messages and captions before you start. It uses only messages already stored on the server, excludes Updates and older history, skips existing topic assignments, and enables ongoing organisation for the included chats. Classification runs in background batches and the Topics panel shows progress; repeating the import safely skips completed messages.
 
 Required for native iOS push notifications:
 

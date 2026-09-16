@@ -65,4 +65,29 @@ final class MessageEditDeliveryTests: XCTestCase {
         XCTAssertEqual(session.unifiedMessages.first?.displayText, "Grr!")
         XCTAssertEqual(session.messages[edit.contactId]?.count, 1)
     }
+
+    func testTopicMembershipIsRemovedByAnEditAndAnOldPageCannotBringItBack() throws {
+        let session = AppSession(demoMode: false)
+        session.phase = .ready
+        let original = try message(body: "Get")
+        session.messages[original.contactId] = [original]
+        session.topicPages["one"] = TopicPage(messages: [original])
+        try session.handle(update(message(body: "Grr", revision: 300)))
+        XCTAssertEqual(session.topicPages["one"]?.messages.count, 0)
+        XCTAssertEqual(session.messages[original.contactId]?.first?.displayText, "Grr")
+    }
+
+    func testSameNamedTopicsRemainSeparateByChatAndDisablingDropsTheirPages() throws {
+        let session = AppSession(demoMode: true)
+        let family = ChatTopic(id: "family-plan", contactId: "family@g.us", contactName: "Family", title: "Weekend plans", messageCount: 1, lastMessageTime: 100)
+        let friends = ChatTopic(id: "friends-plan", contactId: "friends@g.us", contactName: "Friends", title: "Weekend plans", messageCount: 1, lastMessageTime: 100)
+        session.applyTopicCatalog(TopicCatalog(topics: [family, friends], settings: [], available: true))
+        XCTAssertEqual(session.topics().count, 2)
+        XCTAssertEqual(session.topics(for: "family@g.us").map(\.id), ["family-plan"])
+        XCTAssertFalse(session.topicSetting(for: "unconfigured@g.us").enabled)
+        session.topicPages[family.id] = TopicPage(messages: [try message(body: "Picnic")])
+        session.applyTopicCatalog(TopicCatalog(topics: [friends], settings: [], available: true))
+        XCTAssertNil(session.topicPages[family.id])
+        XCTAssertEqual(session.topics().map(\.id), [friends.id])
+    }
 }

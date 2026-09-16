@@ -1,5 +1,6 @@
 import { setupVoiceNotes } from './voice-notes.js';
 import { setupMessageTones } from './message-tones.js';
+import { setupTopics } from './topics.js';
 import { createReliableFetch, reconnectDelay, mergeMessageUpdate } from './send-recovery.js';
 // WhatsApp Translator Web Client
 
@@ -1735,6 +1736,7 @@ class WhatsAppClient {
         // Clear local data
         this.contacts = [];
         this.messages.clear();
+        this.topics?.reset();
         this.avatarCache.clear();
         this.currentContactId = null;
         this.qrData = null;
@@ -1851,6 +1853,7 @@ class WhatsAppClient {
         this.liveRecoveryPending = false;
         await this.loadContacts();
         if (this.currentContactId) await this.loadMessages(this.currentContactId);
+        await this.topics?.load();
       } while (this.liveRecoveryPending && !this.authExpired);
     } finally { this.liveRecoveryRunning = false; }
   }
@@ -1858,6 +1861,7 @@ class WhatsAppClient {
   handleMessageUpdate(message) {
     if (this.liveRecoveryRunning) this.liveRecoveryPending = true;
     this.prepareMessageForCache(message);
+    this.topics?.update(message);
     this.messages.set(message.contactId, mergeMessageUpdate(this.messages.get(message.contactId) || [], message));
     this.scheduleRenderContacts();
     if (this.currentContactId === message.contactId) this.refreshCurrentConversationView();
@@ -1866,6 +1870,9 @@ class WhatsAppClient {
   // Handle incoming WebSocket messages
   handleMessage(data) {
     switch (data.type) {
+      case 'topics_updated':
+        void this.topics?.load();
+        break;
       case 'conversation_settings_updated':
         this.conversationSettingsClient.apply(data.chat_id, data.settings);
         break;
@@ -2969,6 +2976,7 @@ class WhatsAppClient {
     try {
       this.closeCommandPalette();
       this.currentContactId = contactId;
+      this.topics?.selectChat();
       void this.conversationSettingsClient.load(contactId).catch(error => console.warn(error.message));
       this.messageSearchQuery = '';
       this.starredOnly = false;
@@ -3222,6 +3230,7 @@ class WhatsAppClient {
 
   // Load older messages (for infinite scroll)
   async loadOlderMessages(contactId) {
+    if (this.topics?.selectedId) { await this.topics.loadOlder(); return; }
     // Don't load if already loading or no more messages
     if (this.messagesLoading.get(contactId)) return;
     if (!this.messagesHasMore.get(contactId)) return;
@@ -3377,6 +3386,7 @@ class WhatsAppClient {
   // Render messages
   renderMessages(messages) {
     const container = document.getElementById('messages-list');
+    if (this.topics?.selectedId) messages = this.getVisibleMessagesForCurrentConversation();
     const displayMessages = (messages || []).filter(message => this.isDisplayableMessage(message));
     
     if (displayMessages.length === 0) {
@@ -4168,7 +4178,7 @@ class WhatsAppClient {
   }
 
   getVisibleMessagesForCurrentConversation() {
-    const messages = (this.messages.get(this.currentContactId) || [])
+    const messages = (this.topics?.selectedId ? this.topics.messages : this.messages.get(this.currentContactId) || [])
       .filter(message => this.isDisplayableMessage(message));
     return filterMessagesByQuery(messages, this.messageSearchQuery, {
       starredOnly: this.starredOnly,
@@ -6443,3 +6453,4 @@ class WhatsAppClient {
 window.app = new WhatsAppClient();
 setupVoiceNotes(window.app);
 window.app.messageTones = setupMessageTones(window.app);
+window.app.topics = setupTopics(window.app);

@@ -147,6 +147,31 @@ actor APIClient {
         )
     }
 
+    func topics() async throws -> TopicCatalog {
+        try await authorizedRequest("/api/topics")
+    }
+
+    func topicImportPreview() async throws -> TopicImportSummary {
+        try await authorizedRequest("/api/topics/import")
+    }
+
+    func importRecentTopics() async throws -> TopicImportSummary {
+        try await authorizedRequest("/api/topics/import", method: "POST")
+    }
+
+    func setTopicsEnabled(_ enabled: Bool, contactID: String) async throws -> TopicCatalog {
+        try await authorizedRequest("/api/contacts/\(contactID.urlPathEncoded)/topics", method: "PUT",
+                                    body: JSONSerialization.data(withJSONObject: ["enabled": enabled]))
+    }
+
+    func topicMessages(id: String, before: Int64? = nil, beforeID: String? = nil) async throws -> MessagesResponse {
+        var components = URLComponents()
+        components.queryItems = [URLQueryItem(name: "limit", value: "50")]
+        if let before { components.queryItems?.append(URLQueryItem(name: "before", value: String(before))) }
+        if let beforeID { components.queryItems?.append(URLQueryItem(name: "before_id", value: beforeID)) }
+        return try await authorizedRequest("/api/topics/\(id.urlPathEncoded)/messages?" + (components.percentEncodedQuery ?? ""))
+    }
+
     func feed(before: Int64? = nil, beforeID: String? = nil) async throws -> MessagesResponse {
         var components = URLComponents()
         components.queryItems = [URLQueryItem(name: "limit", value: "50")]

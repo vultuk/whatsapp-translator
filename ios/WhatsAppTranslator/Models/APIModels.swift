@@ -659,6 +659,41 @@ struct ConversationSettings: Codable, Equatable, Sendable {
     }
 }
 
+struct ChatTopic: Codable, Equatable, Identifiable, Sendable {
+    let id: String
+    let contactId: String
+    let contactName: String
+    let title: String
+    let messageCount: Int
+    let lastMessageTime: Int64
+}
+
+struct TopicSetting: Codable, Equatable, Sendable {
+    let contactId: String
+    var enabled: Bool
+    var pendingCount: Int
+    var failedCount: Int
+}
+
+struct TopicCatalog: Codable, Sendable {
+    var topics: [ChatTopic]
+    var settings: [TopicSetting]
+    var available: Bool
+    static let empty = TopicCatalog(topics: [], settings: [], available: false)
+}
+
+struct TopicImportSummary: Codable, Sendable {
+    let days: Int
+    let chatCount: Int
+    let messageCount: Int
+}
+
+struct TopicPage {
+    var messages: [ChatMessage] = []
+    var hasMore = false
+    var error: String?
+}
+
 struct OpenAISettings: Codable, Equatable, Sendable {
     var model: String?
     var reasoningEffort: String?

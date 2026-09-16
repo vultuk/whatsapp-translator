@@ -28,6 +28,128 @@ final class AppSession {
     private var feedGeneration = UUID()
     private var feedEventsDuringLoad: Set<String> = []
     var messages: [String: [ChatMessage]] = [:]
+    var topicCatalog = TopicCatalog.empty
+    var topicPages: [String: TopicPage] = [:]
+    var topicLoading: Set<String> = []
+    var topicCatalogError: String?
+    private var topicCatalogRequest = UUID()
+    private var topicAccountEpoch = UUID()
+    private var topicRevision = UUID()
+    private var topicReloadAfterLoad: Set<String> = []
+    private var demoTopicCatalog = TopicCatalog.empty
+    private var demoTopicPages: [String: TopicPage] = [:]
+
+    func topics(for contactID: String? = nil) -> [ChatTopic] {
+        topicCatalog.topics.filter { contactID == nil || $0.contactId == contactID }
+    }
+
+    func topicSetting(for contactID: String) -> TopicSetting {
+        topicCatalog.settings.first { $0.contactId == contactID }
+            ?? TopicSetting(contactId: contactID, enabled: false, pendingCount: 0, failedCount: 0)
+    }
+
+    func applyTopicCatalog(_ catalog: TopicCatalog) {
+        topicCatalog = catalog
+        let ids = Set(catalog.topics.map(\.id))
+        topicPages = topicPages.filter { ids.contains($0.key) }
+        topicRevision = UUID()
+    }
+
+    func loadTopics() async {
+        guard !demoMode else { return }
+        let request = UUID()
+        topicCatalogRequest = request
+        do {
+            let catalog = try await api.topics()
+            guard topicCatalogRequest == request else { return }
+            applyTopicCatalog(catalog)
+            topicCatalogError = nil
+            for id in Set(topicPages.keys).union(topicLoading) {
+                await loadTopicMessages(id)
+            }
+        } catch {
+            guard topicCatalogRequest == request, !Self.isExpectedCancellation(error) else { return }
+            topicCatalogError = "Couldn’t load topics. Check your connection and try again."
+        }
+    }
+
+    func setTopicsEnabled(_ enabled: Bool, contactID: String) async throws {
+        topicCatalogRequest = UUID()
+        if demoMode {
+            topicCatalog.settings.removeAll { $0.contactId == contactID }
+            topicCatalog.settings.append(TopicSetting(contactId: contactID, enabled: enabled, pendingCount: 0, failedCount: 0))
+            let retained = topicCatalog.topics.filter { $0.contactId != contactID }
+            let restored = enabled ? demoTopicCatalog.topics.filter { $0.contactId == contactID } : []
+            applyTopicCatalog(TopicCatalog(topics: retained + restored, settings: topicCatalog.settings, available: true))
+            for topic in restored { topicPages[topic.id] = demoTopicPages[topic.id] }
+            return
+        }
+        let accountEpoch = topicAccountEpoch
+        _ = try await api.setTopicsEnabled(enabled, contactID: contactID)
+        guard topicAccountEpoch == accountEpoch else { return }
+        await loadTopics()
+    }
+
+    func topicImportPreview() async throws -> TopicImportSummary {
+        if demoMode { return TopicImportSummary(days: 7, chatCount: demoTopicCatalog.settings.count, messageCount: demoTopicPages.values.reduce(0) { $0 + $1.messages.count }) }
+        return try await api.topicImportPreview()
+    }
+
+    func importRecentTopics() async throws -> TopicImportSummary {
+        if demoMode {
+            let summary = try await topicImportPreview()
+            applyTopicCatalog(demoTopicCatalog)
+            topicPages = demoTopicPages
+            return summary
+        }
+        let accountEpoch = topicAccountEpoch
+        let summary = try await api.importRecentTopics()
+        guard topicAccountEpoch == accountEpoch else { throw CancellationError() }
+        await loadTopics()
+        return summary
+    }
+
+    func loadTopicMessages(_ id: String, older: Bool = false) async {
+        guard topicCatalog.topics.contains(where: { $0.id == id }) else { return }
+        guard !topicLoading.contains(id) else {
+            if !older { topicReloadAfterLoad.insert(id) }
+            return
+        }
+        guard !demoMode, !older || topicPages[id]?.hasMore == true else { return }
+        topicLoading.insert(id)
+        let revision = topicRevision
+        defer {
+            topicLoading.remove(id)
+            if topicReloadAfterLoad.remove(id) != nil { Task { await loadTopicMessages(id) } }
+        }
+        do {
+            let cursor = older ? topicPages[id]?.messages.first : nil
+            let response = try await api.topicMessages(id: id, before: cursor?.timestamp, beforeID: cursor?.id)
+            guard revision == topicRevision else {
+                if topicCatalog.topics.contains(where: { $0.id == id }) { topicReloadAfterLoad.insert(id) }
+                return
+            }
+            guard let topic = topicCatalog.topics.first(where: { $0.id == id }), response.messages.allSatisfy({ $0.contactId == topic.contactId }) else { return }
+            let incoming = normalizeMessages(response.messages)
+            // An edit received during this HTTP request invalidates the old assignment.
+            let valid = incoming.filter { updated in response.messages.contains { $0.id == updated.id && $0.editRevision == updated.editRevision } }
+            topicPages[id] = TopicPage(messages: normalizeMessages((older ? topicPages[id]?.messages ?? [] : []) + valid), hasMore: response.hasMore)
+            for message in valid {
+                messages[message.contactId] = normalizeMessages((messages[message.contactId] ?? []) + [message])
+            }
+        } catch {
+            guard revision == topicRevision, !Self.isExpectedCancellation(error) else { return }
+            var page = topicPages[id] ?? TopicPage()
+            page.error = "Couldn’t load this topic. Try again."
+            topicPages[id] = page
+        }
+    }
+
+    func invalidateTopicMembership(for message: ChatMessage) {
+        for id in Array(topicPages.keys) {
+            topicPages[id]?.messages.removeAll { $0.id == message.id && $0.contactId == message.contactId && $0.editRevision < message.editRevision }
+        }
+    }
     private struct ReactionTarget: Hashable {
         let contactID: String
         let messageID: String
@@ -819,6 +941,13 @@ final class AppSession {
         linkPreviews = [:]
         messages = [:]
         reactionEvents = [:]
+        topicCatalog = .empty
+        topicPages = [:]
+        topicAccountEpoch = UUID()
+        topicCatalogRequest = UUID()
+        topicRevision = UUID()
+        topicReloadAfterLoad = []
+        topicCatalogError = nil
         feedByID = [:]
         feedCursor = nil
         feedHasMore = false
@@ -839,6 +968,7 @@ final class AppSession {
         defer { isConnecting = false }
         errorMessage = nil
         self.configuration = configuration
+        topicAccountEpoch = UUID()
         await api.configure(configuration)
         var restoredCache = false
         if restoreCached {
@@ -926,6 +1056,10 @@ final class AppSession {
             }
             let normalized = normalizeMessages(conversation + [message])
             messages[message.contactId] = normalized
+            invalidateTopicMembership(for: message)
+            for id in Array(topicPages.keys) {
+                if let page = topicPages[id] { topicPages[id]?.messages = normalizeMessages(page.messages) }
+            }
             if let affectedID,
                let updated = normalized.first(where: { $0.id == affectedID }),
                (!message.isReaction && event.type == "message") || feedByID[affectedID] != nil {
@@ -940,6 +1074,8 @@ final class AppSession {
                 )
             }
             persistCacheSoon()
+        case "topics_updated":
+            Task { await loadTopics() }
         case "voice_ready":
             if let id = event.messageId { voiceReadyIDs.insert(id) }
         case "live_reconnecting":
@@ -952,6 +1088,7 @@ final class AppSession {
                 repeat {
                     recoveryNeedsAnotherPass = false
                     await refresh()
+                    await loadTopics()
                     if feedHasLoaded || mainTab == .messages { await loadFeed() }
                     if mainTab == .chats, let id = selectedContactID { await loadMessages(for: id) }
                 } while recoveryNeedsAnotherPass && !Task.isCancelled
@@ -1241,6 +1378,29 @@ final class AppSession {
                 ],
                 "jordan@s.whatsapp.net": [.demo(id: "jordan-latest", contactID: "jordan@s.whatsapp.net", timestamp: base + 180_000, fromMe: false, body: "See you tomorrow!", translated: nil, sender: "Jordan")]
             ]
+        }
+        if ProcessInfo.processInfo.arguments.contains("-demoTopics") {
+            let base: Int64 = 1_789_540_000_000
+            contacts = [
+                Contact(id: "family@g.us", name: "Family", phone: nil, type: "group", lastMessageTime: base + 4000, unreadCount: 0, pinnedAt: nil, lastMessagePreview: "Alex: Bring a picnic on Saturday."),
+                Contact(id: "friends@g.us", name: "Friends", phone: nil, type: "group", lastMessageTime: base + 5000, unreadCount: 0, pinnedAt: nil, lastMessagePreview: "Sam: Sunday brunch at eleven?")
+            ]
+            let picnic = ChatMessage.demo(id: "topic-picnic", contactID: "family@g.us", timestamp: base, fromMe: false, body: "Shall we have a picnic on Saturday?", translated: nil, sender: "Alex", chatType: "group")
+            let football = ChatMessage.demo(id: "topic-football", contactID: "family@g.us", timestamp: base + 1000, fromMe: false, body: "What a goal in last night’s match!", translated: nil, sender: "Jamie", chatType: "group")
+            let brunch = ChatMessage.demo(id: "topic-brunch", contactID: "friends@g.us", timestamp: base + 2000, fromMe: false, body: "Sunday brunch at eleven?", translated: nil, sender: "Sam", chatType: "group")
+            let picnicReply = ChatMessage.demo(id: "topic-picnic-reply", contactID: "family@g.us", timestamp: base + 4000, fromMe: false, body: "I’ll bring the picnic blanket and sandwiches.", translated: nil, sender: "Alex", chatType: "group")
+            let footballReply = ChatMessage.demo(id: "topic-football-reply", contactID: "family@g.us", timestamp: base + 5000, fromMe: false, body: "The replay is brilliant too.", translated: nil, sender: "Jamie", chatType: "group")
+            messages = ["family@g.us": [picnic, football, picnicReply, footballReply], "friends@g.us": [brunch]]
+            topicCatalog = TopicCatalog(topics: [
+                ChatTopic(id: "family-weekend", contactId: "family@g.us", contactName: "Family", title: "Weekend plans", messageCount: 2, lastMessageTime: base + 4000),
+                ChatTopic(id: "family-football", contactId: "family@g.us", contactName: "Family", title: "Football", messageCount: 2, lastMessageTime: base + 5000),
+                ChatTopic(id: "friends-weekend", contactId: "friends@g.us", contactName: "Friends", title: "Weekend plans", messageCount: 1, lastMessageTime: base + 2000)
+            ], settings: contacts.map { TopicSetting(contactId: $0.id, enabled: true, pendingCount: 0, failedCount: 0) }, available: true)
+            topicPages = ["family-weekend": TopicPage(messages: [picnic, picnicReply]), "family-football": TopicPage(messages: [football, footballReply]), "friends-weekend": TopicPage(messages: [brunch])]
+            demoTopicCatalog = topicCatalog
+            demoTopicPages = topicPages
+            feedByID = Dictionary(uniqueKeysWithValues: messages.values.joined().map { ($0.id, $0) })
+            feedHasLoaded = true
         }
         if ProcessInfo.processInfo.arguments.contains("-demoWhatsAppLayout") {
             let id = "virag@s.whatsapp.net"

@@ -177,6 +177,7 @@ pub enum WebSocketEvent {
         settings: crate::storage::ConversationSettings,
     },
     Resync,
+    TopicsUpdated,
     Heartbeat,
     Typing {
         chat_id: String,
@@ -1208,6 +1209,16 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/messages/:contact_id", get(get_messages))
         .route("/api/feed", get(get_unified_messages))
+        .route("/api/topics", get(crate::topics::catalog))
+        .route(
+            "/api/topics/import",
+            get(crate::topics::import_preview).post(crate::topics::import_recent),
+        )
+        .route("/api/topics/:id/messages", get(crate::topics::messages))
+        .route(
+            "/api/contacts/:id/topics",
+            put(crate::topics::update_setting),
+        )
         .route("/api/media/:message_id", get(get_media))
         .route("/api/avatar/:jid", get(get_avatar))
         .route("/api/qr", get(get_qr))
@@ -1958,7 +1969,7 @@ struct MessagesResponse {
     has_more: bool,
 }
 
-fn present_message_page(
+pub(crate) fn present_message_page(
     store: &MessageStore,
     messages: Vec<StoredMessage>,
     has_more: bool,
@@ -5220,6 +5231,164 @@ mod tests {
             account
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn topics_require_auth_and_paginate_without_read_receipts_or_cross_chat_results() {
+        let (locked, locked_dir) = test_state(Some("private"));
+        let locked_router = create_router(locked);
+        for path in [
+            "/api/topics",
+            "/api/topics/import",
+            "/api/topics/example/messages",
+        ] {
+            assert_eq!(
+                locked_router
+                    .clone()
+                    .oneshot(empty_request(path))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        assert_eq!(
+            locked_router
+                .clone()
+                .oneshot(
+                    HttpRequest::builder()
+                        .method("POST")
+                        .uri("/api/topics/import")
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let protected = HttpRequest::builder()
+            .method("PUT")
+            .uri("/api/contacts/family%40g.us/topics")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"enabled":true}"#))
+            .unwrap();
+        assert_eq!(
+            locked_router.oneshot(protected).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let (state, dir) = test_state(None);
+        for (id, chat, time) in [
+            ("a", "family@g.us", 100),
+            ("b", "family@g.us", 100),
+            ("c", "friends@g.us", 200),
+        ] {
+            state
+                .store
+                .upsert_contact(chat, Some(chat), None, Some("group"), time)
+                .unwrap();
+            let mut message = feed_test_message(id, chat, time);
+            message.original_text = Some(id.into());
+            state.store.add_message(&message).unwrap();
+        }
+        let app = create_router(state.clone());
+        let enable = HttpRequest::builder()
+            .method("PUT")
+            .uri("/api/contacts/family%40g.us/topics")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"enabled":true}"#))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(enable).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert!(state.store.topic_settings().unwrap().is_empty());
+        assert_eq!(
+            app.clone()
+                .oneshot(
+                    HttpRequest::builder()
+                        .method("POST")
+                        .uri("/api/topics/import")
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        state.store.set_topics_enabled("family@g.us", true).unwrap();
+        let batch = state.store.next_topic_batch().unwrap().unwrap();
+        let assignments = batch
+            .messages
+            .iter()
+            .map(|m| crate::topics::TopicAssignment {
+                message_id: m.id.clone(),
+                topic: "Plans".into(),
+            })
+            .collect::<Vec<_>>();
+        state
+            .store
+            .finish_topic_batch(&batch, &assignments)
+            .unwrap();
+        let topic = state.store.list_topics().unwrap().remove(0);
+        state.store.set_unread_count("family@g.us", 3).unwrap();
+        let response = app
+            .clone()
+            .oneshot(empty_request(&format!(
+                "/api/topics/{}/messages?limit=1",
+                topic.id
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["hasMore"], true);
+        assert_eq!(body["messages"][0]["id"], "b");
+        assert_eq!(body["messages"][0]["contactId"], "family@g.us");
+        assert_eq!(
+            state
+                .store
+                .get_contact("family@g.us")
+                .unwrap()
+                .unwrap()
+                .unread_count,
+            3
+        );
+        let response = app
+            .clone()
+            .oneshot(empty_request(&format!(
+                "/api/topics/{}/messages?limit=1&before=100&before_id=b",
+                topic.id
+            )))
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["messages"][0]["id"], "a");
+        assert_eq!(body["hasMore"], false);
+        state
+            .store
+            .set_topics_enabled("family@g.us", false)
+            .unwrap();
+        assert_eq!(
+            app.oneshot(empty_request(&format!("/api/topics/{}/messages", topic.id)))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(locked_dir);
     }
 
     #[tokio::test]

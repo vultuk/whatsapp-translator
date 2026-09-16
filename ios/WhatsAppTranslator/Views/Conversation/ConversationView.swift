@@ -15,6 +15,7 @@ struct ConversationView: View {
     @State private var showSearch = ProcessInfo.processInfo.arguments.contains("-demoSearch")
     @State private var messageSearch = ""
     @State private var starredOnly = false
+    @State private var selectedTopicID: String?
     @State private var usage: UsageSummary?
 
     #if os(iOS)
@@ -39,7 +40,10 @@ struct ConversationView: View {
     }
     #endif
 
-    private var messages: [ChatMessage] { session.messages[contact.id] ?? [] }
+    private var messages: [ChatMessage] {
+        if let selectedTopicID { return session.topicPages[selectedTopicID]?.messages ?? [] }
+        return session.messages[contact.id] ?? []
+    }
     private var activePhotoSend: PhotoSendProgress? {
         session.photoSendProgress.values
             .filter { $0.contactID == contact.id }
@@ -90,6 +94,7 @@ struct ConversationView: View {
                     showConversationSettings: { showSettings = true }
                 )
                 #endif
+                TopicFilterBar(contactID: contact.id, selection: $selectedTopicID)
                 if showSearch {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -207,10 +212,18 @@ struct ConversationView: View {
             draft = ProcessInfo.processInfo.arguments.contains("-demo") ? "" : session.draftStore.text(for: contact.id)
             await session.loadAvatar(for: contact.id)
             await session.loadMessages(for: contact.id)
+            await session.loadTopics()
             usage = try? await session.conversationUsage(for: contact.id)
         }
         .onChange(of: draft) { _, newValue in
             session.draftStore.save(newValue, for: contact.id)
+        }
+        .task(id: selectedTopicID) {
+            if let selectedTopicID { await session.loadTopicMessages(selectedTopicID) }
+        }
+        .onChange(of: selectedTopicID) { _, _ in cancelReply() }
+        .onChange(of: session.topicCatalog.topics) { _, topics in
+            if let selectedTopicID, !topics.contains(where: { $0.id == selectedTopicID && $0.contactId == contact.id }) { self.selectedTopicID = nil }
         }
         .sheet(isPresented: $showSettings) {
             ConversationSettingsView(contact: contact)
@@ -262,7 +275,10 @@ struct ConversationView: View {
 
     @ViewBuilder
     private var messageTimelineContent: some View {
-        if session.messageHistoryHasMore[contact.id] == true, messageSearch.isEmpty, !starredOnly {
+        if let selectedTopicID {
+            TopicPageControls(topicID: selectedTopicID)
+        }
+        if selectedTopicID == nil, session.messageHistoryHasMore[contact.id] == true, messageSearch.isEmpty, !starredOnly {
             Button("Load earlier messages") {
                 Task { await session.loadMessages(for: contact.id, older: true) }
             }

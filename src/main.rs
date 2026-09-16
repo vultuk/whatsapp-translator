@@ -17,6 +17,7 @@ mod outbox;
 mod push;
 mod storage;
 mod style_analyzer;
+mod topics;
 mod translation;
 mod voice;
 mod web;
@@ -182,6 +183,7 @@ async fn run_web_mode(
     );
 
     incoming::start(state.clone())?;
+    topics::start(state.clone());
     // Spawn the web server (once, outside the bridge loop)
     let server_state = state.clone();
     let host = args.host.clone();

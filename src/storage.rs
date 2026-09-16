@@ -18,6 +18,7 @@ mod reliability;
 pub use reliability::OutboxEntry;
 mod edits;
 mod reactions;
+mod topics;
 pub use reactions::PresentedMessage;
 
 /// Stored message with translation info
@@ -400,6 +401,7 @@ impl MessageStore {
         };
 
         store.init_schema()?;
+        store.init_topics()?;
 
         info!("Message store initialized at {:?}", db_path);
 
@@ -2157,6 +2159,10 @@ impl MessageStore {
         conn.execute_batch(
             r#"
             DELETE FROM message_edits;
+            DELETE FROM topic_jobs;
+            DELETE FROM topic_assignments;
+            DELETE FROM chat_topics;
+            DELETE FROM topic_settings;
             DELETE FROM messages;
             DELETE FROM contacts;
             DELETE FROM translation_usage;
@@ -2972,7 +2978,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn test_store() -> (MessageStore, PathBuf) {
+    pub(super) fn test_store() -> (MessageStore, PathBuf) {
         let data_dir = std::env::temp_dir().join(format!(
             "whatsapp-translator-storage-test-{}",
             uuid::Uuid::new_v4()
@@ -3070,7 +3076,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(path);
     }
 
-    fn test_message(id: &str, timestamp: i64) -> StoredMessage {
+    pub(super) fn test_message(id: &str, timestamp: i64) -> StoredMessage {
         let content = serde_json::json!({
             "type": "text",
             "body": id,
