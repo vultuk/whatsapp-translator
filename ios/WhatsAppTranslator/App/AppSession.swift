@@ -47,14 +47,14 @@ final class AppSession {
         if demoMode {
             if let topic = demoTopicCatalog.topics.first(where: { topic in
                 demoTopicPages[topic.id]?.messages.contains(where: { $0.id == message.id && $0.contactId == message.contactId }) == true
-            }) { return "Topic: \(topic.title)" }
-            return "Topic: Not categorised"
+            }) { return "\(topic.title)" }
+            return "Not categorised"
         }
         if let status = messageTopicStates[message.id], status.contactId == message.contactId, status.revision == message.editRevision {
             return status.menuLabel
         }
-        if messageTopicFailures.contains(message.id) { return "Topic: Unavailable" }
-        return "Topic: Checking…"
+        if messageTopicFailures.contains(message.id) { return "Unavailable" }
+        return "Checking…"
     }
 
     func refreshMessageTopics(_ values: [ChatMessage]) async {

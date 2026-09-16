@@ -659,7 +659,7 @@ struct ConversationSettings: Codable, Equatable, Sendable {
     }
 }
 
-struct ChatTopic: Codable, Equatable, Identifiable, Sendable {
+struct ChatCodable, Equatable, Identifiable, Sendable {
     let id: String
     let contactId: String
     let contactName: String
@@ -676,7 +676,7 @@ struct TopicSetting: Codable, Equatable, Sendable {
     var failedCount: Int
 }
 
-struct MessageTopic: Decodable, Sendable {
+struct MessageDecodable, Sendable {
     let messageId: String
     let contactId: String
     let revision: Int64
@@ -684,12 +684,12 @@ struct MessageTopic: Decodable, Sendable {
     let state: String
 
     var menuLabel: String {
-        if let title = title?.nilIfBlank { return "Topic: \(title)" }
+        if let title = title?.nilIfBlank { return "\(title)" }
         return switch state {
-        case "pending": "Topic: Organising…"
-        case "failed": "Topic: Needs retry"
-        case "off": "Topic: Off for this chat"
-        default: "Topic: Not categorised"
+        case "pending": "Organising…"
+        case "failed": "Needs retry"
+        case "off": "Off for this chat"
+        default: "Not categorised"
         }
     }
 }

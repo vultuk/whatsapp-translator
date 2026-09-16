@@ -86,6 +86,7 @@ impl MessageStore {
         self.recover_topic_jobs("topic_background_timeout_v1", "background_timeout")?;
         self.recover_topic_jobs("topic_compact_batches_v1", "compact_batches")?;
         self.queue_legacy_topic_labels()?;
+        self.recover_isolated_topic_retries()?;
         Ok(())
     }
 
@@ -214,6 +215,32 @@ impl MessageStore {
                 topics,
                 reason,
                 "Recovered topic jobs after request fix"
+            );
+        }
+        Ok(())
+    }
+
+    /// Older batches could consume every retry together. Give only exhausted,
+    /// unassigned, opted-in messages a bounded retry through the isolated path.
+    fn recover_isolated_topic_retries(&self) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let first_run = tx.execute(
+            "INSERT OR IGNORE INTO app_settings(key,value) VALUES('topic_isolated_retries_v1','1')",
+            [],
+        )? > 0;
+        let recovered = if first_run {
+            tx.execute(r#"UPDATE topic_jobs SET attempts=1,retry_at=0 WHERE attempts>=3
+                AND message_id IN (SELECT m.id FROM messages m JOIN topic_settings s ON s.contact_id=m.contact_id AND s.enabled=1)
+                AND NOT EXISTS(SELECT 1 FROM topic_assignments a WHERE a.message_id=topic_jobs.message_id)"#, [])?
+        } else {
+            0
+        };
+        tx.commit()?;
+        if recovered > 0 {
+            tracing::info!(
+                messages = recovered,
+                "Topic recovery queued individual retries"
             );
         }
         Ok(())
@@ -365,16 +392,18 @@ impl MessageStore {
     pub fn next_topic_batch(&self) -> Result<Option<TopicBatch>> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp();
-        let next:Option<(String,String)>=conn.query_row(r#"SELECT m.contact_id,s.epoch FROM topic_jobs j JOIN messages m ON m.id=j.message_id
-            JOIN topic_settings s ON s.contact_id=m.contact_id AND s.enabled=1 WHERE j.attempts<3 AND j.retry_at<=? ORDER BY j.retry_at,m.timestamp,m.id LIMIT 1"#, [now], |r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-        let Some((contact_id, epoch)) = next else {
+        let next:Option<(String,String,i64)>=conn.query_row(r#"SELECT m.contact_id,s.epoch,j.attempts FROM topic_jobs j JOIN messages m ON m.id=j.message_id
+            JOIN topic_settings s ON s.contact_id=m.contact_id AND s.enabled=1 WHERE j.attempts<3 AND j.retry_at<=? ORDER BY j.retry_at,m.timestamp,m.id LIMIT 1"#, [now], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let Some((contact_id, epoch, attempts)) = next else {
             return Ok(None);
         };
+        // A slow or invalid message must not repeatedly exhaust a whole batch.
+        let limit = if attempts == 0 { BATCH_SIZE } else { 1 };
         let mut stmt=conn.prepare(r#"SELECT m.id,m.contact_id,m.timestamp,m.is_from_me,m.is_forwarded,m.sender_name,m.sender_phone,m.chat_type,m.content_type,
             m.content_json,m.original_text,m.translated_text,m.source_language,m.is_translated,m.delivery_status FROM messages m JOIN topic_jobs j ON j.message_id=m.id
-            WHERE m.contact_id=?1 AND j.attempts<3 AND j.retry_at<=?2 ORDER BY m.timestamp,m.id LIMIT ?3"#)?;
+            WHERE m.contact_id=?1 AND j.attempts=?3 AND j.retry_at<=?2 ORDER BY m.timestamp,m.id LIMIT ?4"#)?;
         let mut messages = stmt
-            .query_map(params![contact_id, now, BATCH_SIZE], |r| {
+            .query_map(params![contact_id, now, attempts, limit], |r| {
                 Self::row_to_stored_message(r, None, None)
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -543,6 +572,49 @@ mod tests {
             )
             .unwrap();
         store.queue_legacy_topic_labels().unwrap();
+    }
+
+    #[test]
+    fn topic_retries_isolate_messages_and_recover_exhausted_work_only_once() {
+        let (store, path) = test_store();
+        for i in 0..8 {
+            add(&store, "family@g.us", &format!("message-{i}"), i);
+        }
+        store.set_topics_enabled("family@g.us", true).unwrap();
+        let initial = store.next_topic_batch().unwrap().unwrap();
+        assert_eq!(initial.messages.len(), 8);
+        store.retry_topic_batch(&initial).unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE topic_jobs SET retry_at=0", [])
+            .unwrap();
+        let retry = store.next_topic_batch().unwrap().unwrap();
+        assert_eq!(retry.messages.len(), 1);
+        finish(&store, &retry, "Hospital");
+        assert_eq!(store.topic_settings().unwrap()[0].pending_count, 7);
+        store.conn.lock().unwrap().execute_batch("UPDATE topic_jobs SET attempts=3; DELETE FROM app_settings WHERE key='topic_isolated_retries_v1';").unwrap();
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        assert_eq!(store.topic_settings().unwrap()[0].pending_count, 7);
+        assert_eq!(store.topic_settings().unwrap()[0].failed_count, 0);
+        let recovered = store.next_topic_batch().unwrap().unwrap();
+        assert_eq!(recovered.messages.len(), 1);
+        for _ in 0..2 {
+            store.retry_topic_batch(&recovered).unwrap();
+        }
+        drop(store);
+        let store = MessageStore::new(&path).unwrap();
+        assert_eq!(store.topic_settings().unwrap()[0].failed_count, 1); // restart cannot give unlimited retries
+        while let Some(batch) = store.next_topic_batch().unwrap() {
+            assert_eq!(batch.messages.len(), 1);
+            finish(&store, &batch, "Hospital");
+        }
+        assert_eq!(store.topic_settings().unwrap()[0].pending_count, 0);
+        assert_eq!(store.list_topics().unwrap()[0].message_count, 7);
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

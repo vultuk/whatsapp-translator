@@ -9,8 +9,9 @@ final class ConversationTranslationUITests: XCTestCase {
         let target = app.staticTexts["The replay is brilliant too."].firstMatch
         XCTAssertTrue(target.waitForExistence(timeout: 10))
         target.press(forDuration: 1)
-        let label = app.staticTexts["Topic: Football"].firstMatch
+        let label = app.buttons["Football"].firstMatch
         XCTAssertTrue(label.waitForExistence(timeout: 5))
+        XCTAssertFalse(label.isEnabled, "Saved topic is information, not a message action")
         let combined = XCTAttachment(screenshot: app.screenshot())
         combined.name = "Saved topic in combined message long press menu"; combined.lifetime = .keepAlways; add(combined)
         app.buttons["React with ❤️"].firstMatch.tap()

@@ -136,21 +136,21 @@ final class MessageEditDeliveryTests: XCTestCase {
         session.feedByID[original.id] = original
         TopicRefreshProtocol.state.responses = ["/api/topics/messages": Data(#"{"topics":[{"messageId":"original","contactId":"family@g.us","revision":0,"title":"Hospital","state":"assigned"}]}"#.utf8)]
         await session.refreshMessageTopics([original])
-        XCTAssertEqual(session.messageTopicLabel(for: original), "Topic: Hospital")
+        XCTAssertEqual(session.messageTopicLabel(for: original), "Hospital")
         let edit = try message(body: "Shopping now", revision: 200)
         try session.handle(update(edit))
-        XCTAssertNotEqual(session.messageTopicLabel(for: edit), "Topic: Hospital")
+        XCTAssertNotEqual(session.messageTopicLabel(for: edit), "Hospital")
         await session.refreshMessageTopics([edit]) // old HTTP response is rejected
-        XCTAssertNotEqual(session.messageTopicLabel(for: edit), "Topic: Hospital")
+        XCTAssertNotEqual(session.messageTopicLabel(for: edit), "Hospital")
         TopicRefreshProtocol.state.responses = ["/api/topics/messages": Data(#"{"topics":[{"messageId":"original","contactId":"family@g.us","revision":200,"title":null,"state":"pending"}]}"#.utf8)]
         await session.refreshMessageTopics([edit])
-        XCTAssertEqual(session.messageTopicLabel(for: edit), "Topic: Organising…")
+        XCTAssertEqual(session.messageTopicLabel(for: edit), "Organising…")
         TopicRefreshProtocol.state.responses = ["/api/topics/messages": Data(#"{"topics":[{"messageId":"original","contactId":"family@g.us","revision":200,"title":"Shopping","state":"assigned"}]}"#.utf8)]
         await session.refreshMessageTopics([edit])
-        XCTAssertEqual(session.messageTopicLabel(for: edit), "Topic: Shopping")
+        XCTAssertEqual(session.messageTopicLabel(for: edit), "Shopping")
         XCTAssertFalse(TopicRefreshProtocol.state.requests.contains { $0.contains("/read") })
         for (state, label) in [("failed", "Needs retry"), ("off", "Off for this chat"), ("unassigned", "Not categorised")] {
-            XCTAssertEqual(MessageTopic(messageId: "a", contactId: "x", revision: 0, title: nil, state: state).menuLabel, "Topic: \(label)")
+            XCTAssertEqual(MessageTopic(messageId: "a", contactId: "x", revision: 0, title: nil, state: state).menuLabel, "\(label)")
         }
     }
 
