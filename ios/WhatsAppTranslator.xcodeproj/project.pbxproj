@@ -156,6 +156,9 @@
 		FD6A227DD85657B7A1B132CA /* MessageToneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78B304C0DE351D146ED39609 /* MessageToneTests.swift */; };
 		FEECFE2ED18DF3C28D296139 /* ContactAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAEF803559BBA8F957FAD8DC /* ContactAvatar.swift */; };
 		FF08D2CEBAAA369EAA575B7F /* BabelBridgeWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 1BF1E34DE602E38EB3FEC732 /* BabelBridgeWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B68000000000000000000002 /* video-playback-fixture.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = B68000000000000000000001; };
+		B68000000000000000000003 /* video-playback-fixture.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = B68000000000000000000001; };
+		B68000000000000000000006 /* VideoPlaybackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B68000000000000000000004; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -365,6 +368,8 @@
 		FB8E2F4B70ED44CF81F07EC8 /* NotificationPersonIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationPersonIdentity.swift; sourceTree = "<group>"; };
 		FD2F00804CD25068C715E470 /* WatchReplyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchReplyUITests.swift; sourceTree = "<group>"; };
 		FD30FD5EDF3A40DD9E412307 /* WhatsAppTranslatorNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = WhatsAppTranslatorNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B68000000000000000000001 /* video-playback-fixture.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = WhatsAppTranslator/Resources/video-playback-fixture.mp4; sourceTree = SOURCE_ROOT; };
+		B68000000000000000000004 /* VideoPlaybackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhatsAppTranslatorTests/VideoPlaybackTests.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -462,6 +467,7 @@
 				34752D4D8AD64795CA488C7A /* Models */,
 				D0C2063A713CA22DBC1FF047 /* Services */,
 				0FEC7D156184419BD3FD7742 /* Views */,
+				B68000000000000000000001 /* video-playback-fixture.mp4 */,
 			);
 			path = WhatsAppTranslator;
 			sourceTree = "<group>";
@@ -614,6 +620,7 @@
 				15A922E98CB3D13541956225 /* playback-fixture.mp3 */,
 				8B94AA0053FADA3191A9C967 /* SendRecoveryTests.swift */,
 				DF34EBD20D5CD57512C7790B /* VoicePlaybackTests.swift */,
+				B68000000000000000000004 /* VideoPlaybackTests.swift */,
 				B0FE39B4F7597428E20653AC /* WatchBackendTests.swift */,
 				3623AB47272262E5B74ABF8A /* WatchMessageTransportTests.swift */,
 				57FC5AD282F9A868A9E47AB2 /* WatchMessagingTests.swift */,
@@ -976,6 +983,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B68000000000000000000002 /* video-playback-fixture.mp4 in Resources */,
 				DDA6514D0C610C364F26A2B1 /* AppIntentVocabulary.plist in Resources */,
 				DE532ACEF0383C22096D0706 /* Assets.xcassets in Resources */,
 				F9A3E4BC8721F69619837ECF /* bb-aurora.wav in Resources */,
@@ -1008,6 +1016,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B68000000000000000000003 /* video-playback-fixture.mp4 in Resources */,
 				E0730DE955BFBF9B93F71A80 /* Assets.xcassets in Resources */,
 				7F876FF4AD177F040992061A /* bb-aurora.wav in Resources */,
 				28EA63E3F65FB79E25BAD529 /* bb-bamboo.wav in Resources */,
@@ -1215,6 +1224,7 @@
 				A61ED17A0000000000000002 /* MessageEditDeliveryTests.swift in Sources */,
 				6C37C3EF729A6AA8C422BDE8 /* SendRecoveryTests.swift in Sources */,
 				279B83945EECB15DE7A24F57 /* VoicePlaybackTests.swift in Sources */,
+				B68000000000000000000006 /* VideoPlaybackTests.swift in Sources */,
 				73BF16832485FE0CD1CE1FD6 /* WatchBackendTests.swift in Sources */,
 				C13819E8CAAC775791E7770C /* WatchMessageTransportTests.swift in Sources */,
 				CB1582022F646D90E269DC01 /* WatchMessagingTests.swift in Sources */,
@@ -1434,7 +1444,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 67;
+				CURRENT_PROJECT_VERSION = 68;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -1644,7 +1654,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 67;
+				CURRENT_PROJECT_VERSION = 68;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;

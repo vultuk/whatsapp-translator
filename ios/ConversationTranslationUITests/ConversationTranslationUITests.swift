@@ -1,7 +1,72 @@
+import AVKit
+import UIKit
 import XCTest
 
 @MainActor
 final class ConversationTranslationUITests: XCTestCase {
+    func testVideoOpensFullScreenAndReturnsToTheSameMessage() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoVideo"]
+        app.launch()
+        let video = app.otherElements["Video"].firstMatch
+        XCTAssertTrue(video.waitForExistence(timeout: 10))
+        video.tap()
+        let fullScreen = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'full screen'")).firstMatch
+        XCTAssertTrue(fullScreen.waitForExistence(timeout: 5), app.debugDescription)
+        fullScreen.tap()
+        XCTAssertGreaterThan(video.frame.width, app.frame.width * 0.95, app.debugDescription)
+        defer { XCUIDevice.shared.orientation = .portrait }
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCUIDevice.shared.orientation = .landscapeLeft
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+        }
+        // Reveal controls if their normal auto-hide has already elapsed.
+        video.tap()
+        let done = app.buttons.matching(NSPredicate(format: "label IN %@", ["Done", "Close", "Exit Full Screen"])).firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 5), app.debugDescription)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "Video full screen"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        done.tap()
+        XCTAssertTrue(app.staticTexts["A sample video to try full screen and picture in picture."].firstMatch.waitForExistence(timeout: 5))
+    }
+
+    func testPlayingVideoStartsPictureInPictureWhenLeavingApp() throws {
+        try checkAutomaticPictureInPicture(fullScreen: false)
+    }
+
+    func testFullScreenVideoStartsPictureInPictureWhenLeavingApp() throws {
+        try checkAutomaticPictureInPicture(fullScreen: true)
+    }
+
+    private func checkAutomaticPictureInPicture(fullScreen: Bool) throws {
+        try XCTSkipUnless(AVPictureInPictureController.isPictureInPictureSupported(),
+                          "AVKit reports that picture in picture is unavailable on this simulator/device")
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoVideo"]
+        app.launch()
+        let video = app.otherElements["Video"].firstMatch
+        XCTAssertTrue(video.waitForExistence(timeout: 10))
+        video.tap()
+        XCTAssertTrue(app.buttons["Pause"].firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+        if fullScreen {
+            app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'full screen'")).firstMatch.tap()
+        }
+        let appWidth = app.frame.width
+        XCUIDevice.shared.press(.home)
+        XCUIApplication(bundleIdentifier: "com.apple.Preferences").activate()
+        // AVKit exposes the floating window in the originating application's tree.
+        let pip = app.otherElements["PIPUIView"]
+        XCTAssertTrue(pip.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertLessThan(pip.frame.width, appWidth * 0.75)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "Video continues in picture in picture outside Babel Bridge"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.activate()
+    }
+
     func testOutgoingMessageShowsSavedTopicInItsMenu() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoTopics", "-demoOutgoingTopic"]
@@ -62,6 +127,8 @@ final class ConversationTranslationUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)))
         XCTAssertEqual(groups.frame.minY, filterY, accuracy: 2, "Pulling the list must not expand a blank navigation title")
         app.swipeUp()
+        let filtersSettled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: groups)
+        XCTAssertEqual(XCTWaiter.wait(for: [filtersSettled], timeout: 5), .completed)
         XCTAssertTrue(groups.isHittable)
         XCTAssertEqual(groups.frame.minY, filterY, accuracy: 2)
         let scrolled = XCTAttachment(screenshot: app.screenshot())

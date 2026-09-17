@@ -981,6 +981,9 @@ final class AppSession {
     }
 
     func forgetServer() {
+        #if os(iOS)
+        MessageVideoPlayback.stopAll()
+        #endif
         savedConversationSettings = [:]
         recoveryTask?.cancel()
         liveUpdatesReconnecting = false
@@ -1513,6 +1516,25 @@ final class AppSession {
         }
         phase = .ready
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-demoVideo"),
+           let url = Bundle.main.url(forResource: "video-playback-fixture", withExtension: "mp4") {
+            let chat = "video-preview@g.us"
+            let value: [String: Any] = [
+                "id": "video-preview", "contactId": chat, "timestamp": 1_789_661_000_000,
+                "isFromMe": false, "isForwarded": false, "senderName": "Alex", "contactName": "Video preview",
+                "chatType": "group", "contentType": "Video", "isTranslated": false,
+                "content": ["type": "video", "mimeType": "video/mp4", "hasMedia": true,
+                            "caption": "A sample video to try full screen and picture in picture."]
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: value),
+               let video = try? JSONDecoder().decode(ChatMessage.self, from: data) {
+                contacts = [Contact(id: chat, name: "Video preview", phone: nil, type: "group", lastMessageTime: video.timestamp, unreadCount: 0, pinnedAt: nil, lastMessagePreview: "Video")]
+                messages = [chat: [video]]
+                messageMediaURLs[video.id] = url
+                feedByID = [video.id: video]
+                feedHasLoaded = true
+            }
+        }
         if ProcessInfo.processInfo.arguments.contains("-demoPhotoGallery") {
             loadPhotoGalleryDemo()
         }

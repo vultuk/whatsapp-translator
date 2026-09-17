@@ -83,6 +83,23 @@ original captions, reactions, and actions for the selected photo. Only preview
 images load in the timeline; the viewer loads other photos as they are selected.
 Use `-demo -demoPhotoGallery` for a synthetic 12-photo group example.
 
+## Video playback
+
+On iPhone and iPad, tap a video to reveal Apple's playback controls, then use the
+expand button for full-screen viewing. Videos can continue in picture in picture
+when leaving the app, subject to device support and **Settings → General →
+Picture in Picture → Start PiP Automatically**. These iOS presentations share
+the same playhead.
+Starting another video pauses the first; forgetting the server stops retained
+video playback.
+
+The iOS app declares background audio and activates a playback audio session only
+when a video starts. AVKit manages app-background transitions. Debug launch
+arguments `-demo -demoVideo` show a synthetic, bundled video for UI checks.
+`WhatsAppTranslatorTests/VideoPlaybackTests.swift` exercises real playback through message
+removal, full-screen/PiP transitions, restoration and account removal. The PiP UI
+check explicitly skips devices where AVKit reports no PiP support.
+
 ## Native Mac app
 
 The Mac app provides a resizable two-column conversation window, native menu
