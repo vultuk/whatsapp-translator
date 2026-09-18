@@ -233,7 +233,6 @@ async fn run_web_mode(
             tokio::select! {
                 _ = &mut shutdown_rx => {
                     print_info("Shutting down...");
-                    let _ = bridge.shutdown().await;
                     break true; // Exit completely
                 }
 
@@ -254,6 +253,11 @@ async fn run_web_mode(
             }
         };
 
+        // A crashed bridge must not leave clients believing WhatsApp is online.
+        // Reap it before touching SQLite session files or starting a replacement.
+        *state.command_tx.write().await = None;
+        let _ = bridge.shutdown().await;
+        state.set_connected(false, None, None).await;
         if should_exit {
             break;
         }
@@ -294,11 +298,13 @@ async fn handle_web_event(
         }
 
         BridgeEvent::ConnectionState { state: conn_state } => match conn_state {
-            ConnectionState::Disconnected => {
+            ConnectionState::Disconnected
+            | ConnectionState::Reconnecting
+            | ConnectionState::Connecting => {
                 state.set_connected(false, None, None).await;
             }
             ConnectionState::LoggedOut => {
-                state.set_connected(false, None, None).await;
+                state.require_whatsapp_link().await;
                 state.request_session_reset_before_bridge_restart();
                 if let Err(e) = state
                     .send_bridge_command(bridge::BridgeCommand::Disconnect)
@@ -405,6 +411,12 @@ async fn handle_web_event(
 
         BridgeEvent::Error { code, message } => {
             error!("Bridge error [{}]: {}", code, message);
+            if code == "reconnect_required" {
+                state.set_connected(false, None, None).await;
+                let _ = state
+                    .send_bridge_command(bridge::BridgeCommand::Disconnect)
+                    .await;
+            }
         }
 
         BridgeEvent::Log { level, message } => match level.as_str() {
@@ -416,7 +428,7 @@ async fn handle_web_event(
 
         BridgeEvent::LoggedOut { reason } => {
             warn!("Logged out: {}", reason);
-            state.set_connected(false, None, None).await;
+            state.require_whatsapp_link().await;
             state.request_session_reset_before_bridge_restart();
             if let Err(e) = state
                 .send_bridge_command(bridge::BridgeCommand::Disconnect)
@@ -1359,6 +1371,126 @@ impl serde::Serialize for bridge::MessageContent {
 #[cfg(test)]
 mod identity_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn whatsapp_session_loss_relinks_without_erasing_saved_chats() {
+        let path =
+            std::env::temp_dir().join(format!("connection-recovery-{}", uuid::Uuid::new_v4()));
+        let store = MessageStore::new(&path).unwrap();
+        store
+            .upsert_contact(
+                "test@s.whatsapp.net",
+                Some("Preview"),
+                None,
+                Some("private"),
+                100,
+            )
+            .unwrap();
+        let state = AppState::new(store.clone(), path.clone(), path.clone(), None, None, None);
+        let (tx, mut rx) = mpsc::channel(10);
+        state.set_command_tx(tx).await;
+        state
+            .set_connected(true, Some("447700900123".into()), Some("Preview".into()))
+            .await;
+        handle_web_event(
+            BridgeEvent::ConnectionState {
+                state: ConnectionState::Reconnecting,
+            },
+            &state,
+            &store,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!*state.connected.read().await);
+        assert_eq!(
+            *state.connection_state.read().await,
+            web::WhatsAppConnectionState::Reconnecting
+        );
+        assert!(!state.take_session_reset_request());
+        assert!(rx.try_recv().is_err());
+
+        handle_web_event(
+            BridgeEvent::LoggedOut {
+                reason: "device removed".into(),
+            },
+            &state,
+            &store,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            *state.connection_state.read().await,
+            web::WhatsAppConnectionState::LinkingRequired
+        );
+        assert!(state.take_session_reset_request());
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            bridge::BridgeCommand::Disconnect
+        ));
+        assert!(store.get_contact("test@s.whatsapp.net").unwrap().is_some());
+        handle_web_event(
+            BridgeEvent::Qr {
+                data: "fresh-test-code".into(),
+            },
+            &state,
+            &store,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            state.qr_code.read().await.as_deref(),
+            Some("fresh-test-code")
+        );
+        handle_web_event(
+            BridgeEvent::Connected {
+                phone: "447700900123".into(),
+                name: "Preview".into(),
+                platform: None,
+            },
+            &state,
+            &store,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(*state.connected.read().await);
+        assert!(state.qr_code.read().await.is_none());
+        assert_eq!(
+            *state.connection_state.read().await,
+            web::WhatsAppConnectionState::Connected
+        );
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[tokio::test]
+    async fn replaced_whatsapp_connection_restarts_without_resetting_session() {
+        let path =
+            std::env::temp_dir().join(format!("connection-replaced-{}", uuid::Uuid::new_v4()));
+        let store = MessageStore::new(&path).unwrap();
+        let state = AppState::new(store.clone(), path.clone(), path.clone(), None, None, None);
+        let (tx, mut rx) = mpsc::channel(10);
+        state.set_command_tx(tx).await;
+        handle_web_event(
+            BridgeEvent::Error {
+                code: "reconnect_required".into(),
+                message: "replaced".into(),
+            },
+            &state,
+            &store,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            bridge::BridgeCommand::Disconnect
+        ));
+        assert!(!state.take_session_reset_request());
+        let _ = std::fs::remove_dir_all(path);
+    }
 
     #[tokio::test]
     async fn incoming_embedded_quotes_survive_storage_and_restore_missing_metadata_only() {

@@ -90,6 +90,7 @@ pub struct AppState {
     pub phone: RwLock<Option<String>>,
     pub name: RwLock<Option<String>>,
     pub qr_code: RwLock<Option<String>>,
+    pub connection_state: RwLock<WhatsAppConnectionState>,
     pub broadcast_tx: broadcast::Sender<WebSocketEvent>,
     pub web_dir: PathBuf,
     pub data_dir: PathBuf,
@@ -151,6 +152,8 @@ pub enum WebSocketEvent {
         connected: bool,
         phone: Option<String>,
         name: Option<String>,
+        connection_state: WhatsAppConnectionState,
+        qr: Option<String>,
     },
     Qr {
         data: String,
@@ -219,11 +222,22 @@ fn live_event_for_message(message: StoredMessage) -> WebSocketEvent {
 }
 
 /// API status response
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WhatsAppConnectionState {
+    Connecting,
+    Connected,
+    Reconnecting,
+    LinkingRequired,
+}
+
 #[derive(Serialize)]
 struct StatusResponse {
     connected: bool,
     phone: Option<String>,
     name: Option<String>,
+    connection_state: WhatsAppConnectionState,
+    qr: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -609,6 +623,7 @@ impl AppState {
             phone: RwLock::new(None),
             name: RwLock::new(None),
             qr_code: RwLock::new(None),
+            connection_state: RwLock::new(WhatsAppConnectionState::Connecting),
             broadcast_tx,
             web_dir,
             data_dir,
@@ -719,6 +734,15 @@ impl AppState {
         *self.connected.write().await = connected;
         *self.phone.write().await = phone.clone();
         *self.name.write().await = name.clone();
+        *self.qr_code.write().await = None;
+        let mut state = self.connection_state.write().await;
+        if connected {
+            *state = WhatsAppConnectionState::Connected;
+        } else if *state != WhatsAppConnectionState::LinkingRequired {
+            *state = WhatsAppConnectionState::Reconnecting;
+        }
+        drop(state);
+        self.broadcast_connection_status().await;
 
         if connected {
             *self.qr_code.write().await = None;
@@ -733,8 +757,26 @@ impl AppState {
 
     /// Set QR code
     pub async fn set_qr_code(&self, qr: String) {
+        *self.connected.write().await = false;
+        *self.connection_state.write().await = WhatsAppConnectionState::LinkingRequired;
         *self.qr_code.write().await = Some(qr.clone());
+        self.broadcast_connection_status().await;
         let _ = self.broadcast_tx.send(WebSocketEvent::Qr { data: qr });
+    }
+
+    pub async fn require_whatsapp_link(&self) {
+        *self.connection_state.write().await = WhatsAppConnectionState::LinkingRequired;
+        self.set_connected(false, None, None).await;
+    }
+
+    async fn broadcast_connection_status(&self) {
+        let _ = self.broadcast_tx.send(WebSocketEvent::Status {
+            connected: *self.connected.read().await,
+            phone: self.phone.read().await.clone(),
+            name: self.name.read().await.clone(),
+            connection_state: *self.connection_state.read().await,
+            qr: self.qr_code.read().await.clone(),
+        });
     }
 
     /// Broadcast a new message
@@ -1669,10 +1711,7 @@ async fn logout(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.mcp_prepared_messages.write().await.clear();
 
     // 5. Reset connection state
-    *state.connected.write().await = false;
-    *state.phone.write().await = None;
-    *state.name.write().await = None;
-    *state.qr_code.write().await = None;
+    state.require_whatsapp_link().await;
 
     // 6. Clear avatar cache
     state.avatar_cache.write().await.clear();
@@ -1693,6 +1732,8 @@ async fn get_status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> 
         connected: *state.connected.read().await,
         phone: state.phone.read().await.clone(),
         name: state.name.read().await.clone(),
+        connection_state: *state.connection_state.read().await,
+        qr: state.qr_code.read().await.clone(),
     })
 }
 
@@ -4945,6 +4986,8 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
         connected: *state.connected.read().await,
         phone: state.phone.read().await.clone(),
         name: state.name.read().await.clone(),
+        connection_state: *state.connection_state.read().await,
+        qr: state.qr_code.read().await.clone(),
     };
 
     if let Ok(json) = serde_json::to_string(&status) {
@@ -5120,6 +5163,46 @@ mod tests {
             .uri(uri)
             .body(Body::empty())
             .expect("request")
+    }
+
+    #[tokio::test]
+    async fn connection_status_recovers_missed_events_and_expires_old_linking_codes() {
+        let (state, data_dir) = test_state(None);
+        let mut events = state.broadcast_tx.subscribe();
+        state.require_whatsapp_link().await;
+        state.set_qr_code("test-code".into()).await;
+        let status = get_status(State(state.clone())).await.0;
+        assert!(!status.connected);
+        assert_eq!(
+            status.connection_state,
+            WhatsAppConnectionState::LinkingRequired
+        );
+        assert_eq!(status.qr.as_deref(), Some("test-code"));
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            WebSocketEvent::Status {
+                connection_state: WhatsAppConnectionState::LinkingRequired,
+                ..
+            }
+        ));
+        // QR timeout/bridge exit keeps the linking flow open while removing the
+        // expired code. The next bridge instance supplies a fresh one.
+        state.set_connected(false, None, None).await;
+        let status = get_status(State(state.clone())).await.0;
+        assert_eq!(
+            status.connection_state,
+            WhatsAppConnectionState::LinkingRequired
+        );
+        assert!(status.qr.is_none());
+        state.set_qr_code("replacement-code".into()).await;
+        state
+            .set_connected(true, Some("447700900123".into()), Some("Preview".into()))
+            .await;
+        let status = get_status(State(state)).await.0;
+        assert!(status.connected);
+        assert_eq!(status.connection_state, WhatsAppConnectionState::Connected);
+        assert!(status.qr.is_none());
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 
     fn feed_test_message(id: &str, contact_id: &str, timestamp: i64) -> StoredMessage {

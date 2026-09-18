@@ -13,7 +13,23 @@ struct RootView: View {
             case .needsConfiguration:
                 ConnectionSetupView()
             case .ready:
-                MainMessagesView()
+                Group {
+                    if session.requiresWhatsAppLink {
+                        WhatsAppLinkView()
+                    } else {
+                        MainMessagesView()
+                            .safeAreaInset(edge: .top, spacing: 0) {
+                                if !session.backendStatus.connected {
+                                    Label("Reconnecting to WhatsApp…", systemImage: "arrow.triangle.2.circlepath")
+                                        .font(.footnote)
+                                        .padding(10)
+                                        .frame(maxWidth: .infinity)
+                                        .background(.regularMaterial)
+                                }
+                            }
+                    }
+                }
+                .task { await session.monitorWhatsAppConnection() }
             }
         }
         .animation(.snappy, value: session.phase)

@@ -32,6 +32,38 @@ function extractMethodBody(source, methodName) {
   assert.fail(`${methodName} body should terminate`);
 }
 
+test('WhatsApp disconnect discards an expired QR and opens linking while a fresh code is prepared', async () => {
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const disconnect = new AsyncFunction(extractMethodBody(appJs, 'handleDisconnected'));
+  const app = { connected: true, qrData: 'expired', connectionState: 'linking_required',
+    async fetchCurrentQRCode() { return null; },
+    showConnecting() { this.preparingLink = true; },
+    showQRCode() { assert.fail('Expired code must not be redisplayed'); },
+    loadContacts() { assert.fail('Linking must open even with cached chats'); },
+  };
+  await disconnect.call(app);
+  assert.equal(app.connected, false);
+  assert.equal(app.qrData, null);
+  assert.equal(app.preparingLink, true);
+});
+
+test('a late QR response cannot reopen linking after WhatsApp reconnects', async () => {
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const disconnect = new AsyncFunction(extractMethodBody(appJs, 'handleDisconnected'));
+  let resolve;
+  const app = { connected: false, qrData: null,
+    fetchCurrentQRCode() { return new Promise(done => { resolve = done; }); },
+    showQRCode() { assert.fail('A stale QR must not replace the connected inbox'); },
+    loadContacts() { assert.fail('A stale disconnect must not change the inbox'); },
+  };
+  const pending = disconnect.call(app);
+  app.connected = true;
+  app.connectionRevision += 1;
+  resolve('stale-code');
+  await pending;
+  assert.equal(app.connected, true);
+});
+
 test('foreground topic recovery refreshes a still-open socket session without marking messages read', async () => {
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const recover = new AsyncFunction('document', 'WebSocket', extractMethodBody(appJs, 'refreshAfterBecomingVisible'));

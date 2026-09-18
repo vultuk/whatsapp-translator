@@ -4,6 +4,19 @@ import XCTest
 
 @MainActor
 final class ConversationTranslationUITests: XCTestCase {
+    func testLostWhatsAppSessionOpensLinkingAndReturnsToInbox() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoRelinking"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Link WhatsApp"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.images["whatsapp-link-qr"].waitForExistence(timeout: 8))
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "Fresh WhatsApp linking flow after session removal"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        XCTAssertTrue(app.staticTexts["Link WhatsApp"].waitForNonExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["Connect translator"].exists)
+    }
     func testVideoOpensFullScreenAndReturnsToTheSameMessage() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoVideo"]

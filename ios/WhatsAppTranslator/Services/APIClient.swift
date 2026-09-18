@@ -100,6 +100,10 @@ actor APIClient {
         try await authorizedRequest("/api/status")
     }
 
+    func whatsAppQRCode() async throws -> WhatsAppQRResponse {
+        try await authorizedRequest("/api/qr")
+    }
+
     func contacts() async throws -> [Contact] {
         try await authorizedRequest("/api/contacts")
     }
@@ -435,6 +439,7 @@ actor APIClient {
                     }
                 }
                 defer { watchdog.cancel(); socket.cancel(with: .goingAway, reason: nil) }
+                var receivedStatus = false
                 while !Task.isCancelled && generation == liveGeneration {
                     let message = try await socket.receive()
                     lastLiveMessage = Date()
@@ -445,7 +450,11 @@ actor APIClient {
                     @unknown default: continue
                     }
                     if let event = try? JSONDecoder.backend.decode(LiveEvent.self, from: data) {
-                        if event.type == "status" { retry = 0; await handler(.signal("live_restored")) }
+                        if event.type == "status" && !receivedStatus {
+                            receivedStatus = true
+                            retry = 0
+                            await handler(.signal("live_restored"))
+                        }
                         await handler(event)
                     }
                 }

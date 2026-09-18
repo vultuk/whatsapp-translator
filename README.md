@@ -79,6 +79,12 @@ Hosted deploy recommendation:
   or `http://[::1]` redirect URIs, and authorization requires an exact registered
   redirect match.
 
+## WhatsApp reconnection
+
+Temporary connection drops reconnect using the saved WhatsApp session. If WhatsApp removes the linked device, the backend restarts linking automatically and the iPhone, iPad, Mac, and web apps display a fresh QR code. Expired codes are replaced automatically; successful linking returns to the inbox. Saved chats and server credentials are retained. The native apps also check status on returning to the foreground and periodically while open, so a missed live event does not leave the app stuck.
+
+To scan the code, use WhatsApp on the account's main phone under **Settings → Linked Devices → Link a Device**. When using Babel Bridge on that same phone, display the code on a computer or tablet.
+
 ## Device-address repair
 
 Private chats use the WhatsApp account address. Device suffixes such as `:17`

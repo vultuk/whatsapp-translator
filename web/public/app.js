@@ -1958,6 +1958,10 @@ class WhatsAppClient {
 
   // Handle status update
   async handleStatus(data) {
+    if (data.connection_state) {
+      this.connectionState = data.connection_state;
+      this.qrData = data.qr || null;
+    }
     if (data.connected) {
       this.handleConnected(data);
     } else {
@@ -2003,6 +2007,8 @@ class WhatsAppClient {
 
   // Show QR code
   showQRCode(qrData) {
+    this.connectionRevision = (this.connectionRevision || 0) + 1;
+    this.connected = false;
     this.qrData = qrData;
     document.getElementById('connecting-overlay').classList.add('hidden');
     document.getElementById('qr-overlay').classList.remove('hidden');
@@ -2049,6 +2055,8 @@ class WhatsAppClient {
 
   // Handle connected state
   handleConnected(data) {
+    this.connectionRevision = (this.connectionRevision || 0) + 1;
+    this.connectionState = 'connected';
     this.connected = true;
     this.qrData = null;
     this.notificationsReadyAt = Date.now() + 10000;
@@ -2078,20 +2086,22 @@ class WhatsAppClient {
     if (this.demoMode) return;
 
     this.connected = false;
-
-    if (this.qrData) {
-      this.showQRCode(this.qrData);
-      return;
-    }
+    const revision = this.connectionRevision = (this.connectionRevision || 0) + 1;
+    this.qrData = null;
 
     const qrData = await this.fetchCurrentQRCode();
+    if (this.connected || revision !== this.connectionRevision) return;
     if (qrData) {
       this.showQRCode(qrData);
       return;
     }
+    if (this.connectionState === 'linking_required') {
+      this.showConnecting();
+      return;
+    }
 
     const loadedContacts = await this.loadContacts();
-    if (this.connected) return;
+    if (this.connected || revision !== this.connectionRevision) return;
     if (this.qrData) {
       this.showQRCode(this.qrData);
       return;

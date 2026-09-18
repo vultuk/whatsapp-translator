@@ -12,7 +12,16 @@ struct BackendStatus: Decodable, Sendable {
     let connected: Bool
     let phone: String?
     let name: String?
+    var connectionState: String? = nil
+    var qr: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case connected, phone, name, qr
+        case connectionState = "connection_state"
+    }
 }
+
+struct WhatsAppQRResponse: Decodable, Sendable { let qr: String? }
 
 struct AvatarResponse: Decodable, Sendable { let url: URL? }
 
@@ -749,6 +758,11 @@ struct PushDeviceRegistration: Encodable, Sendable {
 
 struct LiveEvent: Decodable, Sendable {
     var settings: ConversationSettings? = nil
+    var connectionState: String? = nil
+    var qr: String? = nil
+    var phone: String? = nil
+    var name: String? = nil
+    var data: String? = nil
     let type: String
     let connected: Bool?
     let chatId: String?
@@ -770,6 +784,8 @@ struct LiveEvent: Decodable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case phone, name, data, qr
+        case connectionState = "connection_state"
         case type
         case settings
         case connected

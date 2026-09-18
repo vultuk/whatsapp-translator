@@ -147,6 +147,10 @@ func NewClient(ctx context.Context, dataDir string, verbose bool) (*Client, erro
 	// Create client with stderr logger
 	clientLog := stderrLogger("Client", verbose)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
+	client.AutoReconnectHook = func(error) bool {
+		SendEvent(NewConnectionStateEvent("reconnecting"))
+		return ctx.Err() == nil
+	}
 
 	c := &Client{
 		client:    client,
@@ -165,8 +169,11 @@ func NewClient(ctx context.Context, dataDir string, verbose bool) (*Client, erro
 func (c *Client) Connect(ctx context.Context) error {
 	if c.client.Store.ID == nil {
 		// No existing session, need to pair with QR code
-		qrChan, _ := c.client.GetQRChannel(ctx)
-		err := c.client.Connect()
+		qrChan, err := c.client.GetQRChannel(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to start linking: %w", err)
+		}
+		err = c.client.Connect()
 		if err != nil {
 			return fmt.Errorf("failed to connect: %w", err)
 		}
@@ -178,13 +185,15 @@ func (c *Client) Connect(ctx context.Context) error {
 				// Send QR code to Rust CLI
 				SendEvent(NewQREvent(evt.Code))
 			case "success":
-				// Successfully paired
-				c.sendConnectedEvent()
+				// Pairing precedes the authenticated Connected event.
 				return nil
 			case "timeout":
 				return fmt.Errorf("QR code scan timed out")
+			case "error", "err-unexpected-event", "err-client-outdated":
+				return fmt.Errorf("linking failed: %s", evt.Event)
 			}
 		}
+		return fmt.Errorf("linking channel closed before completion")
 	} else {
 		// Existing session, just connect
 		err := c.client.Connect()
@@ -227,23 +236,21 @@ func (c *Client) handleEvent(evt interface{}) {
 	if c.verbose {
 		SendEvent(NewLogEvent("debug", fmt.Sprintf("Event received: %T", evt)))
 	}
+	if updates := connectionEvents(evt); updates != nil {
+		for _, update := range updates {
+			SendEvent(update)
+		}
+		return
+	}
 
 	switch v := evt.(type) {
 	case *events.Connected:
 		c.sendConnectedEvent()
 
-	case *events.Disconnected:
-		SendEvent(NewConnectionStateEvent("disconnected"))
-
-	case *events.LoggedOut:
-		reason := "unknown"
-		if v.Reason != 0 {
-			reason = fmt.Sprintf("code: %d", v.Reason)
+	case *events.KeepAliveRestored:
+		if c.client.IsConnected() && c.client.IsLoggedIn() {
+			c.sendConnectedEvent()
 		}
-		SendEvent(NewLoggedOutEvent(reason))
-
-	case *events.StreamReplaced:
-		SendEvent(NewLoggedOutEvent("stream replaced by another connection"))
 
 	case *events.Message:
 		c.handleMessage(v)

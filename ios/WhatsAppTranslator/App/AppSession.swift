@@ -15,6 +15,12 @@ final class AppSession {
     var phase: Phase = .restoring
     var configuration: ServerConfiguration?
     var backendStatus = BackendStatus(connected: false, phone: nil, name: nil)
+    var whatsAppQRCode: String?
+    var whatsAppLinkError: String?
+    private var connectionRevision = UUID()
+    var requiresWhatsAppLink: Bool {
+        !backendStatus.connected && (backendStatus.connectionState == "linking_required" || whatsAppQRCode != nil)
+    }
     var contacts: [Contact] = []
     var avatarURLs: [String: URL] = [:]
     enum MainTab { case messages, chats }
@@ -441,6 +447,24 @@ final class AppSession {
         }
         if demoMode {
             loadDemoData()
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-demoRelinking") {
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    handle(LiveEvent.signal("disconnected"))
+                    let status = try! JSONDecoder().decode(LiveEvent.self, from: Data(#"{"type":"status","connected":false,"connection_state":"linking_required","qr":null}"#.utf8))
+                    handle(status)
+                    try? await Task.sleep(for: .seconds(1))
+                    var code = LiveEvent.signal("qr")
+                    code.data = "BABEL-BRIDGE-RELINK-PREVIEW-NOT-A-LIVE-CODE"
+                    handle(code)
+                    try? await Task.sleep(for: .seconds(10))
+                    var connected = LiveEvent.signal("connected")
+                    connected.name = "Preview"
+                    handle(connected)
+                }
+            }
+            #endif
             return
         }
         guard let stored = credentials.load() else {
@@ -464,15 +488,53 @@ final class AppSession {
         guard !demoMode else { return }
         isRefreshing = true
         defer { isRefreshing = false }
+        let revision = connectionRevision
         do {
             async let status = api.status()
             async let contacts = api.contacts()
-            backendStatus = try await status
+            let latestStatus = try await status
+            if revision == connectionRevision { applyBackendStatus(latestStatus) }
             self.contacts = try await contacts
             await persistCache()
         } catch {
             guard !Self.isExpectedCancellation(error) else { return }
             presentError("Couldn’t refresh chats", error)
+        }
+    }
+
+    func applyBackendStatus(_ status: BackendStatus) {
+        connectionRevision = UUID()
+        backendStatus = status
+        if status.connected || status.connectionState != nil { whatsAppQRCode = status.connected ? nil : status.qr }
+        whatsAppLinkError = nil
+    }
+
+    func refreshWhatsAppConnection() async {
+        guard !demoMode, configuration != nil, phase == .ready else { return }
+        let revision = connectionRevision
+        do {
+            let status = try await api.status()
+            guard revision == connectionRevision, phase == .ready, !Task.isCancelled else { return }
+            applyBackendStatus(status)
+            // Compatibility with servers that predate the connection-state snapshot.
+            if !status.connected && status.connectionState == nil {
+                let qrRevision = connectionRevision
+                let response = try await api.whatsAppQRCode()
+                guard qrRevision == connectionRevision, phase == .ready, !Task.isCancelled else { return }
+                whatsAppQRCode = response.qr
+            }
+        } catch {
+            guard revision == connectionRevision, !Self.isExpectedCancellation(error) else { return }
+            whatsAppLinkError = "The server is unavailable. We’ll keep checking automatically."
+        }
+    }
+
+    func monitorWhatsAppConnection() async {
+        guard !demoMode else { return }
+        while !Task.isCancelled && phase == .ready {
+            await refreshWhatsAppConnection()
+            do { try await Task.sleep(for: .seconds(backendStatus.connected ? 20 : 5)) }
+            catch { return }
         }
     }
 
@@ -981,6 +1043,7 @@ final class AppSession {
     }
 
     func forgetServer() {
+        applyBackendStatus(BackendStatus(connected: false, phone: nil, name: nil, connectionState: "connecting"))
         #if os(iOS)
         MessageVideoPlayback.stopAll()
         #endif
@@ -1042,7 +1105,7 @@ final class AppSession {
         }
         phase = restoredCache ? .ready : .connecting
         do {
-            backendStatus = try await api.authenticate()
+            applyBackendStatus(try await api.authenticate())
             if remember { try credentials.save(configuration) }
             contacts = try await api.contacts()
             phase = .ready
@@ -1072,6 +1135,7 @@ final class AppSession {
         guard phase == .ready, !demoMode, !isConnecting else { return }
         _ = await restoreCachedState()
         await refresh()
+        await refreshWhatsAppConnection()
         // Topic assignments may finish while the app is suspended, without a live
         // event reaching this session. Refresh both the catalog and loaded pages.
         await loadTopics()
@@ -1163,9 +1227,25 @@ final class AppSession {
                     if mainTab == .chats, let id = selectedContactID { await loadMessages(for: id) }
                 } while recoveryNeedsAnotherPass && !Task.isCancelled
             }
-        case "status":
+        case "status", "connected", "disconnected", "qr":
+            if event.type == "qr", let code = event.data {
+                applyBackendStatus(BackendStatus(connected: false, phone: nil, name: nil, connectionState: "linking_required"))
+                whatsAppQRCode = code
+                whatsAppLinkError = nil
+                return
+            }
+            if event.type == "connected" {
+                applyBackendStatus(BackendStatus(connected: true, phone: event.phone, name: event.name, connectionState: "connected"))
+                Task { await refresh() }
+                return
+            }
+            if event.type == "disconnected" {
+                applyBackendStatus(BackendStatus(connected: false, phone: nil, name: nil,
+                    connectionState: requiresWhatsAppLink ? "linking_required" : "reconnecting"))
+                return
+            }
             if let connected = event.connected {
-                backendStatus = BackendStatus(connected: connected, phone: backendStatus.phone, name: backendStatus.name)
+                applyBackendStatus(BackendStatus(connected: connected, phone: event.phone, name: event.name, connectionState: event.connectionState, qr: event.qr))
             }
         case "mark_as_read":
             if let id = event.chatId, let index = contacts.firstIndex(where: { $0.id == id }) {
