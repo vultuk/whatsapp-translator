@@ -4,6 +4,56 @@ import XCTest
 
 @MainActor
 final class ConversationTranslationUITests: XCTestCase {
+    func testChatGalleryBrowsesPhotosAndVideosAndLoadsOlderMedia() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoChatGallery"]
+        app.launch()
+        let open = app.buttons["open-chat-gallery"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10))
+        open.tap()
+        let photo = app.buttons["gallery-item-chat-gallery-000"]
+        XCTAssertTrue(photo.waitForExistence(timeout: 10))
+        let grid = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        grid.name = "Chat gallery square photos and videos"
+        grid.lifetime = .keepAlways
+        add(grid)
+        photo.tap()
+        XCTAssertTrue(app.images["Full-screen photo"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["gallery-position"].label, "1 of 60+")
+        let fullPhoto = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        fullPhoto.name = "Full screen gallery photo with navigation"
+        fullPhoto.lifetime = .keepAlways
+        add(fullPhoto)
+        app.images["Full-screen photo"].swipeLeft()
+        let video = app.otherElements["gallery-video-player"].firstMatch
+        XCTAssertTrue(video.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["gallery-position"].label.hasPrefix("2 of"))
+        let playback = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        playback.name = "Full screen video inside chat gallery"
+        playback.lifetime = .keepAlways
+        add(playback)
+        video.swipeLeft()
+        XCTAssertTrue(app.images["Full-screen photo"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["gallery-position"].label.hasPrefix("3 of"))
+        app.images["Full-screen photo"].swipeRight()
+        XCTAssertTrue(video.waitForExistence(timeout: 5))
+        app.buttons["Previous media"].tap()
+        XCTAssertTrue(app.images["Full-screen photo"].waitForExistence(timeout: 5))
+        app.buttons["Close photo"].tap()
+        XCTAssertTrue(photo.waitForExistence(timeout: 5))
+        let oldest = app.buttons["gallery-item-chat-gallery-074"]
+        for _ in 0..<22 {
+            if oldest.exists && oldest.isHittable { break }
+            app.scrollViews.firstMatch.swipeUp()
+        }
+        XCTAssertTrue(oldest.waitForExistence(timeout: 10))
+        oldest.tap()
+        XCTAssertTrue(app.staticTexts["gallery-position"].label.hasPrefix("75 of 75"))
+        app.buttons["Close photo"].tap()
+        app.buttons["close-chat-gallery"].tap()
+        XCTAssertTrue(open.waitForExistence(timeout: 5))
+    }
+
     func testLostWhatsAppSessionOpensLinkingAndReturnsToInbox() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoRelinking"]

@@ -308,6 +308,7 @@ final class AppSession {
     private let demoConversationMode: Bool
     private var avatarRequests: Set<String> = []
     private var mediaRequests: Set<String> = []
+    private var galleryDemoMessages: [ChatMessage] = []
     private var linkPreviewRequests: Set<URL> = []
     private var isConnecting = false
 
@@ -983,6 +984,39 @@ final class AppSession {
         }
     }
 
+    func galleryPage(contactID: String, before: ChatMessage? = nil) async throws -> MessagesResponse {
+        if demoMode {
+            let all = galleryDemoMessages.isEmpty ? (messages[contactID] ?? []) : galleryDemoMessages
+            let matching = ChatMediaGalleryModel.ordered(all, contactID: contactID).filter {
+                guard let before else { return true }
+                return $0.timestamp < before.timestamp || ($0.timestamp == before.timestamp && $0.id < before.id)
+            }
+            return MessagesResponse(messages: Array(matching.prefix(60)), hasMore: matching.count > 60)
+        }
+        let server = configuration?.baseURL
+        let response = try await api.gallery(contactID: contactID, before: before?.timestamp, beforeID: before?.id)
+        guard phase == .ready, configuration?.baseURL == server, !Task.isCancelled else { throw CancellationError() }
+        return MessagesResponse(messages: normalizeMessages(response.messages), hasMore: response.hasMore)
+    }
+
+    func galleryThumbnail(for message: ChatMessage) async throws -> PlatformImage {
+        if let image = messageImages[message.id] { return image }
+        if demoMode, let url = messageMediaURLs[message.id] {
+            return try await GalleryVideoPreview.image(url: url)
+        }
+        let server = configuration?.baseURL
+        let key = "gallery-preview-\(server?.absoluteString ?? "")-\(message.id)-\(message.editRevision)"
+        if let url = try? await mediaCache.cachedURL(for: key),
+           let data = try? Data(contentsOf: url), let image = PlatformImage(data: data) { return image }
+        let response = try await api.mediaThumbnail(messageID: message.id)
+        guard phase == .ready, configuration?.baseURL == server, !Task.isCancelled else { throw CancellationError() }
+        guard let data = Data(base64Encoded: response.mediaData), let image = PlatformImage(data: data) else {
+            throw APIError.decoding("This preview could not be opened.")
+        }
+        _ = try? await mediaCache.store(data, messageID: key, fileExtension: "jpg")
+        return image
+    }
+
     func retryMedia(for message: ChatMessage) async {
         messageImages.removeValue(forKey: message.id)
         messageMediaURLs.removeValue(forKey: message.id)
@@ -1062,6 +1096,7 @@ final class AppSession {
         avatarRequests = []
         messageImages = [:]
         messageMediaURLs = [:]
+        galleryDemoMessages = []
         mediaLoadingIDs = []
         mediaErrorIDs = []
         linkPreviews = [:]
@@ -1618,6 +1653,9 @@ final class AppSession {
         if ProcessInfo.processInfo.arguments.contains("-demoPhotoGallery") {
             loadPhotoGalleryDemo()
         }
+        if ProcessInfo.processInfo.arguments.contains("-demoChatGallery") {
+            loadChatGalleryDemo()
+        }
         if ProcessInfo.processInfo.arguments.contains("-demoLiveReactions") {
             startLiveReactionDemo()
         }
@@ -1628,6 +1666,31 @@ final class AppSession {
     }
 
     #if DEBUG
+    private func loadChatGalleryDemo() {
+        let chat = "chat-gallery-preview@g.us"
+        let base: Int64 = 1_789_770_000_000
+        contacts = [Contact(id: chat, name: "Weekend adventures", phone: nil, type: "group", lastMessageTime: base, unreadCount: 0, pinnedAt: nil, lastMessagePreview: "Photos and videos from our trip")]
+        galleryDemoMessages = (0..<75).compactMap { index in
+            let video = index % 7 == 1
+            let value: [String: Any] = [
+                "id": "chat-gallery-\(String(format: "%03d", index))", "contactId": chat,
+                "timestamp": base - Int64(index / 12) * 86_400_000 - Int64(index % 12) * 60_000,
+                "isFromMe": index % 3 == 0, "isForwarded": false, "senderName": "Alex",
+                "chatType": "group", "contentType": video ? "Video" : "Image", "isTranslated": false,
+                "content": ["type": video ? "video" : "image", "has_media": true,
+                            "duration_seconds": 6, "caption": "A moment from our trip"]
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: value),
+                  let message = try? JSONDecoder().decode(ChatMessage.self, from: data) else { return nil }
+            if video { messageMediaURLs[message.id] = Bundle.main.url(forResource: "video-playback-fixture", withExtension: "mp4") }
+            else { messageImages[message.id] = DemoImageFactory.landscape(size: CGSize(width: 640, height: index.isMultiple(of: 3) ? 800 : 420)) }
+            return message
+        }
+        messages = [chat: Array(galleryDemoMessages.prefix(12).reversed())]
+        mainTab = .chats
+        selectedContactID = chat
+    }
+
     private func startLiveEditDemo() {
         let chat = "edit-preview@g.us"
         let timestamp = Int64(Date().timeIntervalSince1970 * 1_000) - 60_000

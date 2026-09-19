@@ -7,6 +7,7 @@ mod access;
 mod bridge;
 mod cli;
 mod display;
+mod gallery;
 mod identity;
 mod incoming;
 mod link_preview;

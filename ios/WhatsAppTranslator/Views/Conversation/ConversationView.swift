@@ -13,6 +13,7 @@ struct ConversationView: View {
     @State private var showSettings = ProcessInfo.processInfo.arguments.contains("-demoConversationSettings")
     @State private var showCost = ProcessInfo.processInfo.arguments.contains("-demoCost")
     @State private var showSearch = ProcessInfo.processInfo.arguments.contains("-demoSearch")
+    @State private var showGallery = false
     @State private var messageSearch = ""
     @State private var starredOnly = false
     @State private var selectedTopicID: String?
@@ -89,6 +90,7 @@ struct ConversationView: View {
                     starredOnly: starredOnly,
                     showContactSettings: { showSettings = true },
                     search: { Task { await activateSearch() } },
+                    showGallery: { showGallery = true },
                     toggleStarred: { Task { await toggleStarredFilter() } },
                     showCost: { showCost = true },
                     showConversationSettings: { showSettings = true }
@@ -206,6 +208,10 @@ struct ConversationView: View {
                     Button("Conversation settings", systemImage: "slider.horizontal.3") { showSettings = true }
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Gallery", systemImage: "photo.on.rectangle") { showGallery = true }
+                    .accessibilityIdentifier("open-chat-gallery")
+            }
             #endif
         }
         .task {
@@ -231,6 +237,11 @@ struct ConversationView: View {
         .sheet(isPresented: $showCost) {
             ConversationCostView(contact: contact)
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $showGallery) { ChatMediaGallery(contact: contact).environment(session) }
+        #else
+        .sheet(isPresented: $showGallery) { ChatMediaGallery(contact: contact).environment(session) }
+        #endif
     }
 
     private var messageTimeline: some View {

@@ -12,6 +12,7 @@ struct MacConversationHeader: View {
     let starredOnly: Bool
     let showContactSettings: () -> Void
     let search: () -> Void
+    let showGallery: () -> Void
     let toggleStarred: () -> Void
     let showCost: () -> Void
     let showConversationSettings: () -> Void
@@ -42,6 +43,8 @@ struct MacConversationHeader: View {
             Spacer(minLength: 12)
 
             HStack(spacing: 7) {
+                headerButton("Gallery", systemImage: "photo.on.rectangle", action: showGallery)
+                    .accessibilityIdentifier("open-chat-gallery")
                 headerButton("Search messages", systemImage: "magnifyingglass", action: search)
                 headerButton(
                     starredOnly ? "Show all messages" : "Show starred messages",

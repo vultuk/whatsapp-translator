@@ -97,6 +97,7 @@ pub struct AppState {
     pub command_tx: RwLock<Option<mpsc::Sender<BridgeCommand>>>,
     pub translator: Option<Arc<TranslationService>>,
     pub voice_lock: tokio::sync::Mutex<()>,
+    pub gallery_thumbnails: crate::gallery::ThumbnailCache,
     pub voice_queue: Arc<tokio::sync::Semaphore>,
     pub voice_epoch: std::sync::atomic::AtomicU64,
     pub login_budget: tokio::sync::Mutex<crate::access::LoginBudget>,
@@ -635,6 +636,7 @@ impl AppState {
             pending_photo_albums: RwLock::new(HashMap::new()),
             mcp_prepared_messages: RwLock::new(HashMap::new()),
             voice_lock: tokio::sync::Mutex::new(()),
+            gallery_thumbnails: crate::gallery::ThumbnailCache::default(),
             voice_queue: Arc::new(tokio::sync::Semaphore::new(4)),
             voice_epoch: std::sync::atomic::AtomicU64::new(0),
             login_budget: tokio::sync::Mutex::new(crate::access::LoginBudget::default()),
@@ -1250,6 +1252,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(get_conversation_settings).put(update_conversation_settings),
         )
         .route("/api/messages/:contact_id", get(get_messages))
+        .route("/api/gallery/:contact_id", get(crate::gallery::messages))
         .route("/api/feed", get(get_unified_messages))
         .route("/api/topics", get(crate::topics::catalog))
         .route("/api/topics/messages", post(crate::topics::message_topics))
@@ -1263,6 +1266,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             put(crate::topics::update_setting),
         )
         .route("/api/media/:message_id", get(get_media))
+        .route(
+            "/api/media/:message_id/thumbnail",
+            get(crate::gallery::thumbnail),
+        )
         .route("/api/avatar/:jid", get(get_avatar))
         .route("/api/qr", get(get_qr))
         .route("/api/send", post(send_message))
@@ -5227,6 +5234,102 @@ mod tests {
             is_translated: false,
             delivery_status: None,
         }
+    }
+
+    #[tokio::test]
+    async fn gallery_paginates_only_visual_media_in_one_chat_and_strips_originals() {
+        let (state, dir) = test_state(None);
+        for chat in ["gallery@g.us", "other@g.us"] {
+            state
+                .store
+                .upsert_contact(chat, None, None, Some("group"), 1)
+                .unwrap();
+        }
+        for (id, kind, timestamp, chat) in [
+            ("a", "image", 50, "gallery@g.us"),
+            ("b", "image", 100, "gallery@g.us"),
+            ("c", "video", 100, "gallery@g.us"),
+            ("text", "text", 200, "gallery@g.us"),
+            ("audio", "audio", 300, "gallery@g.us"),
+            ("sticker", "sticker", 400, "gallery@g.us"),
+            ("other", "image", 500, "other@g.us"),
+            ("deleted", "revoked", 600, "gallery@g.us"),
+        ] {
+            let mut message = feed_test_message(id, chat, timestamp);
+            message.content_type = if kind == "revoked" {
+                "image".into()
+            } else {
+                kind.into()
+            };
+            message.is_from_me = id == "c";
+            message.content_json =
+                serde_json::json!({"type":kind, "media_data":"cGl4ZWxz", "caption":"Caption"})
+                    .to_string();
+            state.store.add_message(&message).unwrap();
+        }
+        let router = create_router(state.clone());
+        let response = router
+            .clone()
+            .oneshot(empty_request("/api/gallery/gallery%40g.us?limit=2"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let first: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(first["hasMore"], true);
+        assert_eq!(first["messages"][0]["id"], "b");
+        assert_eq!(first["messages"][1]["id"], "c");
+        assert_eq!(first["messages"][1]["isFromMe"], true);
+        assert!(first["messages"][0]["content"].get("media_data").is_none());
+        assert_eq!(first["messages"][0]["content"]["has_media"], true);
+        let response = router
+            .clone()
+            .oneshot(empty_request(
+                "/api/gallery/gallery%40g.us?limit=2&before=100&before_id=b",
+            ))
+            .await
+            .unwrap();
+        let older: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(older["hasMore"], false);
+        assert_eq!(older["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(older["messages"][0]["id"], "a");
+        assert_eq!(
+            router
+                .oneshot(empty_request("/api/media/deleted/thumbnail"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn gallery_and_previews_require_the_existing_server_authentication() {
+        let (state, dir) = test_state(Some("test-password"));
+        let router = create_router(state);
+        for path in ["/api/gallery/gallery%40g.us", "/api/media/photo/thumbnail"] {
+            assert_eq!(
+                router
+                    .clone()
+                    .oneshot(empty_request(path))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

@@ -347,6 +347,16 @@ actor APIClient {
         try await authorizedRequest("/api/media/\(messageID.urlPathEncoded)")
     }
 
+    func gallery(contactID: String, before: Int64? = nil, beforeID: String? = nil) async throws -> MessagesResponse {
+        let path = Self.messagesPath(contactID: contactID, limit: 60, before: before, beforeID: beforeID)
+            .replacingOccurrences(of: "/api/messages/", with: "/api/gallery/")
+        return try await authorizedRequest(path)
+    }
+
+    func mediaThumbnail(messageID: String) async throws -> MediaResponse {
+        try await authorizedRequest("/api/media/\(messageID.urlPathEncoded)/thumbnail")
+    }
+
     func linkPreview(for url: URL) async throws -> LinkPreview {
         var components = URLComponents()
         components.queryItems = [URLQueryItem(name: "url", value: url.absoluteString)]

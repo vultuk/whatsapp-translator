@@ -12,6 +12,7 @@ Railway is the easiest hosted option for this app because it supports long-runni
 
 - Connect a WhatsApp account through QR login
 - View chats and messages in a local web UI
+- Browse a chat’s photos and videos in the native Gallery, with square previews and a full-screen swipe viewer
 - Send text, images, replies, and reactions
 - Translate incoming and outgoing messages with OpenAI
 - Listen to translated voice notes and record, preview, and send translated WhatsApp audio
@@ -79,6 +80,10 @@ Hosted deploy recommendation:
   or `http://[::1]` redirect URIs, and authorization requires an exact registered
   redirect match.
 
+## Chat gallery
+
+On iPhone, iPad, and Mac, open a conversation and choose **Gallery** in the header. Photos and videos appear newest first in a square grid grouped by date, including older media saved on the server. Open any item full screen, then swipe left or right (or use the arrow buttons) to move between photos and videos. Photos support zooming; videos play in place and pause when you move away. Older items load as you browse. Deleted messages, stickers, audio, and documents are excluded.
+
 ## WhatsApp reconnection
 
 Temporary connection drops reconnect using the saved WhatsApp session. If WhatsApp removes the linked device, the backend restarts linking automatically and the iPhone, iPad, Mac, and web apps display a fresh QR code. Expired codes are replaced automatically; successful linking returns to the inbox. Saved chats and server credentials are retained. The native apps also check status on returning to the foreground and periodically while open, so a missed live event does not leave the app stuck.
@@ -110,7 +115,7 @@ Prerequisites:
 
 - Rust
 - Go
-- FFmpeg (required for voice-note conversion and audio integration tests; included in Docker)
+- FFmpeg (required for voice-note conversion, gallery previews, and media integration tests; included in Docker)
 
 Run:
 

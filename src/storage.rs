@@ -447,6 +447,7 @@ impl MessageStore {
             CREATE INDEX IF NOT EXISTS idx_messages_feed_cursor ON messages(timestamp DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_desc ON messages(contact_id, timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_contact_timestamp_id_desc ON messages(contact_id, timestamp DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_visual_media ON messages(contact_id, timestamp DESC, id DESC) WHERE lower(content_type) IN ('image', 'video');
             CREATE INDEX IF NOT EXISTS idx_message_reactions_target ON messages(contact_id,json_extract(content_json,'$.target_message_id'),timestamp DESC,id DESC) WHERE lower(content_type)='reaction';
             CREATE INDEX IF NOT EXISTS idx_contacts_last_message ON contacts(last_message_time DESC);
 
@@ -1836,6 +1837,50 @@ impl MessageStore {
         before_message_id: Option<&str>,
         strip_media: bool,
     ) -> Result<Vec<StoredMessage>> {
+        self.get_messages_page(
+            contact_id,
+            limit,
+            before_timestamp,
+            before_message_id,
+            strip_media,
+            false,
+        )
+    }
+
+    pub fn get_gallery_messages(
+        &self,
+        contact_id: &str,
+        limit: u32,
+        before_timestamp: Option<i64>,
+        before_message_id: Option<&str>,
+    ) -> Result<Vec<StoredMessage>> {
+        self.get_messages_page(
+            contact_id,
+            Some(limit),
+            before_timestamp,
+            before_message_id,
+            true,
+            true,
+        )
+    }
+
+    pub fn message_is_visual_media(&self, message_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE id=? AND lower(content_type) IN ('image','video') AND lower(COALESCE(json_extract(content_json,'$.type'),content_type)) IN ('image','video'))",
+            params![message_id], |row| row.get(0),
+        )?)
+    }
+
+    fn get_messages_page(
+        &self,
+        contact_id: &str,
+        limit: Option<u32>,
+        before_timestamp: Option<i64>,
+        before_message_id: Option<&str>,
+        strip_media: bool,
+        visual_only: bool,
+    ) -> Result<Vec<StoredMessage>> {
         let contact_id = canonical_chat_id(contact_id);
         let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
@@ -1866,13 +1911,18 @@ impl MessageStore {
         let limit_clause = limit
             .map(|lim| format!("LIMIT {}", lim))
             .unwrap_or_default();
+        let media_clause = if visual_only {
+            "AND lower(content_type) IN ('image','video') AND lower(COALESCE(json_extract(content_json,'$.type'),content_type)) IN ('image','video')"
+        } else {
+            ""
+        };
         let query = format!(
             r#"
             SELECT id, contact_id, timestamp, is_from_me, is_forwarded, sender_name,
                    sender_phone, chat_type, content_type, content_json, original_text,
                    translated_text, source_language, is_translated, delivery_status
             FROM messages
-            WHERE contact_id = ? {cursor_clause}
+            WHERE contact_id = ? {cursor_clause} {media_clause}
             {order_clause}
             {limit_clause}
             "#
