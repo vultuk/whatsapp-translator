@@ -3,6 +3,61 @@ import UIKit
 import XCTest
 
 @MainActor
+final class AppIconUITests: XCTestCase {
+    func testIconPickerChangesHomeScreenPersistsAndRestoresOriginal() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.launch()
+        openPicker(in: app)
+        choose("neonOrbit", in: app)
+        let picker = XCTAttachment(screenshot: app.screenshot())
+        picker.name = "App icon gallery with Neon Orbit selected"
+        picker.lifetime = .keepAlways
+        add(picker)
+        XCUIDevice.shared.press(.home)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCTAssertTrue(springboard.icons["Babel Bridge"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(springboard.icons["Babel Bridge"].firstMatch.isHittable)
+        let home = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        home.name = "Alternate icon on the Home Screen"
+        home.lifetime = .keepAlways
+        add(home)
+        app.terminate()
+        app.launch()
+        openPicker(in: app)
+        XCTAssertEqual(app.buttons["app-icon-neonOrbit"].value as? String, "Selected")
+        choose("sunrise", in: app)
+        choose("original", in: app)
+    }
+
+    private func openPicker(in app: XCUIApplication) {
+        let settings = app.buttons["Settings"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 10), app.debugDescription)
+        settings.tap()
+        let row = app.buttons["app-icon-settings"].firstMatch
+        for _ in 0..<5 {
+            if row.exists && row.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+        row.tap()
+        XCTAssertTrue(app.buttons["app-icon-original"].waitForExistence(timeout: 5))
+    }
+
+    private func choose(_ icon: String, in app: XCUIApplication) {
+        let choice = app.buttons["app-icon-\(icon)"]
+        choice.tap()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let confirmation = springboard.alerts.buttons["OK"].firstMatch
+        if confirmation.waitForExistence(timeout: 3) { confirmation.tap() }
+        let selected = NSPredicate(format: "value == %@", "Selected")
+        expectation(for: selected, evaluatedWith: choice)
+        waitForExpectations(timeout: 10)
+        XCTAssertFalse(app.alerts["Couldn’t change icon"].exists)
+    }
+}
+
+@MainActor
 final class ImagePasteUITests: XCTestCase {
     func testPastedImagesCanBeReviewedCancelledAndSentWithoutLosingDraft() throws {
         let app = XCUIApplication()

@@ -12,8 +12,10 @@
 		B70000000000000000000002 /* ChatMediaGallery.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70000000000000000000003 /* ChatMediaGallery.swift */; };
 		B71000000000000000000002 /* ImagePasteSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B71000000000000000000003 /* ImagePasteSupport.swift */; };
 		B70000000000000000000004 /* ChatMediaGalleryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70000000000000000000006 /* ChatMediaGalleryTests.swift */; };
+		89A37BED300DE10C54C8876C /* AppIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67D6D380911FCA0D3B8927EC /* AppIconTests.swift */; };
 		B71000000000000000000004 /* ImagePasteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B71000000000000000000006 /* ImagePasteTests.swift */; };
 		B70000000000000000000005 /* ChatMediaGalleryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70000000000000000000006 /* ChatMediaGalleryTests.swift */; };
+		5180C985C468B938B1365ED3 /* AppIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67D6D380911FCA0D3B8927EC /* AppIconTests.swift */; };
 		B71000000000000000000005 /* ImagePasteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B71000000000000000000006 /* ImagePasteTests.swift */; };
 		B69000000000000000000001 /* WhatsAppConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B69000000000000000000003 /* WhatsAppConnectionTests.swift */; };
 		B69000000000000000000002 /* WhatsAppConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B69000000000000000000003 /* WhatsAppConnectionTests.swift */; };
@@ -57,6 +59,7 @@
 		34C448F43557E76FB1C2F4BF /* WatchMessagingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F57671A838D57601BBFA517F /* WatchMessagingModels.swift */; };
 		355252DACFF4D61E0C395960 /* MessageTonePreviewPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F73045AE0311EFD0E8B4C70C /* MessageTonePreviewPlayer.swift */; };
 		3680126AAB9A4B864417221B /* AppSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B02D9A460B6438D75BA42C97 /* AppSettingsView.swift */; };
+		CB6C27276FE2A51FC1CDB93B /* AppIconPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F14D0838ABF81B3223C4CC1D /* AppIconPickerView.swift */; };
 		38B05F163DCBB049B5A04754 /* ServerConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5E191235093F4FC4348DD04 /* ServerConfiguration.swift */; };
 		38BAB93EFE7CE18D1BAADA6C /* ConnectionSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3229E151805995BAC765CA5 /* ConnectionSetupView.swift */; };
 		3CCF6B3013E9F72DC0019A99 /* ChatRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E50ABB31D617C33E5D18AB3 /* ChatRow.swift */; };
@@ -111,6 +114,7 @@
 		9240D75CA33BA6AD129C71B5 /* MessagingIntentModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F833E84053491FD95D3C5728 /* MessagingIntentModels.swift */; };
 		9282A86BD65109820B2CB185 /* PhotoSendActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9263BBC5F50F1FFF2548069 /* PhotoSendActivityWidget.swift */; };
 		9504965AB9E80CBC7E48DBF7 /* AppSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B02D9A460B6438D75BA42C97 /* AppSettingsView.swift */; };
+		C3D96F4645B627B179004A5F /* AppIconPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F14D0838ABF81B3223C4CC1D /* AppIconPickerView.swift */; };
 		963C9A055B94E3C97AC2D614 /* ChatCacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3962C05E7905F4A73E9D2CE6 /* ChatCacheStore.swift */; };
 		9984463B309DD8958C348331 /* SendRecoveryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD483EE27D01F8680F8CAD68 /* SendRecoveryStore.swift */; };
 		9AFB7B524E444D808CCF033E /* bb-bamboo.wav in Resources */ = {isa = PBXBuildFile; fileRef = 19863C3FE7B11D31ED858E98 /* bb-bamboo.wav */; };
@@ -279,6 +283,7 @@
 		B70000000000000000000003 /* ChatMediaGallery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMediaGallery.swift; sourceTree = "<group>"; };
 		B71000000000000000000003 /* ImagePasteSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePasteSupport.swift; sourceTree = "<group>"; };
 		B70000000000000000000006 /* ChatMediaGalleryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMediaGalleryTests.swift; sourceTree = "<group>"; };
+		67D6D380911FCA0D3B8927EC /* AppIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconTests.swift; sourceTree = "<group>"; };
 		B71000000000000000000006 /* ImagePasteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePasteTests.swift; sourceTree = "<group>"; };
 		B69000000000000000000003 /* WhatsAppConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhatsAppConnectionTests.swift; sourceTree = "<group>"; };
 		A61ED17A0000000000000003 /* MessageEditDeliveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageEditDeliveryTests.swift; sourceTree = "<group>"; };
@@ -343,6 +348,7 @@
 		A9263BBC5F50F1FFF2548069 /* PhotoSendActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoSendActivityWidget.swift; sourceTree = "<group>"; };
 		AA427F451FCCC2F453CC8AAC /* TimezonePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimezonePickerView.swift; sourceTree = "<group>"; };
 		B02D9A460B6438D75BA42C97 /* AppSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsView.swift; sourceTree = "<group>"; };
+		F14D0838ABF81B3223C4CC1D /* AppIconPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconPickerView.swift; sourceTree = "<group>"; };
 		B0305EB10787A1AFD17B0763 /* DraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStore.swift; sourceTree = "<group>"; };
 		B0FE39B4F7597428E20653AC /* WatchBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchBackendTests.swift; sourceTree = "<group>"; };
 		B31612468FBA7EA59CCE0B85 /* BabelBridgeMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabelBridgeMacApp.swift; sourceTree = "<group>"; };
@@ -496,6 +502,7 @@
 				A61ED17A0000000000000003 /* MessageEditDeliveryTests.swift */,
 				B69000000000000000000003 /* WhatsAppConnectionTests.swift */,
 				B70000000000000000000006 /* ChatMediaGalleryTests.swift */,
+				67D6D380911FCA0D3B8927EC /* AppIconTests.swift */,
 				B71000000000000000000006 /* ImagePasteTests.swift */,
 			);
 			path = SharedTests;
@@ -689,6 +696,7 @@
 			isa = PBXGroup;
 			children = (
 				B02D9A460B6438D75BA42C97 /* AppSettingsView.swift */,
+				F14D0838ABF81B3223C4CC1D /* AppIconPickerView.swift */,
 				6D76A610B739758653D9DE58 /* ConversationSettingsView.swift */,
 				D26734588D5BD2168DA54230 /* MessageTonePickerView.swift */,
 				AA427F451FCCC2F453CC8AAC /* TimezonePickerView.swift */,
@@ -1127,6 +1135,7 @@
 				A61ED17A0000000000000001 /* MessageEditDeliveryTests.swift in Sources */,
 				B69000000000000000000001 /* WhatsAppConnectionTests.swift in Sources */,
 				B70000000000000000000004 /* ChatMediaGalleryTests.swift in Sources */,
+				89A37BED300DE10C54C8876C /* AppIconTests.swift in Sources */,
 				B71000000000000000000004 /* ImagePasteTests.swift in Sources */,
 				A7F844F22CE8F780B83A4464 /* SendRecoveryTests.swift in Sources */,
 				F6460EF1F222112E6EFDD85E /* VoicePlaybackTests.swift in Sources */,
@@ -1142,6 +1151,7 @@
 				20EEEB892ABBB2D449414230 /* AppPreferencesStore.swift in Sources */,
 				C54AF7DDBDFBF90FCF0671F6 /* AppSession.swift in Sources */,
 				3680126AAB9A4B864417221B /* AppSettingsView.swift in Sources */,
+				CB6C27276FE2A51FC1CDB93B /* AppIconPickerView.swift in Sources */,
 				31D3E69573488B78D0CB06CD /* BackgroundMessageSynchronizer.swift in Sources */,
 				E709F7EEA9205981C93684EC /* CarPlaySceneDelegate.swift in Sources */,
 				963C9A055B94E3C97AC2D614 /* ChatCacheStore.swift in Sources */,
@@ -1203,6 +1213,7 @@
 				0CAC0EC5B9CBE295135A7DCD /* AppPreferencesStore.swift in Sources */,
 				BF62D1C1CB1B93866BFE77CB /* AppSession.swift in Sources */,
 				9504965AB9E80CBC7E48DBF7 /* AppSettingsView.swift in Sources */,
+				C3D96F4645B627B179004A5F /* AppIconPickerView.swift in Sources */,
 				727B648D23B372F2BC7EF643 /* BabelBridgeMacApp.swift in Sources */,
 				2094FED85A7568EF3F07ED4B /* BackgroundMessageSynchronizer.swift in Sources */,
 				18A02899E3E32C43FC548C4A /* ChatCacheStore.swift in Sources */,
@@ -1251,6 +1262,7 @@
 				A61ED17A0000000000000002 /* MessageEditDeliveryTests.swift in Sources */,
 				B69000000000000000000002 /* WhatsAppConnectionTests.swift in Sources */,
 				B70000000000000000000005 /* ChatMediaGalleryTests.swift in Sources */,
+				5180C985C468B938B1365ED3 /* AppIconTests.swift in Sources */,
 				B71000000000000000000005 /* ImagePasteTests.swift in Sources */,
 				6C37C3EF729A6AA8C422BDE8 /* SendRecoveryTests.swift in Sources */,
 				279B83945EECB15DE7A24F57 /* VoicePlaybackTests.swift in Sources */,
@@ -1474,7 +1486,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 71;
+				CURRENT_PROJECT_VERSION = 72;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -1684,7 +1696,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 71;
+				CURRENT_PROJECT_VERSION = 72;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = SUR6QUSSV6;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1742,6 +1754,7 @@
 				APS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIcon-paperBridge AppIcon-neonOrbit AppIcon-sunrise AppIcon-porcelain AppIcon-botanical AppIcon-pixel AppIcon-ribbon AppIcon-mono AppIcon-mosaic AppIcon-cosmic";
 				CODE_SIGN_ENTITLEMENTS = WhatsAppTranslator/WhatsAppTranslator.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = WhatsAppTranslator/Info.plist;
@@ -1799,6 +1812,7 @@
 				APS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIcon-paperBridge AppIcon-neonOrbit AppIcon-sunrise AppIcon-porcelain AppIcon-botanical AppIcon-pixel AppIcon-ribbon AppIcon-mono AppIcon-mosaic AppIcon-cosmic";
 				CODE_SIGN_ENTITLEMENTS = WhatsAppTranslator/WhatsAppTranslator.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = WhatsAppTranslator/Info.plist;

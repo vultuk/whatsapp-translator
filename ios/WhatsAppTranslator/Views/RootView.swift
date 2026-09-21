@@ -2,6 +2,10 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppSession.self) private var session
+    #if DEBUG && os(macOS)
+    @State private var showsDemoIcons = ProcessInfo.processInfo.arguments.contains("-demo")
+        && ProcessInfo.processInfo.arguments.contains("-demoAppIcons")
+    #endif
 
     var body: some View {
         Group {
@@ -38,6 +42,19 @@ struct RootView: View {
         } message: {
             Text(session.errorMessage ?? "Something went wrong.")
         }
+        #if DEBUG && os(macOS)
+        .sheet(isPresented: $showsDemoIcons) {
+            NavigationStack {
+                AppIconPickerView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showsDemoIcons = false }
+                        }
+                    }
+            }
+            .frame(width: 560, height: 650)
+        }
+        #endif
     }
 
     private var errorPresented: Binding<Bool> {

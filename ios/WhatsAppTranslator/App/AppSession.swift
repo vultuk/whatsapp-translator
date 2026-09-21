@@ -297,6 +297,7 @@ final class AppSession {
 
     let draftStore: DraftStore
     let preferences: AppPreferencesStore
+    let appIcons = AppIconController()
     private let api: APIClient
     private let credentials: CredentialStore
     private let cache: ChatCacheStore

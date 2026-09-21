@@ -18,7 +18,10 @@ struct BabelBridgeMacApp: App {
                     minWidth: MacChatLayoutMetrics.minimumWindowWidth,
                     minHeight: MacChatLayoutMetrics.minimumWindowHeight
                 )
-                .task { await session.start() }
+                .task {
+                    await session.appIcons.restoreDockIcon()
+                    await session.start()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     guard phase == .active else { return }
                     Task { await session.becameActive() }

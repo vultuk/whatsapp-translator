@@ -52,6 +52,12 @@ struct AppSettingsView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        AppIconPickerView()
+                    } label: {
+                        LabeledContent("App icon", value: session.appIcons.selected.title)
+                    }
+                    .accessibilityIdentifier("app-icon-settings")
                     Picker("Theme", selection: themeBinding) {
                         ForEach(AppTheme.allCases) { theme in Text(theme.title).tag(theme) }
                     }

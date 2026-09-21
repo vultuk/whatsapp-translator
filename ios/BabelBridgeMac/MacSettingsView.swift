@@ -7,6 +7,7 @@ struct MacSettingsView: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var error: String?
+    @State private var showsIconPicker = false
 
     private let models = [
         ("", "App defaults"),
@@ -41,6 +42,17 @@ struct MacSettingsView: View {
         }
         .frame(width: 560, height: 620)
         .task { await load() }
+        .sheet(isPresented: $showsIconPicker) {
+            NavigationStack {
+                AppIconPickerView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showsIconPicker = false }
+                        }
+                    }
+            }
+            .frame(width: 560, height: 650)
+        }
         .alert("Couldn’t save settings", isPresented: errorPresented) {
             Button("OK") { error = nil }
         } message: {
@@ -119,6 +131,19 @@ struct MacSettingsView: View {
 
     private var appearanceSection: some View {
         SettingsGroup(title: "Appearance", systemImage: "paintpalette") {
+            HStack(spacing: 12) {
+                Image(session.appIcons.selected.assetName)
+                    .resizable().frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("App icon")
+                    Text(session.appIcons.selected.title).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Choose…") { showsIconPicker = true }
+                    .accessibilityIdentifier("app-icon-settings")
+            }
+            Divider()
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
                 GridRow {
                     Text("Theme")
