@@ -101,6 +101,7 @@ private struct MainMessagesView: View {
 
 struct UnifiedReplyDraft {
     var selected: ChatMessage?
+    private(set) var isExplicitReply = false
     var isFocused = false
     var drafts: [String: String] = [:]
 
@@ -129,11 +130,13 @@ struct UnifiedReplyDraft {
 
     mutating func select(_ message: ChatMessage) {
         selected = message
+        isExplicitReply = true
         isFocused = true
     }
 
     mutating func cancelSelection() {
         selected = nil
+        isExplicitReply = false
         isFocused = false
     }
 
@@ -379,9 +382,28 @@ private struct UnifiedMessagesView: View {
     @State private var composerFocused = false
     @State private var imagePaste = ImagePasteController()
 
+    @State private var settingsLoadFailed = false
+    private var waitingForSettings: Bool {
+        guard let target = composerTarget else { return false }
+        return session.savedConversationSettings[target.contactId] == nil
+    }
+    private var composerUnavailable: Bool { replyBlocked || waitingForSettings }
+    private func loadComposerSettings() async {
+        guard let id = composerTarget?.contactId else { return }
+        settingsLoadFailed = false
+        do { _ = try await session.conversationSettings(for: id) }
+        catch { if !Task.isCancelled { settingsLoadFailed = true } }
+    }
+
+    private var composerTarget: ChatMessage? { replyDraft.selected ?? displayedMessages.last }
+    private var replyBlocked: Bool {
+        guard let target = composerTarget, session.isReplyOnly(target.contactId) else { return false }
+        return !replyDraft.isExplicitReply || !session.canSend(to: target.contactId, reply: session.replyTarget(for: target))
+    }
+
     private var draft: Binding<String> {
         Binding(get: { replyDraft.text }, set: { value in
-            guard !sending else { return }
+            guard !sending, !composerUnavailable else { return }
             replyDraft.updateText(value, latestMessage: displayedMessages.last)
         })
     }
@@ -391,6 +413,7 @@ private struct UnifiedMessagesView: View {
             messagesContent(bottomSafeArea: geometry.safeAreaInsets.bottom)
         }
         .modifier(PastedImagePresentation(controller: imagePaste))
+        .task(id: composerTarget?.contactId) { await loadComposerSettings() }
     }
 
     private func messagesContent(bottomSafeArea: CGFloat) -> some View {
@@ -591,6 +614,18 @@ private struct UnifiedMessagesView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if waitingForSettings {
+                if settingsLoadFailed {
+                    Button("Couldn’t load conversation settings. Retry") { Task { await loadComposerSettings() } }
+                        .font(.caption)
+                } else {
+                    Text("Loading conversation settings…").font(.caption).foregroundStyle(.secondary)
+                }
+            } else if replyBlocked {
+                Label("Reply only · Choose an incoming message and tap Reply", systemImage: "arrowshape.turn.up.left")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("reply-only-hint")
+            }
             if let selected = replyDraft.selected, !replyDraft.isFocused {
                 HStack(alignment: .top, spacing: 9) {
                     RoundedRectangle(cornerRadius: 2).fill(palette.accent).frame(width: 3)
@@ -616,16 +651,16 @@ private struct UnifiedMessagesView: View {
             ComposerGlassGroup {
                 HStack(alignment: .bottom, spacing: 7) {
                     UnifiedMediaControls(
-                        disabled: sending || session.sendingContactIDs.contains((replyDraft.selected ?? displayedMessages.last)?.contactId ?? "") || (replyDraft.selected == nil && displayedMessages.isEmpty),
+                        disabled: composerUnavailable || sending || session.sendingContactIDs.contains((replyDraft.selected ?? displayedMessages.last)?.contactId ?? "") || (replyDraft.selected == nil && displayedMessages.isEmpty),
                         begin: {
-                            guard let target = replyDraft.beginAttachment(latestMessage: displayedMessages.last) else { return nil }
+                            guard !composerUnavailable, let target = replyDraft.beginAttachment(latestMessage: displayedMessages.last) else { return nil }
                             composerFocused = false
                             return UnifiedMediaContext(message: target, reply: session.replyTarget(for: target), destination: name(target))
                         },
                         onSent: { target in replyDraft.finishMediaSending(to: target); composerFocused = false }
                     )
-                    MessageComposerTextInput(text: draft, focus: $composerFocused, allowsImagePaste: !sending && !imagePaste.isLoading) { providers in
-                        guard !sending,
+                    MessageComposerTextInput(text: draft, focus: $composerFocused, allowsImagePaste: !composerUnavailable && !sending && !imagePaste.isLoading) { providers in
+                        guard !sending, !composerUnavailable,
                               let target = replyDraft.beginAttachment(latestMessage: displayedMessages.last),
                               !session.sendingContactIDs.contains(target.contactId) else { return }
                         composerFocused = false
@@ -642,7 +677,7 @@ private struct UnifiedMessagesView: View {
                         .padding(.vertical, 12)
                         .frame(minHeight: 46)
                         .translatorGlassControl(in: RoundedRectangle(cornerRadius: 24))
-                        .disabled(sending || (replyDraft.selected == nil && displayedMessages.isEmpty))
+                        .disabled(composerUnavailable || sending || (replyDraft.selected == nil && displayedMessages.isEmpty))
                     Button(action: send) {
                         Group {
                             if sending { ProgressView().tint(.white) }
@@ -653,7 +688,7 @@ private struct UnifiedMessagesView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(replyDraft.selected.map { "Send to \(name($0))" } ?? "Send message")
-                    .disabled(sending || replyDraft.selected == nil || draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(composerUnavailable || sending || replyDraft.selected == nil || draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -668,7 +703,7 @@ private struct UnifiedMessagesView: View {
     }
 
     private func send() {
-        guard let target = replyDraft.selected, !sending else { return }
+        guard let target = replyDraft.selected, !sending, !composerUnavailable else { return }
         let text = replyDraft.drafts[target.contactId] ?? ""
         sending = true
         Task {

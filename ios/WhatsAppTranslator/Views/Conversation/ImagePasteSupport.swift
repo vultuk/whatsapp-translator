@@ -218,11 +218,11 @@ private struct NativeMessageTextInput: UIViewRepresentable {
     func updateUIView(_ view: ImagePasteTextView, context: Context) {
         context.coordinator.parent = self
         if view.text != text { view.text = text }
-        view.isEditable = enabled
+        if view.isEditable != enabled { view.isEditable = enabled }
         view.allowsImagePaste = enabled && allowsImagePaste
         view.pasteImages = pasteImages
         if focused && enabled && !view.isFirstResponder { view.becomeFirstResponder() }
-        else if !focused && view.isFirstResponder { view.resignFirstResponder() }
+        else if (!focused || !enabled) && view.isFirstResponder { view.resignFirstResponder() }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView view: ImagePasteTextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width > 0 else { return nil }
@@ -312,12 +312,12 @@ private struct NativeMessageTextInput: NSViewRepresentable {
         guard let view = scroll.documentView as? ImagePasteTextView else { return }
         context.coordinator.parent = self
         if view.string != text { view.string = text }
-        view.isEditable = enabled
+        if view.isEditable != enabled { view.isEditable = enabled }
         view.allowsImagePaste = enabled && allowsImagePaste
         view.pasteImages = pasteImages
         view.focusChanged = { value in if focused != value { focused = value } }
         if focused && enabled && view.window?.firstResponder !== view { view.window?.makeFirstResponder(view) }
-        else if !focused && view.window?.firstResponder === view { view.window?.makeFirstResponder(nil) }
+        else if (!focused || !enabled) && view.window?.firstResponder === view { view.window?.makeFirstResponder(nil) }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
         guard let width = proposal.width, width > 0 else { return nil }

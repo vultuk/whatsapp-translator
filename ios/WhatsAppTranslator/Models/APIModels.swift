@@ -643,12 +643,14 @@ struct LinkPreview: Decodable, Equatable, Sendable {
 }
 
 struct ConversationSettings: Codable, Equatable, Sendable {
+    var replyOnly: Bool
     var languageOverride: String?
     var translationStyle: String?
     var sendOriginalFollowUp: Bool
     var translationEnabled: Bool
 
-    init(languageOverride: String? = nil, translationStyle: String? = nil, sendOriginalFollowUp: Bool = false, translationEnabled: Bool = false) {
+    init(languageOverride: String? = nil, translationStyle: String? = nil, sendOriginalFollowUp: Bool = false, translationEnabled: Bool = false, replyOnly: Bool = false) {
+        self.replyOnly = replyOnly
         self.languageOverride = languageOverride
         self.translationStyle = translationStyle
         self.sendOriginalFollowUp = sendOriginalFollowUp
@@ -656,11 +658,12 @@ struct ConversationSettings: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case languageOverride, translationStyle, sendOriginalFollowUp, translationEnabled
+        case languageOverride, translationStyle, sendOriginalFollowUp, translationEnabled, replyOnly
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        replyOnly = try values.decodeIfPresent(Bool.self, forKey: .replyOnly) ?? false
         languageOverride = try values.decodeIfPresent(String.self, forKey: .languageOverride)
         translationStyle = try values.decodeIfPresent(String.self, forKey: .translationStyle)
         sendOriginalFollowUp = try values.decodeIfPresent(Bool.self, forKey: .sendOriginalFollowUp) ?? false

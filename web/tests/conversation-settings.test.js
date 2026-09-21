@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ConversationSettingsClient} from '../public/conversation-settings.js';
+import {ConversationSettingsClient, canSendInConversation} from '../public/conversation-settings.js';
 import {getComposerAssistState} from '../public/app-state.js';
 
 test('people and groups default off and keep their own saved language when disabled', async () => {
@@ -47,4 +47,18 @@ test('old server responses default off even when they contain a foreign language
   assert.equal(settings.translationEnabled, false);
   const live = getComposerAssistState({draftText: 'Hello', metadata: {...settings, translationEnabled: true}});
   assert.equal(live.translatedPreview, '', 'live UI must not invent a translated message');
+});
+
+test('reply only requires an explicit incoming reply and remains scoped to its chat', async () => {
+  const client = new ConversationSettingsClient({isDemo: () => true});
+  const old = await client.load('person');
+  assert.equal(old.replyOnly, false);
+  assert.equal(canSendInConversation(old, null), true);
+  const settings = await client.save('group', {replyOnly: true});
+  assert.equal(canSendInConversation(settings, null), false);
+  assert.equal(canSendInConversation(settings, {messageId: 'mine', isFromMe: true}), false);
+  assert.equal(canSendInConversation(settings, {messageId: 'incoming', isFromMe: false}), true);
+  assert.equal(client.get('person').replyOnly, false);
+  client.apply('group', {replyOnly: false});
+  assert.equal(canSendInConversation(client.get('group'), null), true);
 });

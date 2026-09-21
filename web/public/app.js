@@ -4,7 +4,7 @@ import { setupTopics } from './topics.js';
 import { createReliableFetch, reconnectDelay, mergeMessageUpdate } from './send-recovery.js';
 // WhatsApp Translator Web Client
 
-import {ConversationSettingsClient} from './conversation-settings.js';
+import {ConversationSettingsClient, canSendInConversation} from './conversation-settings.js';
 import {
   buildConversationBrief,
   buildConversationActionPlan,
@@ -602,7 +602,22 @@ class WhatsAppClient {
     });
   }
 
+  replyOnlyBlocked() {
+    return !canSendInConversation(this.conversationSettingsClient.get(this.currentContactId), this.replyingTo);
+  }
+
+  updateReplyOnlyControls() {
+    const blocked = this.replyOnlyBlocked();
+    for (const id of ['message-input', 'send-button', 'attach-button', 'voice-record-button']) {
+      const control = document.getElementById(id);
+      if (control) control.disabled = blocked || (id === 'send-button' && !document.getElementById('message-input')?.value.trim());
+    }
+    const hint = document.getElementById('reply-only-hint');
+    if (hint) hint.hidden = !blocked;
+  }
+
   renderComposerAssist() {
+    this.updateReplyOnlyControls();
     const container = document.getElementById('composer-assist');
     if (!container) return;
 
@@ -4216,7 +4231,7 @@ class WhatsAppClient {
     const input = document.getElementById('message-input');
     const text = input.value.trim();
     
-    if (!text || !this.currentContactId) return;
+    if (!text || !this.currentContactId || this.replyOnlyBlocked()) return;
     
     const contactId = this.currentContactId;
     const capturedReply = this.replyingTo ? {...this.replyingTo} : null;
@@ -4276,7 +4291,7 @@ class WhatsAppClient {
       this.scrollToBottom();
       this.updateContactInList(localMessage);
       this.renderConversationWorkspace();
-      sendButton.disabled = false;
+      sendButton.disabled = this.replyOnlyBlocked();
       this.updateSendButton();
       return;
     }
@@ -4391,14 +4406,14 @@ class WhatsAppClient {
       console.error('Failed to send message:', err);
       alert('Failed to send message: ' + err.message);
     } finally {
-      sendButton.disabled = false;
+      sendButton.disabled = this.replyOnlyBlocked();
       this.updateSendButton();
     }
   }
 
   // Send an image
   async sendImage(file) {
-    if (!file || !this.currentContactId) return;
+    if (!file || !this.currentContactId || this.replyOnlyBlocked()) return;
 
     // Check file size (limit to 16MB)
     if (file.size > 16 * 1024 * 1024) {
@@ -4495,7 +4510,7 @@ class WhatsAppClient {
       console.error('Failed to send image:', err);
       alert('Failed to send image: ' + err.message);
     } finally {
-      attachButton.disabled = false;
+      attachButton.disabled = this.replyOnlyBlocked();
     }
   }
 
@@ -4772,7 +4787,7 @@ class WhatsAppClient {
   // Set reply state for a message
   setReplyTo(message) {
     const content = message.content;
-    const isFromMe = message.isFromMe || message.is_from_me;
+    const isFromMe = Boolean(message.isFromMe || message.is_from_me);
     
     // Get message preview text for display
     let previewText = '';
@@ -4848,6 +4863,7 @@ class WhatsAppClient {
 
   // Update the reply preview UI
   updateReplyPreview() {
+    this.updateReplyOnlyControls();
     const previewContainer = document.getElementById('reply-preview');
     if (!previewContainer) return;
     
@@ -4888,7 +4904,7 @@ class WhatsAppClient {
     const dropdownToggle = document.getElementById('send-dropdown-toggle');
     const hasContent = input.value.trim() && this.currentContactId && this.connected;
     
-    sendButton.disabled = !hasContent;
+    sendButton.disabled = !hasContent || this.replyOnlyBlocked();
     if (dropdownToggle) {
       dropdownToggle.disabled = !hasContent;
     }
@@ -6371,6 +6387,7 @@ class WhatsAppClient {
       if (field) field.value = value || '';
     };
 
+    document.getElementById('reply-only').checked = mergedSettings.replyOnly === true;
     document.getElementById('translation-enabled').checked = mergedSettings.translationEnabled === true;
     this.updateTranslationSettingsControls();
     setFieldValue('contact-alias', mergedSettings.alias);
@@ -6439,6 +6456,7 @@ class WhatsAppClient {
     modal?.querySelectorAll('button, input').forEach(control => { control.disabled = true; });
     try {
       await this.conversationSettingsClient.save(targetContactId, {
+        replyOnly: document.getElementById('reply-only')?.checked === true,
         translationEnabled, languageOverride, translationStyle, sendOriginalFollowUp,
       });
       this.updateContactMetadata(targetContactId, {alias, timezone});

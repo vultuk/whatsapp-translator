@@ -124,7 +124,7 @@ impl MessageStore {
             )?;
             // If the account has no row, inherit the first device row's preferences.
             // Otherwise retain the account's explicit settings, including opt-out.
-            tx.execute("INSERT OR IGNORE INTO contacts(id,name,phone,type,last_message_time,unread_count,last_message_preview,pinned_at,participant_count,translation_enabled,language_override,translation_style,send_original_follow_up) SELECT ?1,name,phone,type,last_message_time,unread_count,last_message_preview,pinned_at,participant_count,translation_enabled,language_override,translation_style,send_original_follow_up FROM contacts WHERE id=?2", params![canonical, alias])?;
+            tx.execute("INSERT OR IGNORE INTO contacts(id,name,phone,type,last_message_time,unread_count,last_message_preview,pinned_at,participant_count,translation_enabled,language_override,translation_style,send_original_follow_up,reply_only) SELECT ?1,name,phone,type,last_message_time,unread_count,last_message_preview,pinned_at,participant_count,translation_enabled,language_override,translation_style,send_original_follow_up,reply_only FROM contacts WHERE id=?2", params![canonical, alias])?;
             tx.execute("INSERT OR IGNORE INTO contacts(id,type,last_message_time,unread_count) VALUES (?,'private',0,0)", [canonical])?;
             if existed {
                 tx.execute("UPDATE contacts SET unread_count=COALESCE(unread_count,0)+COALESCE((SELECT unread_count FROM contacts WHERE id=?2),0), name=COALESCE(NULLIF(name,''),(SELECT NULLIF(name,'') FROM contacts WHERE id=?2)), last_message_time=MAX(COALESCE(last_message_time,0),COALESCE((SELECT last_message_time FROM contacts WHERE id=?2),0)) WHERE id=?1", params![canonical, alias])?;

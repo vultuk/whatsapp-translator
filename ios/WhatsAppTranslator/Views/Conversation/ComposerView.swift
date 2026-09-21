@@ -5,6 +5,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ComposerView: View {
+    @Environment(AppSession.self) private var session
+    private var replyBlocked: Bool { !session.canSend(to: contactID, reply: reply) }
     @Environment(\.translatorPalette) private var palette
     let contactID: String
     @Binding var text: String
@@ -23,6 +25,12 @@ struct ComposerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if replyBlocked {
+                Label("Reply only · Choose an incoming message and tap Reply", systemImage: "arrowshape.turn.up.left")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .accessibilityIdentifier("reply-only-hint")
+            }
             if let reply, showReplyPreview {
                 HStack(spacing: 10) {
                     RoundedRectangle(cornerRadius: 2)
@@ -75,6 +83,7 @@ struct ComposerView: View {
                         sendButton
                     }
                 }
+                .disabled(replyBlocked)
                 .padding(.horizontal, 12)
                 .padding(.top, reply == nil || !showReplyPreview ? 8 : 2)
                 .padding(.bottom, 9)

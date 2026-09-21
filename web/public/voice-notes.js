@@ -76,6 +76,7 @@ export function setupVoiceNotes(app) {
     let settings;
     try { settings = await app.conversationSettingsClient.load(contactId); }
     catch (error) { alert(error.message); return; }
+    if (settings.replyOnly && (!reply || reply.isFromMe !== false)) { alert('Reply only · Choose an incoming message and tap Reply before recording.'); return; }
     dialog.replaceChildren(el('h3', 'Voice note'));
     if (settings.translationEnabled) {
       const prefs = el('div'); dialog.append(prefs); await preference(prefs, 'outgoing');

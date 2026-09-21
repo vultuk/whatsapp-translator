@@ -112,6 +112,9 @@ pub struct StoredContact {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSettings {
+    /// Require a quoted incoming message for every outgoing send.
+    #[serde(default)]
+    pub reply_only: bool,
     /// Translation is opt-in for each direct chat or group.
     #[serde(default)]
     pub translation_enabled: bool,
@@ -687,6 +690,17 @@ impl MessageStore {
 
     /// Add conversation settings columns to contacts table
     fn migrate_add_conversation_settings_columns(&self, conn: &Connection) -> Result<()> {
+        let has_reply_only = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('contacts') WHERE name = 'reply_only'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+        if !has_reply_only {
+            conn.execute(
+                "ALTER TABLE contacts ADD COLUMN reply_only INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         let has_translation_enabled = conn.query_row(
             "SELECT COUNT(*) FROM pragma_table_info('contacts') WHERE name = 'translation_enabled'",
             [],
@@ -1614,7 +1628,7 @@ impl MessageStore {
         let conn = self.conn.lock().unwrap();
 
         let result = conn.query_row(
-            "SELECT language_override, translation_style, send_original_follow_up, translation_enabled FROM contacts WHERE id = ?",
+            "SELECT language_override, translation_style, send_original_follow_up, translation_enabled, reply_only FROM contacts WHERE id = ?",
             params![contact_id],
             |row| {
                 Ok(ConversationSettings {
@@ -1622,6 +1636,7 @@ impl MessageStore {
                     translation_style: row.get(1)?,
                     send_original_follow_up: row.get(2)?,
                     translation_enabled: row.get(3)?,
+                    reply_only: row.get(4)?,
                 })
             },
         );
@@ -1644,12 +1659,13 @@ impl MessageStore {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let changed = tx.execute(
-            "UPDATE contacts SET language_override = ?, translation_style = ?, send_original_follow_up = ?, translation_enabled = ? WHERE id = ?",
+            "UPDATE contacts SET language_override = ?, translation_style = ?, send_original_follow_up = ?, translation_enabled = ?, reply_only = ? WHERE id = ?",
             params![
                 settings.language_override,
                 settings.translation_style,
                 settings.send_original_follow_up,
                 settings.translation_enabled,
+                settings.reply_only,
                 contact_id
             ],
         )?;
@@ -1735,6 +1751,33 @@ impl MessageStore {
         }
         messages.reverse();
         Ok(messages)
+    }
+
+    /// Returns whether the conversation requires a quote. Fail closed on storage errors.
+    pub fn validate_reply_only(&self, contact_id: &str, reply: Option<&str>) -> Result<bool> {
+        if !self.get_conversation_settings(contact_id)?.reply_only {
+            return Ok(false);
+        }
+        let error = "Reply only is on. Select an incoming message in this conversation and choose Reply before sending.";
+        let id = reply.context(error)?;
+        let message = self.get_message_by_id(id)?.context(error)?;
+        anyhow::ensure!(
+            message.contact_id == canonical_chat_id(contact_id)
+                && !message.is_from_me
+                && !["reaction", "revoked"].contains(&message.content_type.to_lowercase().as_str())
+                && !["reaction", "revoked"].contains(
+                    &message
+                        .content
+                        .as_ref()
+                        .and_then(|c| c.get("type"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .as_str()
+                ),
+            error
+        );
+        Ok(true)
     }
 
     /// The target must belong to this conversation. Reactions do not change reply context.
@@ -3565,6 +3608,7 @@ mod tests {
         insert_test_contact(&store);
 
         let settings = ConversationSettings {
+            reply_only: false,
             translation_enabled: true,
             language_override: Some("Spanish".to_string()),
             translation_style: Some("friendly".to_string()),
@@ -3598,6 +3642,7 @@ mod tests {
             );
         }
         let settings = ConversationSettings {
+            reply_only: false,
             translation_enabled: true,
             language_override: Some("Hungarian".into()),
             translation_style: Some("friendly".into()),

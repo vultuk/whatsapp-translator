@@ -15,6 +15,15 @@ struct ConversationSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle("Reply only", isOn: $settings.replyOnly)
+                        .accessibilityIdentifier("conversation-reply-only")
+                } header: {
+                    Text("Sending")
+                } footer: {
+                    Text("Choose an incoming message and tap Reply before sending text, photos, videos or voice notes. Applies on every connected device, including Messages.")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 translationSection
                 Section("Notifications") { MessageToneSettingsRow(contactID: contact.id) }
                 if settings.translationEnabled { VoicePreferenceSection(scope: contact.id) }

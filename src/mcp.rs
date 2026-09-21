@@ -823,6 +823,13 @@ impl WhatsAppMcpServer {
         if original_text.is_empty() {
             return Err(McpError::invalid_params("text must not be empty", None));
         }
+        self.state
+            .store
+            .validate_reply_only(
+                contact_id,
+                args.get("reply_to_message_id").and_then(Value::as_str),
+            )
+            .mcp()?;
         let mode = TranslationMode::parse(args.get("translation_mode").and_then(Value::as_str))?;
         let contact = self
             .state
@@ -1003,6 +1010,13 @@ impl WhatsAppMcpServer {
                 None,
             ));
         }
+        self.state
+            .store
+            .validate_reply_only(
+                &prepared.contact_id,
+                prepared.reply_to_message_id.as_deref(),
+            )
+            .mcp()?;
         if prepared.translated
             && !self
                 .state
@@ -1699,6 +1713,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reply_only_rejects_new_and_previously_prepared_unquoted_sends() {
+        let (state, data_dir) = test_state();
+        let contact = "family@g.us";
+        state
+            .store
+            .upsert_contact(contact, None, None, Some("group"), 1)
+            .unwrap();
+        let server = WhatsAppMcpServer::new(
+            state.clone(),
+            McpPermissions {
+                read: true,
+                send: true,
+            },
+        );
+        let prepared = server
+            .handle_prepare_message(json!({"contact_id":contact,"text":"Hello"}))
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        state
+            .store
+            .update_conversation_settings(
+                contact,
+                &ConversationSettings {
+                    reply_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(server
+            .handle_prepare_message(json!({"contact_id":contact,"text":"Hello"}))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Reply only"));
+        assert!(server.handle_prepared_send(json!({"preparation_token":prepared["preparationToken"],"idempotency_key":"reply-only-test"}),false).await.unwrap_err().to_string().contains("Reply only"));
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn required_conversation_translation_without_a_translator_prepares_nothing() {
         let (state, data_dir) = test_state();
         let contact_id = "33612345678@s.whatsapp.net";
@@ -1717,6 +1772,7 @@ mod tests {
             .update_conversation_settings(
                 contact_id,
                 &ConversationSettings {
+                    reply_only: false,
                     translation_enabled: true,
                     language_override: Some("French".to_string()),
                     translation_style: None,

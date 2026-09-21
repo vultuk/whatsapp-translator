@@ -64,3 +64,61 @@ final class ConversationTranslationTests: XCTestCase {
         XCTAssertTrue(translated.usesTranslation)
     }
 }
+
+@MainActor
+final class ReplyOnlyTests: XCTestCase {
+    func testSettingDefaultsOffAndEncodesExplicitChoice() throws {
+        let old = try JSONDecoder().decode(ConversationSettings.self, from: Data("{}".utf8))
+        XCTAssertFalse(old.replyOnly)
+        let enabled = ConversationSettings(replyOnly: true)
+        XCTAssertEqual(try JSONDecoder().decode(ConversationSettings.self, from: JSONEncoder().encode(enabled)), enabled)
+    }
+
+    func testOnlyIncomingRepliesInTheSelectedConversationCanSend() async throws {
+        let session = AppSession(demoMode: true)
+        await session.start()
+        let incoming = try XCTUnwrap(session.messages.values.joined().first { !$0.isFromMe && !$0.isReaction })
+        let id = incoming.contactId
+        try await session.saveConversationSettings(ConversationSettings(replyOnly: true), for: id)
+        XCTAssertFalse(session.canSend(to: id, reply: nil))
+        XCTAssertTrue(session.canSend(to: id, reply: incoming.replyTarget))
+        XCTAssertTrue(session.feedReplyNeedsQuote(incoming))
+        let blocked = await session.send(text: "Unprompted", to: id)
+        XCTAssertFalse(blocked)
+        XCTAssertFalse(session.startPhotoSend([OutgoingImage(data: Data([1]), mimeType: "image/jpeg")], to: id))
+        let sent = await session.send(text: "A considered reply", to: id, reply: incoming.replyTarget, replyOnlyIfNotLatest: true)
+        XCTAssertTrue(sent)
+        let outgoing = try XCTUnwrap(session.messages[id]?.last)
+        XCTAssertFalse(session.canSend(to: id, reply: outgoing.replyTarget))
+        XCTAssertTrue(session.canSend(to: "unrestricted@g.us", reply: nil))
+        try await session.saveConversationSettings(ConversationSettings(replyOnly: false), for: id)
+        XCTAssertTrue(session.canSend(to: id, reply: nil))
+    }
+
+    func testAutomaticFeedDestinationIsNotAnExplicitReplyAndCancelClearsIntent() async throws {
+        let session = AppSession(demoMode: true)
+        await session.start()
+        let incoming = try XCTUnwrap(session.messages.values.joined().first { !$0.isFromMe })
+        var draft = UnifiedReplyDraft()
+        draft.updateText("Draft", latestMessage: incoming)
+        XCTAssertFalse(draft.isExplicitReply)
+        draft.cancelSelection()
+        XCTAssertNotNil(draft.beginAttachment(latestMessage: incoming))
+        XCTAssertFalse(draft.isExplicitReply)
+        draft.select(incoming)
+        XCTAssertTrue(draft.isExplicitReply)
+        draft.finishMediaSending(to: incoming)
+        XCTAssertFalse(draft.isExplicitReply)
+        XCTAssertEqual(draft.drafts[incoming.contactId], "Draft")
+    }
+
+    func testLiveReplyOnlySettingRefreshesWithoutRelaunch() async throws {
+        let session = AppSession(demoMode: true)
+        await session.start()
+        let event = try JSONDecoder().decode(LiveEvent.self, from: Data(#"{"type":"conversation_settings_updated","chat_id":"family@g.us","settings":{"replyOnly":true}}"#.utf8))
+        session.handle(event)
+        XCTAssertTrue(session.isReplyOnly("family@g.us"))
+        XCTAssertFalse(session.canSend(to: "family@g.us", reply: nil))
+        XCTAssertFalse(session.isReplyOnly("other@g.us"))
+    }
+}

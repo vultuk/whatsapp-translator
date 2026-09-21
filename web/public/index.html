@@ -269,7 +269,8 @@
               </div>
 
               <footer class="message-input-area">
-                <div id="reply-preview" class="reply-preview hidden">
+                <p id="reply-only-hint" class="form-hint" role="status" hidden>Reply only · Choose an incoming message and tap Reply before sending.</p>
+            <div id="reply-preview" class="reply-preview hidden">
                   <div class="reply-preview-content">
                     <span class="reply-preview-sender">Name</span>
                     <span class="reply-preview-text">Message text...</span>
@@ -461,6 +462,14 @@
               <input type="text" id="conversation-timezone" placeholder="e.g., Europe/Madrid">
               <p class="form-hint">Used to show their local time.</p>
             </div>
+          </section>
+          <section class="settings-section" aria-label="Sending settings">
+            <span class="settings-section-label">Sending</span>
+            <label class="checkbox-row" for="reply-only">
+              <input type="checkbox" id="reply-only" aria-describedby="reply-only-description">
+              <span>Reply only</span>
+            </label>
+            <p class="form-hint" id="reply-only-description">Choose an incoming message and tap Reply before sending. Applies on every connected device.</p>
           </section>
           <section class="settings-section" aria-label="Translation settings">
             <span class="settings-section-label">Translation</span>

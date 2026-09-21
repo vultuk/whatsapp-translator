@@ -354,6 +354,11 @@ async fn build_note(
     if incoming && !settings.translation_enabled {
         bail!("Translation is off for this conversation. Enable it in Conversation settings.");
     }
+    if !incoming {
+        state
+            .store
+            .validate_reply_only(&req.contact_id, req.reply_to.as_deref())?;
+    }
     let scratch = Scratch::new(&state.data_dir)?;
     tokio::fs::write(scratch.0.join("input"), decode_audio(&req.media_data)?).await?;
     let pcm = convert(
@@ -748,7 +753,8 @@ pub async fn send(State(state): State<Arc<AppState>>, Json(req): Json<SendReques
         if note.is_translated != state.store.get_conversation_settings(&note.contact_id)?.translation_enabled {
             bail!("Translation settings changed. Please record or prepare this voice note again.");
         }
-        if note.reply_only_if_not_latest {
+        let requires_quote = state.store.validate_reply_only(&note.contact_id, note.reply_to.as_deref())?;
+        if note.reply_only_if_not_latest && !requires_quote {
             let id = note.reply_to.as_deref().context("Select a message before recording a reply")?;
             if state.store.reply_is_latest(&note.contact_id, id)? {
                 note.reply_to = None; note.reply_to_sender = None; note.reply_to_text = None;
@@ -1006,6 +1012,7 @@ mod integration_tests {
             .update_conversation_settings(
                 "test@s.whatsapp.net",
                 &ConversationSettings {
+                    reply_only: false,
                     translation_enabled: true,
                     language_override: Some("Hungarian".into()),
                     translation_style: Some("friendly".into()),
@@ -1195,7 +1202,7 @@ mod integration_tests {
     }
     #[tokio::test]
     async fn unified_recording_rechecks_reply_at_send_time_and_persists_quote() {
-        for newer_arrived in [false, true] {
+        for (newer_arrived, reply_only) in [(false, false), (true, false), (false, true)] {
             let dir = TestDirectory::new();
             let state = state(&dir.0, None);
             *state.connected.write().await = true;
@@ -1218,6 +1225,21 @@ mod integration_tests {
                 "sent",
             )
             .unwrap();
+            if reply_only {
+                let mut incoming = state.store.get_message_by_id("selected").unwrap().unwrap();
+                incoming.is_from_me = false;
+                state.store.delete_message("selected").unwrap();
+                state.store.add_message(&incoming).unwrap();
+                let mut settings = state
+                    .store
+                    .get_conversation_settings(&note.contact_id)
+                    .unwrap();
+                settings.reply_only = true;
+                state
+                    .store
+                    .update_conversation_settings(&note.contact_id, &settings)
+                    .unwrap();
+            }
             note.reply_to = Some("selected".into());
             note.reply_to_sender = Some("sam@s.whatsapp.net".into());
             note.reply_to_text = Some("Original".into());
@@ -1266,13 +1288,13 @@ mod integration_tests {
                 assert_eq!(to, "test@s.whatsapp.net");
                 assert_eq!(
                     reply_to.as_deref(),
-                    if newer_arrived {
+                    if newer_arrived || reply_only {
                         Some("selected")
                     } else {
                         None
                     }
                 );
-                assert_eq!(reply_to_sender.is_some(), newer_arrived);
+                assert_eq!(reply_to_sender.is_some(), newer_arrived || reply_only);
                 let (payload, status, _, _) = bridge_state
                     .store
                     .voice_note(&preparation)
@@ -1309,7 +1331,7 @@ mod integration_tests {
             let content: Value = serde_json::from_str(&stored.content_json).unwrap();
             assert_eq!(
                 content["reply_context"]["messageId"].as_str(),
-                if newer_arrived {
+                if newer_arrived || reply_only {
                     Some("selected")
                 } else {
                     None
@@ -1444,6 +1466,7 @@ mod integration_tests {
                 .update_conversation_settings(
                     contact_id,
                     &ConversationSettings {
+                        reply_only: false,
                         translation_enabled: false,
                         language_override: Some("Hungarian".into()),
                         translation_style: Some("friendly".into()),

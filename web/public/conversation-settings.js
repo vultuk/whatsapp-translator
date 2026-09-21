@@ -1,5 +1,6 @@
 export function normalizeConversationSettings(value = {}) {
   return {
+    replyOnly: value.replyOnly === true,
     translationEnabled: value.translationEnabled === true,
     languageOverride: value.languageOverride || null,
     translationStyle: value.translationStyle || null,
@@ -44,4 +45,8 @@ export class ConversationSettingsClient {
     if (!response.ok || saved.success !== true) throw new Error(saved.error || 'Could not save conversation settings. Please try again.');
     return this.apply(id, saved);
   }
+}
+
+export function canSendInConversation(settings, reply) {
+  return settings?.replyOnly !== true || Boolean(reply?.messageId && reply.isFromMe === false);
 }

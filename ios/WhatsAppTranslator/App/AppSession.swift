@@ -231,6 +231,7 @@ final class AppSession {
     }
 
     func feedReplyNeedsQuote(_ message: ChatMessage) -> Bool {
+        if isReplyOnly(message.contactId) { return true }
         let conversation = (messages[message.contactId] ?? []) + feedByID.values.filter { $0.contactId == message.contactId }
         return conversation.contains {
             !$0.isReaction && ($0.timestamp > message.timestamp || ($0.timestamp == message.timestamp && $0.id > message.id))
@@ -406,7 +407,8 @@ final class AppSession {
     }
 
     func prepareVoice(data: Data, contactID: String, reply: MessageReplyTarget?, replyOnlyIfNotLatest: Bool = false) async throws -> TranslatedVoiceNote {
-        try await api.prepareVoice(data: data, contactID: contactID, reply: reply, replyOnlyIfNotLatest: replyOnlyIfNotLatest)
+        guard checkReplyOnly(contactID, reply: reply) else { throw APIError.server("Choose an incoming message and tap Reply before recording.") }
+        return try await api.prepareVoice(data: data, contactID: contactID, reply: reply, replyOnlyIfNotLatest: replyOnlyIfNotLatest)
     }
 
     func sendVoice(_ note: TranslatedVoiceNote) async throws -> VoiceSendResult {
@@ -628,6 +630,7 @@ final class AppSession {
     }
 
     func send(text: String, to contactID: String, reply: MessageReplyTarget? = nil, replyOnlyIfNotLatest: Bool = false) async -> Bool {
+        guard checkReplyOnly(contactID, reply: reply) else { return false }
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return false }
         sendingContactIDs.insert(contactID)
@@ -667,6 +670,7 @@ final class AppSession {
     }
 
     func sendAttachment(_ attachment: OutgoingAttachment, caption: String?, to contactID: String, reply: MessageReplyTarget?, replyOnlyIfNotLatest: Bool = false) async -> Bool {
+        guard checkReplyOnly(contactID, reply: reply) else { return false }
         guard !attachment.data.isEmpty, attachment.data.count <= OutgoingAttachment.maximumBytes,
               !sendingContactIDs.contains(contactID) else { return false }
         sendingContactIDs.insert(contactID)
@@ -726,6 +730,7 @@ final class AppSession {
         to contactID: String,
         reply: MessageReplyTarget? = nil
     ) async -> Bool {
+        guard checkReplyOnly(contactID, reply: reply) else { return false }
         guard !images.isEmpty, images.count <= 30 else {
             presentError("Couldn’t send photos", "Choose between 1 and 30 photos.")
             return false
@@ -769,6 +774,7 @@ final class AppSession {
         reply: MessageReplyTarget? = nil,
         replyOnlyIfNotLatest: Bool = false
     ) -> Bool {
+        guard checkReplyOnly(contactID, reply: reply) else { return false }
         guard !sendingContactIDs.contains(contactID) else { return false }
         guard !images.isEmpty, images.count <= 30 else {
             presentError("Couldn’t send photos", "Choose between 1 and 30 photos.")
@@ -1053,17 +1059,44 @@ final class AppSession {
 
     func conversationSettings(for contactID: String) async throws -> ConversationSettings {
         if demoMode {
-            return savedConversationSettings[contactID] ?? ConversationSettings()
+            let settings = savedConversationSettings[contactID] ?? ConversationSettings()
+            savedConversationSettings[contactID] = settings
+            return settings
         }
+        let revision = conversationSettingsRevision
         let settings = try await api.conversationSettings(contactID: contactID)
+        if revision != conversationSettingsRevision, let current = savedConversationSettings[contactID] { return current }
         savedConversationSettings[contactID] = settings
         return settings
     }
 
+    func isReplyOnly(_ contactID: String) -> Bool {
+        savedConversationSettings[contactID]?.replyOnly == true
+    }
+
+    func canSend(to contactID: String, reply: MessageReplyTarget?) -> Bool {
+        guard isReplyOnly(contactID) else { return true }
+        guard let reply else { return false }
+        return ((messages[contactID] ?? []) + Array(feedByID.values) + topicPages.values.flatMap(\.messages)).contains {
+            $0.id == reply.messageID && $0.contactId == contactID && !$0.isFromMe
+                && !$0.isReaction && $0.contentType.lowercased() != "revoked"
+        }
+    }
+
+    private func checkReplyOnly(_ contactID: String, reply: MessageReplyTarget?) -> Bool {
+        guard canSend(to: contactID, reply: reply) else {
+            presentError("Reply only", "Choose an incoming message in this conversation and tap Reply before sending.")
+            return false
+        }
+        return true
+    }
+
     private(set) var savedConversationSettings: [String: ConversationSettings] = [:]
+    private var conversationSettingsRevision = 0
 
     func saveConversationSettings(_ settings: ConversationSettings, for contactID: String) async throws {
         if !demoMode { try await api.updateConversationSettings(contactID: contactID, settings: settings) }
+        conversationSettingsRevision += 1
         savedConversationSettings[contactID] = settings
     }
 
@@ -1210,6 +1243,7 @@ final class AppSession {
         switch event.type {
         case "conversation_settings_updated":
             if let contactID = event.chatId, let settings = event.settings {
+                conversationSettingsRevision += 1
                 savedConversationSettings[contactID] = settings
             }
         case "message", "reaction", "message_updated":

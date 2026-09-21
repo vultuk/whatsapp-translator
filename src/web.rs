@@ -568,6 +568,7 @@ pub struct AuthResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConversationSettingsRequest {
+    pub reply_only: Option<bool>,
     // Older native builds omit this field when saving their existing settings.
     // Preserve an explicit choice rather than silently resetting it.
     pub translation_enabled: Option<bool>,
@@ -583,6 +584,7 @@ pub struct UpdateConversationSettingsRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSettingsResponse {
+    pub reply_only: bool,
     pub translation_enabled: bool,
     pub language_override: Option<String>,
     pub translation_style: Option<String>,
@@ -695,6 +697,18 @@ impl AppState {
 
     /// Send a command to the bridge
     pub async fn send_bridge_command(&self, cmd: BridgeCommand) -> Result<(), String> {
+        match &cmd {
+            BridgeCommand::Send { to, reply_to, .. }
+            | BridgeCommand::SendImage { to, reply_to, .. }
+            | BridgeCommand::SendMedia { to, reply_to, .. }
+            | BridgeCommand::SendImages { to, reply_to, .. }
+            | BridgeCommand::SendAudio { to, reply_to, .. } => {
+                self.store
+                    .validate_reply_only(to, reply_to.as_deref())
+                    .map_err(|e| e.to_string())?;
+            }
+            _ => {}
+        }
         let send_id = match &cmd {
             BridgeCommand::Send { request_id, .. }
             | BridgeCommand::SendImage { request_id, .. }
@@ -1850,6 +1864,7 @@ async fn get_conversation_settings(
     let contact_id = crate::identity::canonical_chat_id(&contact_id).into_owned();
     match state.store.get_conversation_settings(&contact_id) {
         Ok(settings) => Json(ConversationSettingsResponse {
+            reply_only: settings.reply_only,
             translation_enabled: settings.translation_enabled,
             language_override: settings.language_override,
             translation_style: settings.translation_style,
@@ -1904,6 +1919,7 @@ async fn update_conversation_settings(
 
     // Convert empty strings to None
     let settings = crate::storage::ConversationSettings {
+        reply_only: req.reply_only.unwrap_or(previous.reply_only),
         translation_enabled: req
             .translation_enabled
             .unwrap_or(previous.translation_enabled),
@@ -1925,6 +1941,7 @@ async fn update_conversation_settings(
                 });
             Json(serde_json::json!({
                 "success": true,
+                "replyOnly": settings.reply_only,
                 "translationEnabled": settings.translation_enabled,
                 "languageOverride": settings.language_override,
                 "translationStyle": settings.translation_style,
@@ -2224,20 +2241,17 @@ async fn send_message(
             .into_response();
     }
 
-    if req.reply_only_if_not_latest {
-        let valid = req
-            .reply_to
-            .as_deref()
-            .is_some_and(|id| state.store.reply_is_latest(&req.contact_id, id).is_ok());
-        if !valid {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": "Select a message in the destination conversation before replying"
-                })),
-            )
-                .into_response();
-        }
+    if let Err(error) = media_reply_needs_quote(
+        &state,
+        &req.contact_id,
+        req.reply_to.as_deref(),
+        req.reply_only_if_not_latest,
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":error})),
+        )
+            .into_response();
     }
 
     // Check if connected
@@ -2359,26 +2373,26 @@ async fn send_message(
     );
     let text_to_send = send_plan[0].clone();
 
-    // Recheck after translation, immediately before preparing the WhatsApp send.
-    if req.reply_only_if_not_latest {
-        match state
-            .store
-            .reply_is_latest(&req.contact_id, req.reply_to.as_deref().unwrap_or_default())
-        {
-            Ok(true) => {
-                req.reply_to = None;
-                req.reply_to_sender = None;
-                req.reply_to_text = None;
-                req.reply_to_sender_name = None;
-            }
-            Ok(false) => {}
-            Err(error) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": error.to_string()})),
-                )
-                    .into_response()
-            }
+    // Preserve the quote in reply-only chats, including replies to the latest message.
+    match media_reply_needs_quote(
+        &state,
+        &req.contact_id,
+        req.reply_to.as_deref(),
+        req.reply_only_if_not_latest,
+    ) {
+        Ok(false) => {
+            req.reply_to = None;
+            req.reply_to_sender = None;
+            req.reply_to_text = None;
+            req.reply_to_sender_name = None;
+        }
+        Ok(true) => {}
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":error})),
+            )
+                .into_response()
         }
     }
 
@@ -2597,6 +2611,7 @@ async fn send_original_follow_up(
     let content = serde_json::json!({
         "type": "text",
         "body": original_text,
+        "reply_context": req.reply_to.as_ref().map(|id| serde_json::json!({"messageId":id,"senderName":req.reply_to_sender_name,"text":req.reply_to_text})),
     });
     let stored_msg = StoredMessage {
         id: temp_message_id.clone(),
@@ -2645,9 +2660,9 @@ async fn send_original_follow_up(
         request_id: Some(request_id),
         to: req.contact_id.clone(),
         text: original_text.to_string(),
-        reply_to: None,
-        reply_to_sender: None,
-        reply_to_text: None,
+        reply_to: req.reply_to.clone(),
+        reply_to_sender: req.reply_to_sender.clone(),
+        reply_to_text: req.reply_to_text.clone(),
     };
 
     if let Err(error) = state.send_bridge_command(command).await {
@@ -2710,6 +2725,13 @@ fn media_reply_needs_quote(
     reply: Option<&str>,
     conditional: bool,
 ) -> Result<bool, String> {
+    if state
+        .store
+        .validate_reply_only(contact, reply)
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(true);
+    }
     if !conditional {
         return Ok(reply.is_some());
     }
@@ -3360,6 +3382,19 @@ async fn create_photo_album(
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "Invalid album job details" })),
+        )
+            .into_response();
+    }
+
+    if let Err(error) = media_reply_needs_quote(
+        &state,
+        &req.contact_id,
+        req.reply_to.as_deref(),
+        req.reply_only_if_not_latest,
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":error})),
         )
             .into_response();
     }
@@ -5729,6 +5764,135 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reply_only_blocks_text_media_and_bridge_bypasses_and_preserves_older_settings() {
+        let (state, dir) = test_state(None);
+        for contact in ["one@g.us", "two@g.us"] {
+            state
+                .store
+                .upsert_contact(contact, None, None, Some("group"), 1)
+                .unwrap();
+        }
+        for (id, contact, kind, mine) in [
+            ("incoming", "one@g.us", "Text", false),
+            ("mine", "one@g.us", "Text", true),
+            ("other", "two@g.us", "Text", false),
+            ("deleted", "one@g.us", "Revoked", false),
+            ("reaction", "one@g.us", "Reaction", false),
+        ] {
+            let mut message = feed_test_message(id, contact, 100);
+            message.is_from_me = mine;
+            message.content_type = kind.into();
+            state.store.add_message(&message).unwrap();
+        }
+        state
+            .store
+            .update_conversation_settings(
+                "one@g.us",
+                &ConversationSettings {
+                    reply_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        state.set_connected(true, None, None).await;
+        let (sender, mut receiver) = mpsc::channel(8);
+        state.set_command_tx(sender).await;
+        let app = create_router(state.clone());
+        for reply in [
+            None,
+            Some("mine"),
+            Some("other"),
+            Some("missing"),
+            Some("deleted"),
+            Some("reaction"),
+        ] {
+            assert!(state.store.validate_reply_only("one@g.us", reply).is_err());
+            for (path, payload) in [
+                (
+                    "/api/send",
+                    serde_json::json!({"contactId":"one@g.us","text":"No","replyTo":reply}),
+                ),
+                (
+                    "/api/send-image",
+                    serde_json::json!({"contactId":"one@g.us","mediaData":BASE64_STANDARD.encode(b"photo"),"mimeType":"image/jpeg","replyTo":reply}),
+                ),
+                (
+                    "/api/send-images",
+                    serde_json::json!({"contactId":"one@g.us","images":[{"mediaData":BASE64_STANDARD.encode(b"photo"),"mimeType":"image/jpeg"}],"replyTo":reply}),
+                ),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        HttpRequest::builder()
+                            .method("POST")
+                            .uri(path)
+                            .header("content-type", "application/json")
+                            .body(Body::from(payload.to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+            }
+        }
+        assert!(receiver.try_recv().is_err());
+        assert!(state
+            .store
+            .validate_reply_only("one@g.us", Some("incoming"))
+            .unwrap());
+        assert!(!state.store.validate_reply_only("two@g.us", None).unwrap());
+        assert!(media_reply_needs_quote(&state, "one@g.us", Some("incoming"), true).unwrap());
+        // Re-check at dispatch even if settings changed while a client was preparing media.
+        assert!(state
+            .send_bridge_command(BridgeCommand::SendAudio {
+                request_id: None,
+                to: "one@g.us".into(),
+                media_data: "audio".into(),
+                duration_seconds: 1,
+                reply_to: None,
+                reply_to_sender: None,
+                reply_to_text: None
+            })
+            .await
+            .unwrap_err()
+            .contains("Reply only"));
+        let response = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("PUT")
+                    .uri("/api/contacts/one%40g.us/settings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"translationEnabled":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            state
+                .store
+                .get_conversation_settings("one@g.us")
+                .unwrap()
+                .reply_only
+        );
+        assert!(
+            MessageStore::new(&dir)
+                .unwrap()
+                .get_conversation_settings("one@g.us")
+                .unwrap()
+                .reply_only
+        );
+        state
+            .store
+            .update_conversation_settings("one@g.us", &ConversationSettings::default())
+            .unwrap();
+        assert!(!state.store.validate_reply_only("one@g.us", None).unwrap());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn unified_feed_rejects_missing_deleted_or_wrong_group_context_before_sending() {
         let (state, dir) = test_state(None);
         state
@@ -5767,7 +5931,11 @@ mod tests {
 
     #[tokio::test]
     async fn unified_feed_sends_to_selected_group_and_quotes_only_its_older_messages() {
-        for (selected, expected_quote) in [("a", Some("a")), ("b", None)] {
+        for (selected, expected_quote, reply_only) in [
+            ("a", Some("a"), false),
+            ("b", None, false),
+            ("b", Some("b"), true),
+        ] {
             let (state, dir) = test_state(None);
             for contact in ["one@g.us", "two@g.us"] {
                 state
@@ -5785,6 +5953,16 @@ mod tests {
                     .add_message(&feed_test_message(id, contact, time))
                     .unwrap();
             }
+            state
+                .store
+                .update_conversation_settings(
+                    "one@g.us",
+                    &ConversationSettings {
+                        reply_only,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
             state.set_connected(true, None, None).await;
             let (sender, mut receiver) = mpsc::channel(8);
             state.set_command_tx(sender).await;
@@ -6384,6 +6562,7 @@ mod tests {
                     .update_conversation_settings(
                         other,
                         &ConversationSettings {
+                            reply_only: false,
                             translation_enabled: other != id,
                             language_override: Some("Hungarian".into()),
                             translation_style: Some("friendly".into()),
@@ -6566,6 +6745,7 @@ mod tests {
             .update_conversation_settings(
                 contact_id,
                 &ConversationSettings {
+                    reply_only: false,
                     translation_enabled: true,
                     language_override: Some("French".to_string()),
                     translation_style: None,
