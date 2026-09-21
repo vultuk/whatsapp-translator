@@ -80,6 +80,10 @@ Hosted deploy recommendation:
   or `http://[::1]` redirect URIs, and authorization requires an exact registered
   redirect match.
 
+## Pasting images
+
+Copy an image, then use **Paste** in the message box on iPhone or iPad, or **⌘V** on Mac. Pasted images open the photo preview, where you can add a caption, cancel, or send. Multiple copied images (up to 30) and image files copied in Finder are supported. Your existing text draft is preserved, and ordinary text paste still works. This is available in both individual chats and the unified Messages view.
+
 ## Chat gallery
 
 On iPhone, iPad, and Mac, open a conversation and choose **Gallery** in the header. Photos and videos appear newest first in a square grid grouped by date, including older media saved on the server. Open any item full screen, then swipe left or right (or use the arrow buttons) to move between photos and videos. Photos support zooming; videos play in place and pause when you move away. Older items load as you browse. Deleted messages, stickers, audio, and documents are excluded.

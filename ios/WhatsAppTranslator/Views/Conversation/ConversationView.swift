@@ -265,8 +265,8 @@ struct ConversationView: View {
             .platformSwipeDownDismissesKeyboard()
             .defaultScrollAnchor(.bottom)
             .onChange(of: messages.count) {
-                guard messageSearch.isEmpty, !starredOnly, let id = messages.last?.id else { return }
-                withAnimation(.snappy) { proxy.scrollTo(id, anchor: .bottom) }
+                guard messageSearch.isEmpty, !starredOnly else { return }
+                withAnimation(.snappy) { proxy.scrollTo("conversation-bottom", anchor: .bottom) }
             }
         }
     }
@@ -323,6 +323,8 @@ struct ConversationView: View {
                     .task(id: album.messages.map(\.id)) { await loadTimelineMedia(for: Array(album.messages.prefix(PhotoGalleryLayout.previewLimit))) }
             }
         }
+        // Album grouping can replace the last image's ID; keep a stable scroll target.
+        Color.clear.frame(height: 1).id("conversation-bottom")
     }
 
     private var timelineItems: [ConversationTimelineItem] {

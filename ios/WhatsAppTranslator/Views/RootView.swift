@@ -359,7 +359,8 @@ private struct UnifiedMessagesView: View {
         return session.unifiedMessages
     }
     @State private var atBottom = true
-    @FocusState private var composerFocused: Bool
+    @State private var composerFocused = false
+    @State private var imagePaste = ImagePasteController()
 
     private var draft: Binding<String> {
         Binding(get: { replyDraft.text }, set: { value in
@@ -372,6 +373,7 @@ private struct UnifiedMessagesView: View {
         GeometryReader { geometry in
             messagesContent(bottomSafeArea: geometry.safeAreaInsets.bottom)
         }
+        .modifier(PastedImagePresentation(controller: imagePaste))
     }
 
     private func messagesContent(bottomSafeArea: CGFloat) -> some View {
@@ -605,14 +607,24 @@ private struct UnifiedMessagesView: View {
                         },
                         onSent: { target in replyDraft.finishMediaSending(to: target); composerFocused = false }
                     )
-                    TextField("Message", text: draft, axis: .vertical)
-                        .lineLimit(1...5)
+                    MessageComposerTextInput(text: draft, focus: $composerFocused, allowsImagePaste: !sending && !imagePaste.isLoading) { providers in
+                        guard !sending,
+                              let target = replyDraft.beginAttachment(latestMessage: displayedMessages.last),
+                              !session.sendingContactIDs.contains(target.contactId) else { return }
+                        composerFocused = false
+                        let reply = session.replyTarget(for: target)
+                        imagePaste.begin(providers, reply: reply, destination: name(target)) { images, caption in
+                            guard session.startPhotoSend(images, caption: caption, to: target.contactId, reply: reply, replyOnlyIfNotLatest: true) else { return false }
+                            replyDraft.finishMediaSending(to: target)
+                            composerFocused = false
+                            return true
+                        }
+                    }
                         .textFieldStyle(.plain)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
                         .frame(minHeight: 46)
                         .translatorGlassControl(in: RoundedRectangle(cornerRadius: 24))
-                        .focused($composerFocused)
                         .disabled(sending || (replyDraft.selected == nil && displayedMessages.isEmpty))
                     Button(action: send) {
                         Group {

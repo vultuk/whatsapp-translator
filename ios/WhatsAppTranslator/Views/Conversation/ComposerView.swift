@@ -18,7 +18,8 @@ struct ComposerView: View {
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var pendingPhotos: PendingPhotoSelection?
     @State private var pickerError: String?
-    @FocusState private var focused: Bool
+    @State private var imagePaste = ImagePasteController()
+    @State private var focused = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,7 +80,12 @@ struct ComposerView: View {
                 .padding(.bottom, 9)
             }
         }
-        .onChange(of: reply?.messageID) { _, value in focused = value != nil }
+        .modifier(PastedImagePresentation(controller: imagePaste))
+        .onChange(of: contactID) { _, _ in imagePaste.cancel() }
+        .onChange(of: reply?.messageID) { _, value in
+            focused = value != nil
+            if imagePaste.isLoading { imagePaste.cancel() }
+        }
         .onChange(of: selectedPhotos) { _, items in
             guard !items.isEmpty else { return }
             Task {
@@ -122,38 +128,13 @@ struct ComposerView: View {
         }
     }
 
-    @ViewBuilder
     private var composerInput: some View {
-        #if os(macOS)
-        ZStack(alignment: .topLeading) {
-            TextEditor(text: $text)
-                .font(.body)
-                .scrollContentBackground(.hidden)
-                .frame(height: macEditorHeight)
-                .focused($focused)
-
-            if text.isEmpty {
-                Text("Message")
-                    .font(.body)
-                    .foregroundStyle(.tertiary)
-                    .padding(.leading, 5)
-                    .padding(.top, 5)
-                    .allowsHitTesting(false)
-            }
+        MessageComposerTextInput(text: $text, focus: $focused, allowsImagePaste: !isSending && !imagePaste.isLoading) { providers in
+            guard !isSending, pendingPhotos == nil, !showVoiceComposer else { return }
+            focused = false
+            imagePaste.begin(providers, reply: reply, send: sendImages)
         }
         .modifier(ComposerInputStyle())
-        #else
-        TextField("Message", text: $text, axis: .vertical)
-            .lineLimit(1...6)
-            .focused($focused)
-            .modifier(ComposerInputStyle())
-        #endif
-    }
-
-    private var macEditorHeight: CGFloat {
-        let explicitLineCount = text.components(separatedBy: .newlines).count
-        let visibleLineCount = min(max(explicitLineCount, 1), 6)
-        return CGFloat(visibleLineCount * 19 + 5)
     }
 
     nonisolated private var addImageLabel: some View {
@@ -249,7 +230,7 @@ private struct ComposerInputStyle: ViewModifier {
     }
 }
 
-private struct PendingPhoto: Identifiable {
+struct PendingPhoto: Identifiable {
     let id = UUID()
     let data: Data
     let mimeType: String
@@ -259,6 +240,31 @@ private struct PendingPhoto: Identifiable {
 private struct PendingPhotoSelection: Identifiable {
     let id = UUID()
     let photos: [PendingPhoto]
+}
+
+struct PastedImagePresentation: ViewModifier {
+    @Bindable var controller: ImagePasteController
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                if controller.isLoading {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Preparing pasted images…").font(.caption)
+                        Button("Cancel") { controller.cancel() }
+                    }
+                    .padding(10).background(.regularMaterial, in: Capsule())
+                }
+            }
+            .sheet(item: $controller.selection) { selection in
+                ImageComposerSheet(photos: selection.photos, reply: selection.reply, destination: selection.destination, send: selection.send)
+            }
+            .alert("Couldn’t paste image", isPresented: Binding(get: { controller.error != nil }, set: { if !$0 { controller.error = nil } })) {
+                Button("OK") { controller.error = nil }
+            } message: { Text(controller.error ?? "Try copying the image again.") }
+            .onDisappear { if controller.isLoading { controller.cancel() } }
+    }
 }
 
 private struct ImageComposerSheet: View {

@@ -1656,6 +1656,7 @@ final class AppSession {
         if ProcessInfo.processInfo.arguments.contains("-demoChatGallery") {
             loadChatGalleryDemo()
         }
+        ClipboardImages.prepareDemoClipboard()
         if ProcessInfo.processInfo.arguments.contains("-demoLiveReactions") {
             startLiveReactionDemo()
         }
