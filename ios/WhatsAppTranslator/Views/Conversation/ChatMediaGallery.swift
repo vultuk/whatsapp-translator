@@ -232,6 +232,7 @@ struct GalleryMediaViewer: View {
             if !model.messages.isEmpty {
                 let message = model.messages[index]
                 media(message).frame(maxWidth: .infinity, maxHeight: .infinity).id(message.id)
+                    .modifier(ViewedMessageTask(messages: [message], enabled: session.messageImages[message.id] != nil || session.messageMediaURLs[message.id] != nil))
                 VStack(spacing: 10) {
                     HStack {
                         Button("Previous media", systemImage: "chevron.left") { move(-1) }

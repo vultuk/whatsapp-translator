@@ -18,6 +18,7 @@ mod reliability;
 pub use reliability::OutboxEntry;
 mod edits;
 mod reactions;
+mod read_receipts;
 mod topics;
 pub use reactions::PresentedMessage;
 
@@ -405,6 +406,7 @@ impl MessageStore {
 
         store.init_schema()?;
         store.init_topics()?;
+        store.init_read_receipts()?;
 
         info!("Message store initialized at {:?}", db_path);
 
@@ -1004,17 +1006,26 @@ impl MessageStore {
             .filter(|value| *value > 0))
     }
 
-    /// A replay/history sync can restore a quote that an older bridge dropped.
-    /// Enrich only missing metadata in the same chat; never replace edits/media.
+    /// Replays restore metadata older bridges omitted, without replacing edits or media.
     pub fn recover_reply_context(&self, message: &StoredMessage) -> Result<()> {
         let incoming: serde_json::Value = serde_json::from_str(&message.content_json)?;
-        let Some(quote) = incoming.get("reply_context").filter(|q| q.is_object()) else {
-            return Ok(());
-        };
-        self.conn.lock().unwrap().execute(
-            "UPDATE messages SET content_json=json_set(content_json,'$.reply_context',json(?1)) WHERE id=?2 AND contact_id=?3 AND is_from_me=?4 AND sender_phone IS ?5 AND json_extract(content_json,'$.reply_context') IS NULL",
-            params![quote.to_string(), message.id, canonical_chat_id(&message.contact_id).as_ref(), message.is_from_me, message.sender_phone],
-        )?;
+        let conn = self.conn.lock().unwrap();
+        if let Some(sender) = incoming.get("receipt_sender_jid").and_then(|v| v.as_str()) {
+            conn.execute(
+                "UPDATE messages SET content_json=json_set(content_json,'$.receipt_sender_jid',?1) WHERE id=?2 AND contact_id=?3 AND is_from_me=0 AND sender_phone IS ?4 AND json_extract(content_json,'$.receipt_sender_jid') IS NULL",
+                params![sender, message.id, canonical_chat_id(&message.contact_id).as_ref(), message.sender_phone],
+            )?;
+            conn.execute(
+                "UPDATE viewed_messages SET sender_jid=(SELECT json_extract(content_json,'$.receipt_sender_jid') FROM messages WHERE id=?1) WHERE message_id=?1 AND sender_jid IS NULL",
+                [&message.id],
+            )?;
+        }
+        if let Some(quote) = incoming.get("reply_context").filter(|q| q.is_object()) {
+            conn.execute(
+                "UPDATE messages SET content_json=json_set(content_json,'$.reply_context',json(?1)) WHERE id=?2 AND contact_id=?3 AND is_from_me=?4 AND sender_phone IS ?5 AND json_extract(content_json,'$.reply_context') IS NULL",
+                params![quote.to_string(), message.id, canonical_chat_id(&message.contact_id).as_ref(), message.is_from_me, message.sender_phone],
+            )?;
+        }
         Ok(())
     }
 
@@ -1069,6 +1080,7 @@ impl MessageStore {
         let contact_id = canonical_chat_id(contact_id);
         let contact_id = contact_id.as_ref();
         let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM unread_messages WHERE message_id IN (SELECT id FROM messages WHERE contact_id=?)", [contact_id])?;
         conn.execute(
             "UPDATE contacts SET unread_count = 0 WHERE id = ?",
             params![contact_id],
@@ -1085,6 +1097,8 @@ impl MessageStore {
             "UPDATE contacts SET unread_count = ? WHERE id = ?",
             params![count as i32, contact_id],
         )?;
+        conn.execute("DELETE FROM unread_messages WHERE message_id IN (SELECT id FROM messages WHERE contact_id=?)", [contact_id])?;
+        conn.execute("INSERT OR IGNORE INTO unread_messages(message_id) SELECT id FROM messages WHERE contact_id=?1 AND is_from_me=0 AND lower(content_type) NOT IN ('reaction','revoked','protocol','unknown') AND id NOT IN (SELECT message_id FROM viewed_messages) ORDER BY timestamp DESC,id DESC LIMIT ?2", params![contact_id,count])?;
         Ok(())
     }
 
@@ -1238,6 +1252,21 @@ impl MessageStore {
             params![contact_id, msg.timestamp, preview],
         )?;
         if inserted > 0 && !msg.is_from_me {
+            if notification_requires_translation.is_some()
+                && !matches!(
+                    msg.content_type.to_lowercase().as_str(),
+                    "reaction" | "revoked" | "protocol" | "unknown"
+                )
+            {
+                tx.execute(
+                    "INSERT OR IGNORE INTO unread_messages(message_id) VALUES (?)",
+                    [&msg.id],
+                )?;
+                tx.execute(
+                    "UPDATE contacts SET unread_count=unread_count+1 WHERE id=?",
+                    [contact_id.as_ref()],
+                )?;
+            }
             if let Some(requires_translation) = notification_requires_translation {
                 let requires_translation = requires_translation && tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM contacts WHERE id=? AND translation_enabled=1)",

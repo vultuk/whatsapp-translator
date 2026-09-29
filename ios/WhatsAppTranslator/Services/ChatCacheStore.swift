@@ -5,6 +5,7 @@ struct ChatCacheSnapshot: Codable, Equatable, Sendable {
     var contacts: [Contact]
     var messages: [String: [ChatMessage]]
     let updatedAt: Date
+    var pendingReadReceipts: [String: [String]]? = nil
 
     static let maximumMessagesPerChat = 100
 
@@ -22,7 +23,8 @@ struct ChatCacheSnapshot: Codable, Equatable, Sendable {
             serverBaseURL: serverBaseURL,
             contacts: newContacts,
             messages: nextMessages,
-            updatedAt: now
+            updatedAt: now,
+            pendingReadReceipts: pendingReadReceipts
         )
     }
 

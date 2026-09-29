@@ -567,8 +567,8 @@ impl WhatsAppMcpServer {
                 "additionalProperties":false
             }),
             Self::object_output(
-                json!({"success":{"type":"boolean"},"contactId":{"type":"string"},"receiptSent":{"type":"boolean"}}),
-                &["success", "contactId", "receiptSent"],
+                json!({"success":{"type":"boolean"},"contactId":{"type":"string"},"receiptSent":{"type":"boolean"},"receiptQueued":{"type":"boolean"}}),
+                &["success", "contactId", "receiptSent", "receiptQueued"],
             ),
             Self::write_annotations("Mark WhatsApp conversation read", true),
         )
@@ -1299,36 +1299,21 @@ impl WhatsAppMcpServer {
             .get_contact(contact_id)
             .mcp()?
             .ok_or_else(|| McpError::invalid_params("Unknown contact_id", None))?;
-        self.state.store.mark_as_read(contact_id).mcp()?;
         let mut receipt_sent = false;
-        if let Some(message_id) = args.get("message_id").and_then(Value::as_str) {
-            let message = self
-                .state
-                .store
-                .get_message_by_id(message_id)
-                .mcp()?
-                .ok_or_else(|| McpError::invalid_params("Unknown message_id", None))?;
-            if message.contact_id != contact_id {
-                return Err(McpError::invalid_params(
-                    "message_id belongs to another conversation",
-                    None,
-                ));
-            }
+        if let Some(id) = args.get("message_id").and_then(Value::as_str) {
             self.state
-                .send_bridge_command(BridgeCommand::MarkRead {
-                    to: contact_id.to_string(),
-                    message_id: message_id.to_string(),
-                    timestamp: message.timestamp.div_euclid(1000),
-                    sender_jid: message.sender_phone,
-                })
-                .await
-                .map_err(|error| McpError::internal_error(error, None))?;
+                .store
+                .record_message_views(contact_id, &[id.to_owned()], chrono::Utc::now().timestamp())
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
             receipt_sent = true;
+        } else {
+            self.state.store.mark_as_read(contact_id).mcp()?;
         }
         Ok(CallToolResult::structured(json!({
             "success":true,
             "contactId":contact_id,
-            "receiptSent":receipt_sent,
+            "receiptSent":false,
+            "receiptQueued":receipt_sent,
         })))
     }
 

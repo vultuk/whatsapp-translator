@@ -228,6 +228,7 @@ struct PhotoGalleryViewer: View {
         VStack(spacing: 0) {
             if let image = session.messageImages[message.id] {
                 PhotoViewer(image: image, close: { dismiss() }, onSwipe: move)
+                    .modifier(ViewedMessageTask(messages: [message], enabled: true))
                     .id(message.id)
             } else {
                 ZStack(alignment: .topLeading) {

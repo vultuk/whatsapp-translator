@@ -10,6 +10,8 @@ Railway is the easiest hosted option for this app because it supports long-runni
 
 ## Features
 
+Incoming messages send WhatsApp read receipts only after they remain visible for 0.7 seconds in the active app or browser tab. This applies to conversations, combined Messages, and the selected full-screen media item. Loading, syncing, translating, and offscreen messages do not send receipts. Viewed IDs are queued offline and retried after reconnecting; group receipts preserve the original sender, and WhatsApp read-receipt privacy settings still apply.
+
 - Connect a WhatsApp account through QR login
 - View chats and messages in a local web UI
 - Browse a chat’s photos and videos in the native Gallery, with square previews and a full-screen swipe viewer

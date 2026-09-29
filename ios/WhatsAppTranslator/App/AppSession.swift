@@ -299,6 +299,59 @@ final class AppSession {
     let draftStore: DraftStore
     let preferences: AppPreferencesStore
     let appIcons = AppIconController()
+    var readReceiptCovers: Set<UUID> = []
+    private(set) var viewedReceiptMessageIDs: Set<String> = []
+    private var pendingReadReceipts: [String: Set<String>] = [:]
+    private var readReceiptTask: Task<Void, Never>?
+
+    func recordMessageViews(_ values: [ChatMessage]) async {
+        let eligible = values.filter(\.canSendReadReceipt)
+        for message in eligible where !viewedReceiptMessageIDs.contains(message.id) {
+            pendingReadReceipts[message.contactId, default: []].insert(message.id)
+            viewedReceiptMessageIDs.insert(message.id)
+        }
+        if demoMode { return }
+        await persistCache()
+        startReadReceiptRetry()
+    }
+
+    private func startReadReceiptRetry() {
+        guard readReceiptTask == nil, !pendingReadReceipts.isEmpty, phase == .ready, !demoMode else { return }
+        let epoch = topicAccountEpoch
+        readReceiptTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.topicAccountEpoch == epoch { self.readReceiptTask = nil } }
+            while !Task.isCancelled, self.topicAccountEpoch == epoch, self.phase == .ready, !self.pendingReadReceipts.isEmpty {
+                for (contactID, values) in self.pendingReadReceipts {
+                    let ids = Array(values.prefix(200))
+                    do {
+                        let response = try await self.api.markViewedMessages(contactID: contactID, messageIDs: ids)
+                        guard self.topicAccountEpoch == epoch, !Task.isCancelled else { return }
+                        if response.success {
+                            self.pendingReadReceipts[contactID]?.subtract(ids)
+                            if self.pendingReadReceipts[contactID]?.isEmpty == true { self.pendingReadReceipts.removeValue(forKey: contactID) }
+                            self.updateViewedUnreadCount(contactID: contactID, count: response.unreadCount)
+                            await self.persistCache()
+                        }
+                    } catch { /* Keep already-seen IDs for retry. No receipt originates in loading. */ }
+                }
+                if !self.pendingReadReceipts.isEmpty {
+                    do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                }
+            }
+        }
+    }
+
+    private func updateViewedUnreadCount(contactID: String, count: Int) {
+        if let index = contacts.firstIndex(where: { $0.id == contactID }) { contacts[index].unreadCount = max(0, count) }
+        #if os(iOS)
+        // Preserve notifications for other, unseen messages in the same chat.
+        if count == 0 {
+            Task { await PushNotificationCoordinator.shared.markConversationRead(contactID: contactID, badgeCount: self.contacts.reduce(0) { $0 + max(0, $1.unreadCount) }) }
+        }
+        #endif
+    }
+
     private let api: APIClient
     private let credentials: CredentialStore
     private let cache: ChatCacheStore
@@ -554,16 +607,6 @@ final class AppSession {
             )
             messages[contactID] = older ? normalizeMessages(response.messages + current) : normalizeMessages(response.messages)
             messageHistoryHasMore[contactID] = response.hasMore
-            if let index = contacts.firstIndex(where: { $0.id == contactID }) {
-                contacts[index].unreadCount = 0
-            }
-            try? await api.markRead(contactID: contactID)
-            #if os(iOS)
-            await PushNotificationCoordinator.shared.markConversationRead(
-                contactID: contactID,
-                badgeCount: contacts.reduce(0) { $0 + max(0, $1.unreadCount) }
-            )
-            #endif
             await persistCache()
             await refreshMessageTopics(response.messages)
         } catch {
@@ -1124,6 +1167,8 @@ final class AppSession {
             await mediaCache.clear()
         }
         credentials.clear()
+        readReceiptTask?.cancel(); readReceiptTask = nil
+        pendingReadReceipts = [:]; viewedReceiptMessageIDs = []
         configuration = nil
         contacts = []
         avatarURLs = [:]
@@ -1165,6 +1210,10 @@ final class AppSession {
         isConnecting = true
         defer { isConnecting = false }
         errorMessage = nil
+        readReceiptTask?.cancel(); readReceiptTask = nil
+        if self.configuration?.baseURL != configuration.baseURL {
+            pendingReadReceipts = [:]; viewedReceiptMessageIDs = []
+        }
         self.configuration = configuration
         topicAccountEpoch = UUID()
         await api.configure(configuration)
@@ -1178,6 +1227,7 @@ final class AppSession {
             if remember { try credentials.save(configuration) }
             contacts = try await api.contacts()
             phase = .ready
+            startReadReceiptRetry()
             await persistCache()
             await PushNotificationCoordinator.shared.activate(for: self)
             try await api.connectLiveEvents { [weak self] event in
@@ -1197,6 +1247,11 @@ final class AppSession {
         }
         contacts = snapshot.contacts
         messages = snapshot.messages
+        for (chat, ids) in snapshot.pendingReadReceipts ?? [:] {
+            pendingReadReceipts[chat, default: []].formUnion(ids)
+            viewedReceiptMessageIDs.formUnion(ids)
+        }
+        startReadReceiptRetry()
         return true
     }
 
@@ -1329,6 +1384,12 @@ final class AppSession {
                     )
                 }
                 #endif
+                persistCacheSoon()
+            }
+        case "messages_viewed":
+            if let id = event.chatId, let count = event.unreadCount {
+                viewedReceiptMessageIDs.formUnion(event.messageIds ?? [])
+                updateViewedUnreadCount(contactID: id, count: count)
                 persistCacheSoon()
             }
         case "receipt":
@@ -1571,7 +1632,8 @@ final class AppSession {
             serverBaseURL: configuration.baseURL.absoluteString,
             contacts: contacts,
             messages: trimmedMessages,
-            updatedAt: Date()
+            updatedAt: Date(),
+            pendingReadReceipts: pendingReadReceipts.mapValues { Array($0).sorted() }
         )
     }
 
@@ -1585,6 +1647,14 @@ final class AppSession {
                 Contact(id: "demo-chat-\(index)@g.us", name: "Community group \(index)", phone: nil, type: "group", lastMessageTime: 1_789_540_000_000 - Int64(index * 60_000), unreadCount: index == 1 ? 2 : 0, pinnedAt: nil, lastMessagePreview: "Alex: Looking forward to seeing everyone this weekend.")
             }
             messages = [:]
+        }
+        if ProcessInfo.processInfo.arguments.contains("-demoReadReceipts") {
+            let chat = "receipts@g.us"
+            contacts = [Contact(id: chat, name: "Receipt test", phone: nil, type: "group", lastMessageTime: 1_800_000_000_000, unreadCount: 40, pinnedAt: nil, lastMessagePreview: "Visible messages only")]
+            messages = [chat: (0..<40).map { index in
+                .demo(id: "receipt-\(index)", contactID: chat, timestamp: 1_800_000_000_000 + Int64(index * 60_000), fromMe: false, body: "Message \(index): This receipt is sent only after you see this message in the active app.", translated: nil, sender: "Alex", chatType: "group")
+            }]
+            mainTab = .messages
         }
         if ProcessInfo.processInfo.arguments.contains("-demoUnifiedFeed") {
             let base: Int64 = 1_783_940_000_000

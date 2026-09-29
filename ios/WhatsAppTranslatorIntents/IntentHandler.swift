@@ -253,34 +253,20 @@ private actor MessagingIntentBackend {
         let directContactIDs = Set(identities.map(\.contactID))
         guard directContactIDs.isSubset(of: currentContactIDs) else { return false }
         let legacyIDs = messageIDs.filter { MessagingMessageIdentity.decode($0) == nil }
-        if legacyIDs.isEmpty {
-            for contactID in directContactIDs { try await api.markRead(contactID: contactID) }
-            await removeDeliveredNotifications(for: directContactIDs)
-            return !directContactIDs.isEmpty
-        }
-        let api = self.api
-        let matchingContactIDs = try await withThrowingTaskGroup(
-            of: String?.self,
-            returning: [String].self
-        ) { group in
+        var idsByChat = Dictionary(grouping: identities, by: \.contactID).mapValues { $0.map(\.messageID) }
+        if !legacyIDs.isEmpty {
             for contact in contacts.prefix(20) {
-                group.addTask {
-                    let response = try await api.messages(contactID: contact.id, limit: 50)
-                    return response.messages.contains { legacyIDs.contains($0.id) } ? contact.id : nil
-                }
+                let response = try await api.messages(contactID: contact.id, limit: 50)
+                idsByChat[contact.id, default: []].append(contentsOf: response.messages.filter { legacyIDs.contains($0.id) && $0.canSendReadReceipt }.map(\.id))
             }
-            var result: [String] = []
-            for try await contactID in group {
-                if let contactID { result.append(contactID) }
-            }
-            return result
         }
-        let targets = Set(matchingContactIDs).union(directContactIDs)
-        for contactID in targets {
-            try await api.markRead(contactID: contactID)
+        var targets: Set<String> = []
+        for (contactID, ids) in idsByChat where !ids.isEmpty {
+            let response = try await api.markViewedMessages(contactID: contactID, messageIDs: Array(Set(ids)))
+            if response.unreadCount == 0 { targets.insert(contactID) }
         }
         await removeDeliveredNotifications(for: targets)
-        return !targets.isEmpty
+        return idsByChat.values.contains { !$0.isEmpty }
     }
 
     private func prepare() async throws {

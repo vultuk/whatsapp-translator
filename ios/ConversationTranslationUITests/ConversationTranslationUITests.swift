@@ -2,6 +2,40 @@ import AVKit
 import UIKit
 import XCTest
 
+
+@MainActor
+final class ReadReceiptVisibilityUITests: XCTestCase {
+    func testUnifiedMessagesOnlyRecordRowsAfterTheyEnterTheViewport() {
+        verifyViewport(conversation: false)
+    }
+    func testConversationOnlyRecordsRowsAfterTheyEnterTheViewport() {
+        verifyViewport(conversation: true)
+    }
+    private func verifyViewport(conversation: Bool) {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoReadReceipts"] + (conversation ? ["-demoConversation"] : [])
+        app.launch()
+        let status = app.staticTexts["demo-viewed-receipts"].firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        let latest = NSPredicate(format: "label CONTAINS %@", "receipt-39")
+        expectation(for: latest, evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        XCTAssertFalse(status.label.contains("receipt-0"), "Loading earlier rows must not mark them read")
+        let initial = XCTAttachment(screenshot: app.screenshot())
+        initial.name = conversation ? "Conversation receipts only for visible messages" : "Combined Messages receipts only for visible messages"
+        initial.lifetime = .keepAlways; add(initial)
+        for _ in 0..<20 {
+            if status.label.contains("receipt-0") { break }
+            app.scrollViews.firstMatch.swipeDown()
+        }
+        let oldest = NSPredicate(format: "label CONTAINS %@", "receipt-0")
+        expectation(for: oldest, evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        let scrolled = XCTAttachment(screenshot: app.screenshot())
+        scrolled.name = "Earlier messages marked only after scrolling into view"; scrolled.lifetime = .keepAlways; add(scrolled)
+    }
+}
+
 @MainActor
 final class ReplyOnlyUITests: XCTestCase {
     func testReplyOnlyDisablesComposerUntilIncomingReplyAndCanBeTurnedOff() {

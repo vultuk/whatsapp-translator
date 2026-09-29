@@ -1401,27 +1401,33 @@ func confirmedReactionEvent(chat, sender types.JID, id string, sentAt time.Time,
 
 // MarkRead marks a message as read in WhatsApp.
 func (c *Client) MarkRead(ctx context.Context, chatJIDStr string, messageID string, timestamp int64, senderJIDStr string) error {
-	chatJID, err := types.ParseJID(chatJIDStr)
+	chatJID, senderJID, readAt, err := readReceiptTarget(chatJIDStr, senderJIDStr, timestamp)
 	if err != nil {
-		return fmt.Errorf("invalid chat JID: %w", err)
+		return err
 	}
-
-	var senderJID types.JID
-	if senderJIDStr != "" {
-		senderJID, err = types.ParseJID(senderJIDStr)
-		if err != nil {
-			return fmt.Errorf("invalid sender JID: %w", err)
-		}
-	} else {
-		senderJID = chatJID
-	}
-
-	readAt := time.Unix(timestamp, 0)
 	if err := c.client.MarkRead(ctx, []types.MessageID{types.MessageID(messageID)}, readAt, chatJID, senderJID); err != nil {
 		return fmt.Errorf("failed to mark read: %w", err)
 	}
-
 	return nil
+}
+
+func readReceiptTarget(chat, sender string, timestamp int64) (types.JID, types.JID, time.Time, error) {
+	chatJID, err := types.ParseJID(chat)
+	if err != nil || chatJID.User == "" || timestamp <= 0 {
+		return types.JID{}, types.JID{}, time.Time{}, fmt.Errorf("invalid read receipt chat or view time")
+	}
+	var senderJID types.JID
+	if sender != "" {
+		senderJID, err = types.ParseJID(sender)
+		if err != nil || senderJID.User == "" {
+			return types.JID{}, types.JID{}, time.Time{}, fmt.Errorf("invalid read receipt sender")
+		}
+		senderJID = senderJID.ToNonAD()
+	}
+	if chatJID.Server == types.GroupServer && (senderJID.IsEmpty() || (senderJID.Server != types.DefaultUserServer && senderJID.Server != types.HiddenUserServer)) {
+		return types.JID{}, types.JID{}, time.Time{}, fmt.Errorf("group read receipts require the message sender")
+	}
+	return chatJID.ToNonAD(), senderJID, time.Unix(timestamp, 0), nil
 }
 
 // GetProfilePicture fetches the profile picture URL for a JID

@@ -364,9 +364,9 @@ actor APIClient {
         return try await authorizedRequest("/api/link-preview\(query)")
     }
 
-    func markRead(contactID: String) async throws {
-        let body = try JSONEncoder.backend.encode(EmptyMarkReadRequest())
-        let _: SuccessResponse = try await authorizedRequest(
+    func markViewedMessages(contactID: String, messageIDs: [String]) async throws -> ViewedMessagesResponse {
+        let body = try JSONEncoder.backend.encode(ViewedMessagesRequest(messageIds: messageIDs))
+        return try await authorizedRequest(
             "/api/contacts/\(contactID.urlPathEncoded)/read",
             method: "POST",
             body: body
@@ -741,7 +741,8 @@ private struct PinResponse: Decodable, Sendable {
     let pinned: Bool
 }
 private struct ErrorResponse: Decodable, Sendable { let error: String }
-private struct EmptyMarkReadRequest: Encodable, Sendable {}
+struct ViewedMessagesRequest: Encodable, Sendable { let messageIds: [String] }
+struct ViewedMessagesResponse: Decodable, Sendable { let success: Bool; let unreadCount: Int }
 
 extension JSONDecoder {
     static var backend: JSONDecoder { JSONDecoder() }

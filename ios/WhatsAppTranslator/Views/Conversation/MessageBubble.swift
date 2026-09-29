@@ -290,7 +290,7 @@ struct MessageBubble: View {
         }
         .frame(maxWidth: .infinity)
         .sheet(isPresented: $showReactionPicker) {
-            MessageReactionPicker(selected: message.ownReactionEmoji, choose: react)
+            MessageReactionPicker(selected: message.ownReactionEmoji, choose: react).modifier(ReadReceiptCover())
         }
         .task {
             if ProcessInfo.processInfo.arguments.contains("-demoActions"), message.id == "4" {
@@ -633,11 +633,13 @@ private struct PhotoAlbumGrid: View {
         #if os(macOS)
         .sheet(item: $selectedPhoto) { photo in
             PhotoGalleryViewer(messages: messages, initialPhotoID: photo.id, reply: reply, aiReply: aiReply)
+                .modifier(ReadReceiptCover())
                 .frame(minWidth: 800, minHeight: 650)
         }
         #else
         .fullScreenCover(item: $selectedPhoto) { photo in
             PhotoGalleryViewer(messages: messages, initialPhotoID: photo.id, reply: reply, aiReply: aiReply)
+                .modifier(ReadReceiptCover())
         }
         #endif
     }

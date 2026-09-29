@@ -102,3 +102,21 @@ func TestBuildMessageContentPreservesAlbumAssociation(t *testing.T) {
 		t.Fatalf("expected album index %d, got %#v", index, content.AlbumIndex)
 	}
 }
+
+func TestReadReceiptTargetsPreserveGroupSenderAndViewedTime(t *testing.T) {
+	chat, sender, viewed, err := readReceiptTarget("123@g.us", "456:7@lid", 1700001234)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chat.String() != "123@g.us" || sender.String() != "456@lid" || viewed.Unix() != 1700001234 {
+		t.Fatalf("wrong receipt routing: %v %v %v", chat, sender, viewed)
+	}
+	for _, sender := range []string{"", "123@g.us", "not-a-jid"} {
+		if _, _, _, err := readReceiptTarget("123@g.us", sender, 1700001234); err == nil {
+			t.Fatalf("accepted missing/invalid group sender %q", sender)
+		}
+	}
+	if _, _, _, err := readReceiptTarget("123@s.whatsapp.net", "", 1700001234); err != nil {
+		t.Fatal(err)
+	}
+}

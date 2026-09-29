@@ -231,9 +231,12 @@ func handleCommand(ctx context.Context, client *Client, cmd Command, cancel cont
 			return
 		}
 
-		if err := client.MarkRead(ctx, cmd.To, cmd.MessageID, cmd.Timestamp, cmd.SenderJID); err != nil {
-			SendEvent(NewLogEvent("warn", fmt.Sprintf("failed to mark chat as read: %v", err)))
+		err := client.MarkRead(ctx, cmd.To, cmd.MessageID, cmd.Timestamp, cmd.SenderJID)
+		result := ReadReceiptResultEvent{Type: "read_receipt_result", MessageID: cmd.MessageID, Success: err == nil}
+		if err != nil {
+			result.Error = err.Error()
 		}
+		SendEvent(result)
 
 	default:
 		SendEvent(NewLogEvent("warn", fmt.Sprintf("Unknown command type: %s", cmd.Type)))

@@ -36,6 +36,12 @@ struct RootView: View {
                 .task { await session.monitorWhatsAppConnection() }
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if ProcessInfo.processInfo.arguments.contains("-demoReadReceipts") {
+                Text("Viewed: \(session.viewedReceiptMessageIDs.sorted().joined(separator: ","))")
+                    .font(.caption2).lineLimit(2).accessibilityIdentifier("demo-viewed-receipts")
+            }
+        }
         .animation(.snappy, value: session.phase)
         .alert(session.errorTitle, isPresented: errorPresented) {
             Button("OK") { session.errorMessage = nil }
@@ -232,7 +238,7 @@ struct TopicFilterBar: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
         .background(.regularMaterial)
-        .sheet(isPresented: $showManagement) { TopicManagementView(contactID: contactID) }
+        .sheet(isPresented: $showManagement) { TopicManagementView(contactID: contactID).modifier(ReadReceiptCover()) }
     }
 }
 
@@ -456,6 +462,7 @@ private struct UnifiedMessagesView: View {
                                             .padding(.top, index == 0 ? 0 : 10)
                                     }
                                     bubble(message, albumMessages: item.messages.count > 1 ? item.messages : [])
+                                        .modifier(MessageReadVisibility(messages: Array(item.messages.prefix(PhotoGalleryLayout.previewLimit)), enabled: session.mainTab == .messages && !showSettings && settingsContact == nil && !replyDraft.isFocused))
                                 }
                                 .id(item.id)
                                 .task(id: item.messages.map(\.id)) {
@@ -497,6 +504,7 @@ private struct UnifiedMessagesView: View {
                 if replyDraft.isFocused, let selected = replyDraft.selected {
                     FocusedReplyOverlay(destination: name(selected), isSending: sending, cancel: cancelReply) {
                         bubble(session.unifiedMessages.first(where: { $0.id == selected.id && $0.contactId == selected.contactId }) ?? selected)
+                            .modifier(ViewedMessageTask(messages: [selected], enabled: !showSettings && settingsContact == nil))
                     }
                 }
             }

@@ -1,3 +1,4 @@
+import {ViewedMessageTracker, isMessageVisible} from './read-receipts.js';
 import { setupVoiceNotes } from './voice-notes.js';
 import { setupMessageTones } from './message-tones.js';
 import { setupTopics } from './topics.js';
@@ -1744,6 +1745,9 @@ class WhatsAppClient {
       const result = await response.json();
 
       if (result.success) {
+        clearInterval(this.viewedMessagesTimer);
+        localStorage.removeItem('wa_pending_viewed_messages_v1');
+        this.viewedMessageTracker = null;
         // Clear local storage
         localStorage.removeItem('wa_auth_token');
         this.authToken = null;
@@ -1937,6 +1941,12 @@ class WhatsAppClient {
         this.handleTyping(data);
         break;
       
+      case 'messages_viewed': {
+        const contact = this.contacts.find(c => c.id === data.chat_id);
+        if (contact) { contact.unreadCount = data.unread_count; this.scheduleRenderContacts(); }
+        break;
+      }
+
       case 'mark_as_read':
         this.handleMarkAsRead(data.chat_id);
         break;
@@ -2320,9 +2330,6 @@ class WhatsAppClient {
     
     // If this contact is currently selected, show the message
     if (this.currentContactId === message.contactId) {
-      if (!message.isFromMe && !message.is_from_me) {
-        this.markConversationRead(message.contactId, message);
-      }
       this.refreshCurrentConversationView();
       this.scrollToBottom();
       this.updateChatHeaderNote();
@@ -2696,7 +2703,7 @@ class WhatsAppClient {
     }
     
     // Increment unread if not from me and not currently viewing
-    if (!message.isFromMe && this.currentContactId !== message.contactId) {
+    if (!message.isFromMe && !message.is_from_me) {
       contact.unreadCount = (contact.unreadCount || 0) + 1;
     }
     
@@ -2979,29 +2986,50 @@ class WhatsAppClient {
     return null;
   }
 
-  async markConversationRead(contactId, message = null) {
-    if (!contactId) return;
+  async markViewedMessages(contactId, messageIds) {
     if (this.demoMode) return;
+    const response = await this.apiFetch(`/api/contacts/${encodeURIComponent(contactId)}/read`, {
+      method: 'POST', headers: {'Content-Type': 'application/json', ...this.getAuthHeaders()},
+      body: JSON.stringify({messageIds}),
+    });
+    if (!response.ok) throw new Error('Unable to record viewed messages');
+    const result = await response.json();
+    if (!result.success) throw new Error('Unable to record viewed messages');
+    const contact = this.contacts.find(c => c.id === contactId);
+    if (contact) { contact.unreadCount = result.unreadCount; this.scheduleRenderContacts(); }
+  }
 
-    try {
-      const targetMessage = message || this.getLatestIncomingMessage(contactId);
-      const body = targetMessage ? {
-        messageId: targetMessage.id,
-        timestamp: Math.floor((targetMessage.timestamp || 0) / 1000),
-        senderJid: targetMessage.senderJid || this.getMessageSenderJid(targetMessage) || null
-      } : {};
-
-      await this.apiFetch(`/api/contacts/${encodeURIComponent(contactId)}/read`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...this.getAuthHeaders()
-        },
-        body: JSON.stringify(body)
-      });
-    } catch (err) {
-      console.error('Failed to mark conversation as read:', err);
-    }
+  startViewedMessageTracking() {
+    const tracker = new ViewedMessageTracker({
+      send: (chat, ids) => this.markViewedMessages(chat, ids),
+      pending: this.loadStoredJson('wa_pending_viewed_messages_v1'),
+      save: pending => { if (!this.demoMode) localStorage.setItem('wa_pending_viewed_messages_v1', JSON.stringify(pending)); },
+    });
+    this.viewedMessageTracker = tracker;
+    let retryAt = 0;
+    this.viewedMessagesTimer = setInterval(() => {
+      const root = document.getElementById('messages-list');
+      const chatView = document.getElementById('chat-view');
+      const covered = [...document.querySelectorAll('.modal')].some(el => !el.classList.contains('hidden') && el.getBoundingClientRect().height > 0);
+      const active = document.visibilityState === 'visible' && document.hasFocus() && !covered
+        && root && chatView && !chatView.classList.contains('hidden') && !!this.currentContactId;
+      const visible = [];
+      if (active) {
+        const clip = root.getBoundingClientRect();
+        const viewport = {top: Math.max(0, clip.top), bottom: Math.min(window.innerHeight, clip.bottom), left: Math.max(0, clip.left), right: Math.min(window.innerWidth, clip.right)};
+        for (const node of root.querySelectorAll('.message.incoming[data-message-id]')) {
+          if (!isMessageVisible(node.getBoundingClientRect(), viewport)) continue;
+          const message = (this.messages.get(this.currentContactId) || []).find(m => m.id === node.dataset.messageId);
+          if (message) visible.push(message);
+        }
+      }
+      const now = Date.now();
+      tracker.sample(visible, {active, now});
+      if (!this.demoMode && now >= retryAt) {
+        retryAt = now + 1000;
+        tracker.flush().catch(() => { retryAt = Date.now() + 10000; });
+      }
+    }, 200);
   }
 
   // Select a contact
@@ -3017,12 +3045,7 @@ class WhatsAppClient {
       // Clear any pending reply from previous chat
       this.clearReply();
       
-      // Mark as read
       const contact = this.contacts.find(c => c.id === contactId);
-      if (contact) {
-        contact.unreadCount = 0;
-      }
-      this.markConversationRead(contactId);
       
       // Update UI
       document.getElementById('no-chat-selected').classList.add('hidden');
@@ -3076,7 +3099,7 @@ class WhatsAppClient {
         await this.loadMessages(contactId);
       }
 
-      this.markConversationRead(contactId);
+
 
       this.scheduleConversationUsageFetch(contactId);
       
@@ -5271,6 +5294,8 @@ class WhatsAppClient {
       // Reset input so the same file can be selected again
       imageInput.value = '';
     });
+
+    this.startViewedMessageTracking();
 
     // Handle visibility change (for reconnecting on mobile)
     document.addEventListener('visibilitychange', () => {

@@ -16,6 +16,7 @@ mod message_tones;
 mod oauth;
 mod outbox;
 mod push;
+mod read_receipts;
 mod storage;
 mod style_analyzer;
 mod topics;
@@ -185,6 +186,7 @@ async fn run_web_mode(
 
     incoming::start(state.clone())?;
     topics::start(state.clone());
+    read_receipts::start(state.clone());
     // Spawn the web server (once, outside the bridge loop)
     let server_state = state.clone();
     let host = args.host.clone();
@@ -364,15 +366,6 @@ async fn handle_web_event(
                 }
             }
 
-            // Handle unread counts
-            if let Some(unread) = unread_count {
-                // History sync message with unread count from WhatsApp - use it directly
-                store.set_unread_count(&stored_msg.contact_id, unread)?;
-            } else if !stored_msg.is_from_me && !is_history && !already_stored {
-                // Live incoming message - increment unread
-                store.increment_unread(&stored_msg.contact_id)?;
-            }
-
             // Store message
             if !already_stored {
                 let notification = (!stored_msg.is_from_me && !is_history)
@@ -380,6 +373,12 @@ async fn handle_web_event(
                 store.add_message_with_notification(&stored_msg, notification)?;
             } else {
                 store.recover_reply_context(&stored_msg)?;
+            }
+
+            // Handle unread counts
+            if let Some(unread) = unread_count {
+                // History sync message with unread count from WhatsApp - use it directly
+                store.set_unread_count(&stored_msg.contact_id, unread)?;
             }
 
             if !stored_msg.is_from_me
@@ -514,6 +513,21 @@ async fn handle_web_event(
             state.broadcast_typing(chat_id, user_id, state_str.to_string());
         }
 
+        BridgeEvent::ReadReceiptResult {
+            message_id,
+            success,
+            error,
+        } => {
+            if success {
+                store.read_receipt_sent(&message_id, chrono::Utc::now().timestamp())?;
+            } else {
+                warn!(
+                    "WhatsApp read receipt failed for {}: {:?}",
+                    message_id, error
+                );
+            }
+        }
+
         BridgeEvent::MarkAsRead { chat_id } => {
             // Chat was marked as read from another device (e.g., user's phone)
             info!("Chat marked as read from another device: {}", chat_id);
@@ -631,6 +645,10 @@ async fn process_message(
     let mut payload = serde_json::to_value(&msg.content).unwrap_or_default();
     if let Some(quote) = &msg.reply_context {
         payload["reply_context"] = serde_json::to_value(quote).unwrap_or_default();
+    }
+    // Keep the full sender identity, including LID addresses, for group read receipts.
+    if !msg.is_from_me && !msg.from.jid.is_empty() {
+        payload["receipt_sender_jid"] = serde_json::Value::String(msg.from.jid.clone());
     }
     let content_json = payload.to_string();
     let content = Some(payload);
@@ -950,6 +968,9 @@ async fn handle_terminal_event(
             debug!("Ignoring chat presence event in terminal mode");
         }
 
+        BridgeEvent::ReadReceiptResult { .. } => {
+            debug!("Read receipt result");
+        }
         BridgeEvent::MarkAsRead { .. } => {
             // Mark-as-read events are only used in web mode
             debug!("Ignoring mark-as-read event in terminal mode");
@@ -1099,6 +1120,16 @@ impl serde::Serialize for BridgeEvent {
                     bridge::ChatPresenceState::Recording => "recording",
                 };
                 map.serialize_entry("state", state_str)?;
+            }
+            BridgeEvent::ReadReceiptResult {
+                message_id,
+                success,
+                error,
+            } => {
+                map.serialize_entry("type", "read_receipt_result")?;
+                map.serialize_entry("message_id", message_id)?;
+                map.serialize_entry("success", success)?;
+                map.serialize_entry("error", error)?;
             }
             BridgeEvent::MarkAsRead { chat_id } => {
                 map.serialize_entry("type", "mark_as_read")?;

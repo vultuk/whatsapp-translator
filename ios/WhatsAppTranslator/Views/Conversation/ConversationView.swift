@@ -141,6 +141,7 @@ struct ConversationView: View {
                     if let focusedReplyMessage {
                         FocusedReplyOverlay(destination: session.displayName(for: contact), isSending: session.sendingContactIDs.contains(contact.id), cancel: cancelReply) {
                             messageBubble(message: session.messages[focusedReplyMessage.contactId]?.first(where: { $0.id == focusedReplyMessage.id }) ?? focusedReplyMessage)
+                                .modifier(ViewedMessageTask(messages: [focusedReplyMessage], enabled: !showSettings && !showCost && !showGallery))
                         }
                     }
                 }
@@ -316,15 +317,22 @@ struct ConversationView: View {
             case let .message(message):
                 messageBubble(message: message)
                     .id(message.id)
+                    .modifier(MessageReadVisibility(messages: [message], enabled: canRecordViews))
                     .task { await loadTimelineMedia(for: [message]) }
             case let .photoAlbum(album):
                 messageBubble(message: album.primaryMessage, albumMessages: album.messages)
                     .id(item.id)
+                    .modifier(MessageReadVisibility(messages: Array(album.messages.prefix(PhotoGalleryLayout.previewLimit)), enabled: canRecordViews))
                     .task(id: album.messages.map(\.id)) { await loadTimelineMedia(for: Array(album.messages.prefix(PhotoGalleryLayout.previewLimit))) }
             }
         }
         // Album grouping can replace the last image's ID; keep a stable scroll target.
         Color.clear.frame(height: 1).id("conversation-bottom")
+    }
+
+    private var canRecordViews: Bool {
+        session.mainTab == .chats && session.selectedContactID == contact.id
+            && !showSettings && !showCost && !showGallery && focusedReplyMessage == nil
     }
 
     private var timelineItems: [ConversationTimelineItem] {
@@ -599,5 +607,47 @@ private struct ConversationCostView: View {
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
         }
+    }
+}
+
+
+/// A row being created, fetched or translated is not evidence that it was seen.
+struct MessageReadVisibility: ViewModifier {
+    @Environment(AppSession.self) private var session
+    let messages: [ChatMessage]
+    let enabled: Bool
+    @State private var isVisible = false
+    func body(content: Content) -> some View {
+        content
+            .onScrollVisibilityChange(threshold: 0.5) { isVisible = $0 }
+            .modifier(ViewedMessageTask(messages: messages, enabled: enabled && isVisible && session.readReceiptCovers.isEmpty))
+    }
+}
+
+struct ViewedMessageTask: ViewModifier {
+    @Environment(AppSession.self) private var session
+    @Environment(\.scenePhase) private var scenePhase
+    let messages: [ChatMessage]
+    let enabled: Bool
+    private var key: String { "\(enabled && scenePhase == .active):" + messages.map(\.id).joined(separator: ",") }
+    func body(content: Content) -> some View {
+        content.task(id: key) {
+            guard enabled, scenePhase == .active else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(700))
+                try Task.checkCancellation()
+                await session.recordMessageViews(messages)
+            } catch { /* Leaving the viewport, covering the view or suspending cancels the dwell. */ }
+        }
+    }
+}
+
+
+struct ReadReceiptCover: ViewModifier {
+    @Environment(AppSession.self) private var session
+    @State private var id = UUID()
+    func body(content: Content) -> some View {
+        content.onAppear { session.readReceiptCovers.insert(id) }
+            .onDisappear { session.readReceiptCovers.remove(id) }
     }
 }

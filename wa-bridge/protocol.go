@@ -187,6 +187,13 @@ type ChatPresenceEvent struct {
 	State  string `json:"state"`   // "typing", "paused", or "recording"
 }
 
+type ReadReceiptResultEvent struct {
+	Type      string `json:"type"`
+	MessageID string `json:"message_id"`
+	Success   bool   `json:"success"`
+	Error     string `json:"error,omitempty"`
+}
+
 // ReceiptEvent reports delivery/read progress for outgoing messages.
 type ReceiptEvent struct {
 	Type       string            `json:"type"`
@@ -215,7 +222,7 @@ type Command struct {
 	MessageID string `json:"message_id,omitempty"` // Target message ID to react to
 	Emoji     string `json:"emoji,omitempty"`      // Reaction emoji (empty to remove)
 	SenderJID string `json:"sender_jid,omitempty"` // Sender of the target message
-	Timestamp int64  `json:"timestamp,omitempty"`  // Original message timestamp (unix seconds)
+	Timestamp int64  `json:"timestamp,omitempty"`  // Time the user viewed the message (unix seconds)
 	// For reply context (used by send and send_image)
 	ReplyTo       string `json:"reply_to,omitempty"`        // Message ID to reply to
 	ReplyToSender string `json:"reply_to_sender,omitempty"` // JID of the sender of the replied message

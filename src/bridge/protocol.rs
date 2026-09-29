@@ -76,6 +76,13 @@ pub enum BridgeEvent {
         status: String,
     },
 
+    /// Bridge confirmed writing a viewed-message receipt to WhatsApp.
+    ReadReceiptResult {
+        message_id: String,
+        success: bool,
+        error: Option<String>,
+    },
+
     /// Chat marked as read from another device
     MarkAsRead { chat_id: String },
 
@@ -393,7 +400,7 @@ pub enum BridgeCommand {
         to: String,
         /// Message ID to mark as read
         message_id: String,
-        /// Original message timestamp (unix seconds)
+        /// Time the user viewed the message (unix seconds)
         timestamp: i64,
         /// Sender JID of the message (required for groups)
         #[serde(skip_serializing_if = "Option::is_none")]

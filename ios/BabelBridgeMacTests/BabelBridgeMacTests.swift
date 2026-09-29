@@ -268,7 +268,7 @@ final class BabelBridgeMacTests: XCTestCase {
             sendImages: { _, _ in true },
             send: {}
         )
-        let hostingView = NSHostingView(rootView: view)
+        let hostingView = NSHostingView(rootView: view.environment(AppSession(demoMode: true)))
         hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 140)
 
         hostingView.layoutSubtreeIfNeeded()
@@ -314,7 +314,7 @@ final class BabelBridgeMacTests: XCTestCase {
             failed: false,
             retry: {}
         )
-        let hostingView = NSHostingView(rootView: view)
+        let hostingView = NSHostingView(rootView: view.environment(AppSession(demoMode: true)))
         hostingView.frame = NSRect(x: 0, y: 0, width: 320, height: 240)
 
         hostingView.layoutSubtreeIfNeeded()
@@ -621,5 +621,68 @@ final class PhotoGalleryTests: XCTestCase {
         ]
         if let sender { payload["senderPhone"] = sender }
         return try JSONDecoder().decode(ChatMessage.self, from: JSONSerialization.data(withJSONObject: payload))
+    }
+}
+
+
+final class ReadReceiptTests: XCTestCase {
+    private func message(_ id: String, own: Bool = false, type: String = "text") throws -> ChatMessage {
+        try JSONDecoder().decode(ChatMessage.self, from: JSONSerialization.data(withJSONObject: ["id":id,"contactId":"family@g.us","timestamp":1700000000000,"isFromMe":own,"isForwarded":false,"chatType":"group","contentType":type,"content":["type":type,"body":"Test message"],"isTranslated":false]))
+    }
+
+    @MainActor
+    func testLoadingTranslationAndOutgoingMessagesDoNotCreateReadReceipts() async throws {
+        let session = AppSession(demoMode: true)
+        let incoming = try message("incoming")
+        let own = try message("own", own: true)
+        let reaction = try message("reaction", type: "reaction")
+        let deleted = try message("deleted", type: "revoked")
+        session.messages = [incoming.contactId: [incoming, own, reaction, deleted]]
+        await session.loadMessages(for: incoming.contactId)
+        await session.loadFeed()
+        XCTAssertTrue(session.viewedReceiptMessageIDs.isEmpty)
+        await session.recordMessageViews([incoming, own, reaction, deleted])
+        XCTAssertEqual(session.viewedReceiptMessageIDs, ["incoming"])
+        await session.recordMessageViews([incoming])
+        XCTAssertEqual(session.viewedReceiptMessageIDs.count, 1)
+        await session.loadFeed()
+        XCTAssertEqual(session.viewedReceiptMessageIDs, ["incoming"])
+    }
+
+    func testReadRequestsIdentifyOnlyViewedMessagesAndPartialReadEventsPreserveUnreadCount() throws {
+        let body = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ViewedMessagesRequest(messageIds: ["one", "two"]))) as? [String: Any]
+        XCTAssertEqual(body?["messageIds"] as? [String], ["one", "two"])
+        XCTAssertNil(body?["timestamp"])
+        XCTAssertNil(body?["senderJid"])
+        let event = try JSONDecoder().decode(LiveEvent.self, from: Data(#"{"type":"messages_viewed","chat_id":"family@g.us","message_ids":["one"],"unread_count":3}"#.utf8))
+        XCTAssertEqual(event.messageIds, ["one"])
+        XCTAssertEqual(event.unreadCount, 3)
+    }
+
+    @MainActor
+    func testPartialReadEventDoesNotClearUnseenMessagesOrAnotherChat() throws {
+        let session = AppSession(demoMode: true)
+        session.phase = .ready
+        session.contacts = [Contact(id: "family@g.us", name: "Family", phone: nil, type: "group", lastMessageTime: 0, unreadCount: 4, pinnedAt: nil, lastMessagePreview: nil), Contact(id: "other@g.us", name: "Other", phone: nil, type: "group", lastMessageTime: 0, unreadCount: 7, pinnedAt: nil, lastMessagePreview: nil)]
+        let event = try JSONDecoder().decode(LiveEvent.self, from: Data(#"{"type":"messages_viewed","chat_id":"family@g.us","message_ids":["one"],"unread_count":3}"#.utf8))
+        session.handle(event)
+        XCTAssertEqual(session.contacts[0].unreadCount, 3)
+        XCTAssertEqual(session.contacts[1].unreadCount, 7)
+        XCTAssertEqual(session.viewedReceiptMessageIDs, ["one"])
+    }
+
+    func testOfflineViewedIDsSurviveCacheRestartAndCannotCrossServers() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "ReceiptTests-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let configuration = try ServerConfiguration.make(address: "https://receipts.example.test", password: "")
+        let snapshot = ChatCacheSnapshot(serverBaseURL: configuration.baseURL.absoluteString, contacts: [], messages: [:], updatedAt: Date(), pendingReadReceipts: ["family@g.us":["seen-offline"]])
+        let merged = snapshot.merging(contacts: [], messages: [], for: "family@g.us")
+        XCTAssertEqual(merged.pendingReadReceipts, snapshot.pendingReadReceipts)
+        await ChatCacheStore(directoryURL: root).save(merged)
+        let restored = await ChatCacheStore(directoryURL: root).load(for: configuration)
+        XCTAssertEqual(restored?.pendingReadReceipts, ["family@g.us":["seen-offline"]])
+        let other = try ServerConfiguration.make(address: "https://other.example.test", password: "")
+        let wrong = await ChatCacheStore(directoryURL: root).load(for: other)
+        XCTAssertNil(wrong)
     }
 }

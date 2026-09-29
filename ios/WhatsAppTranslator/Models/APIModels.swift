@@ -152,6 +152,10 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         }
         return value
     }
+    var canSendReadReceipt: Bool {
+        !isFromMe && !contactId.hasSuffix("@broadcast") && !contactId.hasSuffix("@newsletter")
+            && !["reaction", "revoked", "protocol", "unknown"].contains(normalizedContentType)
+    }
     var canTranslate: Bool { !isFromMe && !isTranslated && contentText != nil }
     var canGenerateAIReply: Bool { !isFromMe && contentText != nil }
     var contentText: String? { content?.body?.nilIfBlank ?? content?.caption?.nilIfBlank }
@@ -760,6 +764,7 @@ struct PushDeviceRegistration: Encodable, Sendable {
 }
 
 struct LiveEvent: Decodable, Sendable {
+    var unreadCount: Int? = nil
     var settings: ConversationSettings? = nil
     var connectionState: String? = nil
     var qr: String? = nil
@@ -787,6 +792,7 @@ struct LiveEvent: Decodable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case unreadCount = "unread_count"
         case phone, name, data, qr
         case connectionState = "connection_state"
         case type
