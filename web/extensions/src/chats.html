@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>WhatsApp conversations · BabelBridge</title>
+    <style>
+      /* EXTENSION_STYLES */
+    </style>
+  </head>
+  <body>
+    <div class="workspace" id="workspace">
+      <aside class="inbox" aria-label="Conversations">
+        <header class="brand">
+          <span class="mark" aria-hidden="true">▤</span>
+          <div>
+            <strong>BabelBridge</strong><span>WHATSAPP TRANSLATOR</span>
+          </div>
+          <button id="refresh" class="icon" aria-label="Refresh conversations">
+            ↻
+          </button>
+        </header>
+        <div class="inbox-heading">
+          <h1>Chats</h1>
+          <span class="count" id="count">—</span>
+        </div>
+        <label class="search"
+          ><span aria-hidden="true">⌕</span
+          ><input
+            id="search"
+            type="search"
+            placeholder="Search conversations"
+            aria-label="Search conversations"
+        /></label>
+        <div class="filters" role="group" aria-label="Filter conversations">
+          <button class="active" data-filter="all" aria-pressed="true">
+            All</button
+          ><button data-filter="unread" aria-pressed="false">Unread</button
+          ><button data-filter="group" aria-pressed="false">Groups</button>
+        </div>
+        <div class="chat-list" id="chat-list" aria-live="polite">
+          <p class="empty">Connecting to your chats…</p>
+        </div>
+        <button id="more-chats" class="load-more" hidden>
+          Load more conversations
+        </button>
+        <footer class="inbox-footer">
+          <span class="dot"></span> Your connected WhatsApp account
+        </footer>
+      </aside>
+      <main class="conversation" aria-label="Selected conversation">
+        <header class="conversation-header">
+          <button id="back" class="icon back" aria-label="Back to chats">
+            ‹</button
+          ><span id="chat-avatar" class="avatar" aria-hidden="true">▤</span>
+          <div class="contact-heading">
+            <h2 id="chat-name">Your conversations, understood.</h2>
+            <span id="chat-subtitle">Choose a chat to get started</span>
+          </div>
+          <button
+            id="read"
+            class="icon"
+            title="Mark conversation read"
+            aria-label="Mark conversation read"
+            hidden
+          >
+            ✓</button
+          ><button id="expand" class="icon" aria-label="Expand chat" hidden>
+            ⤢
+          </button>
+        </header>
+        <div id="error" class="error" role="alert" hidden>
+          <span id="error-text"></span><button id="retry">Retry</button
+          ><button id="dismiss-error" aria-label="Dismiss error">×</button>
+        </div>
+        <div
+          id="messages"
+          class="messages"
+          role="log"
+          aria-label="Chat messages"
+          aria-live="polite"
+        >
+          <div class="welcome">
+            <span class="welcome-mark">▤</span>
+            <h3>A little closer.<br />In every language.</h3>
+            <p>
+              Read your conversations, see translations<br />and prepare
+              thoughtful replies.
+            </p>
+            <span class="privacy">Only chats from your connected account</span>
+          </div>
+        </div>
+        <div id="reply" class="reply-preview" hidden>
+          <div><small>Replying to</small><span id="reply-text"></span></div>
+          <button id="cancel-reply" class="icon" aria-label="Cancel reply">
+            ×
+          </button>
+        </div>
+        <form id="composer" class="composer" hidden>
+          <label class="sr-only" for="draft">Write a message</label
+          ><textarea
+            id="draft"
+            rows="1"
+            placeholder="Write a message…"
+          ></textarea
+          ><button
+            id="prepare"
+            class="send"
+            type="submit"
+            aria-label="Prepare message for review"
+          >
+            ↑</button
+          ><span class="composer-note"
+            >Review recipient and translation before sending</span
+          >
+        </form>
+        <div class="readonly" id="readonly" hidden>
+          Read-only connection · message sending is not authorised
+        </div>
+      </main>
+    </div>
+    <dialog id="confirmation">
+      <form method="dialog">
+        <div class="dialog-heading">
+          <span class="mark">▤</span>
+          <h2>Review your message</h2>
+        </div>
+        <p class="muted">Nothing is sent until you confirm.</p>
+        <small>TO</small><strong id="confirm-recipient"></strong
+        ><small>MESSAGE TO SEND</small>
+        <p id="confirm-text" class="final-text"></p>
+        <details id="confirm-original">
+          <summary>Original message</summary>
+          <p id="confirm-original-text"></p>
+        </details>
+        <p id="confirm-language" class="muted"></p>
+        <p id="send-error" class="error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button id="cancel-send" value="cancel">Cancel</button
+          ><button id="confirm-send" class="primary" type="button">
+            Send message
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <script>
+      /* EXTENSION_SCRIPT */
+    </script>
+  </body>
+</html>

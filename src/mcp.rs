@@ -9,8 +9,10 @@ use crate::storage::{StoredContact, StoredMessage};
 use crate::web::{AppState, SendConfirmationError};
 use rmcp::{
     model::{
-        CallToolRequestParam, CallToolResult, Implementation, ListToolsResult,
-        PaginatedRequestParam, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+        CallToolRequestParam, CallToolResult, Icon, Implementation, ListResourcesResult,
+        ListToolsResult, PaginatedRequestParam, RawResource, ReadResourceRequestParam,
+        ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo, Tool,
+        ToolAnnotations,
     },
     service::RequestContext,
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -20,6 +22,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{info, warn};
 
+const CHAT_RESOURCE_URI: &str = "ui://whatsapp-translator/chats";
+const CHAT_MIME_TYPE: &str = "text/html;profile=mcp-app";
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 200;
 const PREPARATION_TTL_MILLIS: i64 = 10 * 60 * 1000;
@@ -415,6 +419,7 @@ impl WhatsAppMcpServer {
                 "properties":{
                     "query":{"type":"string"},
                     "contact_id":{"type":"string"},
+                    "cursor":{"type":"integer","minimum":0},
                     "after_timestamp":{"type":"integer"},
                     "before_timestamp":{"type":"integer"},
                     "direction":{"type":"string","enum":["all","incoming","outgoing"],"default":"all"},
@@ -574,6 +579,130 @@ impl WhatsAppMcpServer {
         )
     }
 
+    fn opener_tool(single_chat: bool) -> Tool {
+        let mut tool = Self::tool(
+            if single_chat { "open_chat" } else { "open_chats" },
+            if single_chat { "Open WhatsApp chat" } else { "WhatsApp conversations" },
+            "Open authorised WhatsApp conversations beside ChatGPT. This only reads stored data; opening never sends messages or read receipts.",
+            if single_chat {
+                json!({"type":"object","properties":{"contact_id":{"type":"string"}},"required":["contact_id"],"additionalProperties":false})
+            } else { json!({"type":"object","properties":{},"additionalProperties":false}) },
+            Self::object_output(json!({"contacts":{"type":"array"},"contact":{"type":"object"},"messages":{"type":"array"},"permissions":{"type":"object"}}), &["permissions"]),
+            Self::read_annotations("Open WhatsApp conversations").open_world(false),
+        );
+        let mut metadata =
+            json!({"ui":{"resourceUri":CHAT_RESOURCE_URI,"visibility":["model","app"]}});
+        if !single_chat {
+            metadata["openai/ui"] = json!({"entrypoints":[{"type":"global"},{"type":"thread"}]});
+        }
+        tool.meta = Some(serde_json::from_value(metadata).expect("static tool metadata"));
+        tool.icons = Some(vec![Icon {
+            src: format!("data:image/svg+xml,{}", urlencoding::encode("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='currentColor' stroke-width='1.33'><path d='M4 3h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8l-4 3v-3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z'/><path d='M6 7h8M6 11h5'/></svg>")),
+            mime_type: Some("image/svg+xml".into()), sizes: Some(vec!["any".into()]),
+        }]);
+        tool
+    }
+
+    async fn handle_open(
+        &self,
+        args: Value,
+        single_chat: bool,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_read()?;
+        let mut result = if single_chat {
+            self.handle_read_messages(args).await?
+        } else {
+            self.handle_contacts(json!({}), false).await?
+        };
+        if let Some(payload) = result.structured_content.as_mut() {
+            payload["permissions"] =
+                json!({"read":self.permissions.read,"send":self.permissions.send});
+        }
+        Ok(result)
+    }
+
+    fn chat_resources(&self) -> ListResourcesResult {
+        let resources = if self.permissions.read {
+            let mut resource = RawResource::new(CHAT_RESOURCE_URI, "WhatsApp conversations");
+            resource.mime_type = Some(CHAT_MIME_TYPE.into());
+            resource.title = Some("WhatsApp conversations".into());
+            vec![rmcp::model::Annotated::new(resource, None)]
+        } else {
+            vec![]
+        };
+        ListResourcesResult {
+            resources,
+            ..Default::default()
+        }
+    }
+
+    fn chat_resource(&self, uri: &str) -> Result<ReadResourceResult, McpError> {
+        self.require_read()?;
+        if uri != CHAT_RESOURCE_URI {
+            return Err(McpError::invalid_params("Unknown UI resource", None));
+        }
+        Ok(ReadResourceResult { contents: vec![ResourceContents::TextResourceContents {
+            uri: CHAT_RESOURCE_URI.into(), mime_type: Some(CHAT_MIME_TYPE.into()),
+            text: include_str!("../web/extensions/dist/chats.html").into(),
+            meta: Some(serde_json::from_value(json!({
+                "openai/ui":{"preferredDisplayMode":"fullscreen","availableDisplayModes":["inline","fullscreen"]},
+                "ui":{"csp":{"connectDomains":[],"resourceDomains":[]}}
+            })).expect("static resource metadata")),
+        }] })
+    }
+
+    fn translate_message_tool() -> Tool {
+        Self::tool("translate_message", "Translate incoming WhatsApp message",
+            "Translate a stored incoming message using this conversation's opt-in settings. Saves the translation locally and may incur AI usage; sends nothing to WhatsApp. Requires read and send scopes.",
+            json!({"type":"object","properties":{"contact_id":{"type":"string"},"message_id":{"type":"string"}},"required":["contact_id","message_id"],"additionalProperties":false}),
+            Self::object_output(json!({"success":{"type":"boolean"},"translatedText":{"type":["string","null"]},"sourceLanguage":{"type":"string"}}), &["success"]),
+            Self::write_annotations("Translate incoming WhatsApp message", false))
+    }
+
+    async fn handle_translate_message(&self, args: Value) -> Result<CallToolResult, McpError> {
+        use axum::response::IntoResponse;
+        self.require_read()?;
+        self.require_send()?;
+        let contact_id =
+            crate::identity::canonical_chat_id(required_string(&args, "contact_id")?).into_owned();
+        let message_id = required_string(&args, "message_id")?.to_string();
+        let message = self
+            .state
+            .store
+            .get_message_by_id(&message_id)
+            .mcp()?
+            .filter(|message| message.contact_id == contact_id && !message.is_from_me)
+            .ok_or_else(|| {
+                McpError::invalid_params("Incoming message not found in this conversation", None)
+            })?;
+        let response = crate::web::translate_message(
+            axum::extract::State(self.state.clone()),
+            axum::Json(crate::web::TranslateMessageRequest {
+                text: message.original_text.unwrap_or_default(),
+                message_id,
+                contact_id,
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let payload: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        if !status.is_success() || payload["success"] == false {
+            return Err(McpError::internal_error(
+                payload["error"]
+                    .as_str()
+                    .unwrap_or("Translation failed")
+                    .to_string(),
+                None,
+            ));
+        }
+        Ok(CallToolResult::structured(payload))
+    }
+
     fn require_read(&self) -> Result<(), McpError> {
         if self.permissions.read {
             Ok(())
@@ -700,30 +829,52 @@ impl WhatsAppMcpServer {
             .get("content_type")
             .and_then(Value::as_str)
             .map(str::to_lowercase);
-        let fetch_limit = ((limit + 1) * 4).min(MAX_LIMIT * 4) as u32;
-        let mut messages: Vec<StoredMessage> = self
-            .state
-            .store
-            .get_messages_paginated(
-                contact_id,
-                Some(fetch_limit),
-                before_timestamp,
-                before_message_id,
-                true,
-            )
-            .mcp()?
-            .into_iter()
-            .filter(|message| match direction {
-                "incoming" => !message.is_from_me,
-                "outgoing" => message.is_from_me,
-                _ => true,
-            })
-            .filter(|message| {
-                content_type
-                    .as_ref()
-                    .is_none_or(|value| message.content_type.to_lowercase() == *value)
-            })
-            .collect();
+        let mut messages: Vec<StoredMessage> = Vec::new();
+        let mut scan_timestamp = before_timestamp;
+        let mut scan_id = before_message_id.map(str::to_string);
+        loop {
+            let batch = self
+                .state
+                .store
+                .get_messages_paginated(
+                    contact_id,
+                    Some(MAX_LIMIT as u32),
+                    scan_timestamp,
+                    scan_id.as_deref(),
+                    true,
+                )
+                .mcp()?;
+            let exhausted = batch.len() < MAX_LIMIT;
+            let cursor = batch
+                .first()
+                .map(|message| (message.timestamp, message.id.clone()));
+            for message in batch.into_iter().rev() {
+                let direction_matches = match direction {
+                    "incoming" => !message.is_from_me,
+                    "outgoing" => message.is_from_me,
+                    _ => true,
+                };
+                if direction_matches
+                    && content_type
+                        .as_ref()
+                        .is_none_or(|value| message.content_type.to_lowercase() == *value)
+                {
+                    messages.push(message);
+                    if messages.len() > limit {
+                        break;
+                    }
+                }
+            }
+            if exhausted || messages.len() > limit {
+                break;
+            }
+            let Some((timestamp, id)) = cursor else {
+                break;
+            };
+            scan_timestamp = Some(timestamp);
+            scan_id = Some(id);
+        }
+        messages.reverse();
         let has_more = messages.len() > limit;
         if has_more {
             let remove_count = messages.len() - limit;
@@ -805,13 +956,17 @@ impl WhatsAppMcpServer {
                 .cmp(&left.timestamp)
                 .then_with(|| right.id.cmp(&left.id))
         });
-        let truncated = matches.len() > limit;
-        matches.truncate(limit);
+        let cursor = args.get("cursor").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let total_matched = matches.len();
+        let truncated = total_matched.saturating_sub(cursor) > limit;
+        let matches = matches.into_iter().skip(cursor).take(limit);
         let messages: Vec<MessageInfo> = matches.into_iter().map(MessageInfo::from).collect();
         Ok(CallToolResult::structured(json!({
             "query": query,
             "messages": messages,
             "truncated": truncated,
+            "nextCursor": truncated.then_some(cursor.saturating_add(limit)),
+            "totalMatched": total_matched,
         })))
     }
 
@@ -1392,6 +1547,8 @@ impl WhatsAppMcpServer {
         let mut tools = Vec::new();
         if self.permissions.read {
             tools.extend([
+                Self::opener_tool(false),
+                Self::opener_tool(true),
                 Self::get_status_tool(),
                 Self::list_contacts_tool(),
                 Self::search_contacts_tool(),
@@ -1407,6 +1564,9 @@ impl WhatsAppMcpServer {
                 Self::react_to_message_tool(),
                 Self::mark_conversation_read_tool(),
             ]);
+        }
+        if self.permissions.read && self.permissions.send {
+            tools.push(Self::translate_message_tool());
         }
         tools
     }
@@ -1432,7 +1592,7 @@ impl ServerHandler for WhatsAppMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: Default::default(),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder().enable_tools().enable_resources().build(),
             server_info: Implementation {
                 name: "whatsapp-translator".to_string(),
                 title: Some("WhatsApp Translator MCP Server".to_string()),
@@ -1445,6 +1605,22 @@ impl ServerHandler for WhatsAppMcpServer {
                     .to_string(),
             ),
         }
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        Ok(self.chat_resources())
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        self.chat_resource(&request.uri)
     }
 
     async fn list_tools(
@@ -1465,6 +1641,9 @@ impl ServerHandler for WhatsAppMcpServer {
             .map(Value::Object)
             .unwrap_or(Value::Object(Default::default()));
         match request.name.as_ref() {
+            "open_chats" => self.handle_open(args, false).await,
+            "open_chat" => self.handle_open(args, true).await,
+            "translate_message" => self.handle_translate_message(args).await,
             "get_status" => self.handle_get_status().await,
             "list_contacts" => self.handle_contacts(args, false).await,
             "search_contacts" => self.handle_contacts(args, true).await,
@@ -1851,5 +2030,246 @@ mod tests {
                 .await
         );
         std::fs::remove_dir_all(data_dir).expect("remove test data");
+    }
+
+    fn extension_message(
+        id: &str,
+        contact_id: &str,
+        timestamp: i64,
+        incoming: bool,
+    ) -> StoredMessage {
+        StoredMessage {
+            id: id.into(),
+            contact_id: contact_id.into(),
+            timestamp,
+            is_from_me: !incoming,
+            is_forwarded: false,
+            sender_name: Some("Synthetic Sender".into()),
+            sender_phone: None,
+            contact_name: None,
+            contact_phone: None,
+            chat_type: "private".into(),
+            content_type: "text".into(),
+            content_json: r#"{"type":"text","body":"hello"}"#.into(),
+            content: Some(json!({"type":"text","body":"hello"})),
+            original_text: Some("hello".into()),
+            translated_text: incoming.then(|| "bonjour".into()),
+            source_language: Some("English".into()),
+            is_translated: incoming,
+            delivery_status: Some("delivered".into()),
+        }
+    }
+
+    #[test]
+    fn extension_resources_and_entrypoints_obey_read_scope_and_display_contract() {
+        let (state, dir) = test_state();
+        for read in [false, true] {
+            let server =
+                WhatsAppMcpServer::new(state.clone(), McpPermissions { read, send: false });
+            assert_eq!(server.chat_resources().resources.len(), usize::from(read));
+            assert_eq!(server.chat_resource(CHAT_RESOURCE_URI).is_ok(), read);
+            assert!(server.chat_resource("file:///etc/passwd").is_err());
+            let tools = server.advertised_tools();
+            assert_eq!(tools.iter().any(|tool| tool.name == "open_chats"), read);
+            if read {
+                let opener = tools.iter().find(|tool| tool.name == "open_chats").unwrap();
+                let metadata = serde_json::to_value(opener.meta.as_ref().unwrap()).unwrap();
+                assert_eq!(metadata["ui"]["resourceUri"], CHAT_RESOURCE_URI);
+                assert_eq!(
+                    metadata["openai/ui"]["entrypoints"],
+                    json!([{"type":"global"},{"type":"thread"}])
+                );
+                assert!(opener.input_schema.get("required").is_none());
+                assert_eq!(
+                    opener.annotations.as_ref().unwrap().read_only_hint,
+                    Some(true)
+                );
+                let resource =
+                    serde_json::to_value(server.chat_resource(CHAT_RESOURCE_URI).unwrap()).unwrap();
+                assert_eq!(resource["contents"][0]["mimeType"], CHAT_MIME_TYPE);
+                assert_eq!(
+                    resource["contents"][0]["_meta"]["openai/ui"]["preferredDisplayMode"],
+                    "fullscreen"
+                );
+                assert_eq!(
+                    resource["contents"][0]["_meta"]["ui"]["csp"]["connectDomains"],
+                    json!([])
+                );
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn extension_openers_keep_instance_data_and_permissions_isolated_without_writes() {
+        let (first, first_dir) = test_state();
+        let (second, second_dir) = test_state();
+        first
+            .store
+            .upsert_contact(
+                "alice@s.whatsapp.net",
+                Some("Alice"),
+                None,
+                Some("private"),
+                100,
+            )
+            .unwrap();
+        first
+            .store
+            .add_message(&extension_message("a1", "alice@s.whatsapp.net", 100, true))
+            .unwrap();
+        second
+            .store
+            .upsert_contact(
+                "bob@s.whatsapp.net",
+                Some("Bob"),
+                None,
+                Some("private"),
+                100,
+            )
+            .unwrap();
+        let first_server = WhatsAppMcpServer::new(
+            first.clone(),
+            McpPermissions {
+                read: true,
+                send: false,
+            },
+        );
+        let second_server = WhatsAppMcpServer::new(
+            second,
+            McpPermissions {
+                read: true,
+                send: true,
+            },
+        );
+        let output = first_server
+            .handle_open(json!({}), false)
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(output["contacts"][0]["name"], "Alice");
+        assert_eq!(output["permissions"]["send"], false);
+        assert!(second_server
+            .handle_open(json!({"contact_id":"alice@s.whatsapp.net"}), true)
+            .await
+            .is_err());
+        assert!(first_server
+            .handle_open(json!({"contact_id":"bob@s.whatsapp.net"}), true)
+            .await
+            .is_err());
+        let unread_before = first
+            .store
+            .get_contact("alice@s.whatsapp.net")
+            .unwrap()
+            .unwrap()
+            .unread_count;
+        for _ in 0..3 {
+            let output = first_server
+                .handle_open(json!({"contact_id":"alice@s.whatsapp.net"}), true)
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(output["messages"][0]["text"], "bonjour");
+            assert_eq!(output["messages"][0]["originalText"], "hello");
+        }
+        assert_eq!(
+            first
+                .store
+                .get_contact("alice@s.whatsapp.net")
+                .unwrap()
+                .unwrap()
+                .unread_count,
+            unread_before
+        );
+        assert!(first.mcp_prepared_messages.read().await.is_empty());
+        assert!(first_server
+            .handle_translate_message(
+                json!({"contact_id":"alice@s.whatsapp.net","message_id":"a1"})
+            )
+            .await
+            .is_err());
+        for dir in [first_dir, second_dir] {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn extension_pagination_covers_all_chats_and_sparse_messages_with_equal_timestamps() {
+        let (state, dir) = test_state();
+        for id in [
+            "first@s.whatsapp.net",
+            "second@s.whatsapp.net",
+            "third@g.us",
+        ] {
+            state
+                .store
+                .upsert_contact(id, None, None, None, 100)
+                .unwrap();
+        }
+        let server = WhatsAppMcpServer::new(
+            state.clone(),
+            McpPermissions {
+                read: true,
+                send: false,
+            },
+        );
+        let first = server
+            .handle_contacts(json!({"limit":2}), false)
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(first["nextCursor"], 2);
+        let last = server
+            .handle_contacts(json!({"limit":2,"cursor":2}), false)
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(last["contacts"].as_array().unwrap().len(), 1);
+        assert!(last["nextCursor"].is_null());
+        for i in 0..650 {
+            state
+                .store
+                .add_message(&extension_message(
+                    &format!("m{i:04}"),
+                    "first@s.whatsapp.net",
+                    100,
+                    i == 5 || i == 600,
+                ))
+                .unwrap();
+        }
+        let page = server
+            .handle_read_messages(
+                json!({"contact_id":"first@s.whatsapp.net","limit":1,"direction":"incoming"}),
+            )
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(page["messages"][0]["id"], "m0600");
+        assert_eq!(page["hasMore"], true);
+        let cursor = &page["nextCursor"];
+        let older = server.handle_read_messages(json!({"contact_id":"first@s.whatsapp.net","limit":1,"direction":"incoming","before_timestamp":cursor["beforeTimestamp"],"before_message_id":cursor["beforeMessageId"]})).await.unwrap().structured_content.unwrap();
+        assert_eq!(older["messages"][0]["id"], "m0005");
+        assert_eq!(older["hasMore"], false);
+        let search = server
+            .handle_search_messages(json!({"query":"bonjour","limit":1}))
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(search["nextCursor"], 1);
+        let next = server
+            .handle_search_messages(json!({"query":"bonjour","limit":1,"cursor":1}))
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(next["messages"][0]["id"], "m0005");
+        assert!(next["nextCursor"].is_null());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

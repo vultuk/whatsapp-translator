@@ -1,0 +1,249 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Local MCP Apps host fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      iframe {
+        width: 100vw;
+        height: 100dvh;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <iframe id="app" title="WhatsApp extension" src="/app.html"></iframe>
+    <script>
+      const options = Object.fromEntries(new URLSearchParams(location.search));
+      const contacts = [
+        {
+          id: "alice@s.whatsapp.net",
+          name: "Alice Laurent",
+          phone: "337700900100",
+          type: "private",
+          unreadCount: 2,
+          isPinned: true,
+          lastMessageTime: 1791372000000,
+          lastMessagePreview: "À tout à l’heure !",
+        },
+        {
+          id: "team@g.us",
+          name: "Weekend in Lisbon",
+          type: "group",
+          unreadCount: 4,
+          isPinned: false,
+          lastMessageTime: 1791371000000,
+          lastMessagePreview: "Marta: Let’s book the little place by the sea.",
+        },
+        {
+          id: "dan@s.whatsapp.net",
+          name: "Daniel Chen",
+          phone: "447700900101",
+          type: "private",
+          unreadCount: 0,
+          isPinned: false,
+          lastMessageTime: 1791369000000,
+          lastMessagePreview: "That sounds like a plan.",
+        },
+      ];
+      const messages = [
+        {
+          id: "a1",
+          contactId: contacts[0].id,
+          timestamp: 1791370300000,
+          isFromMe: false,
+          senderName: "Alice",
+          text: "Good morning! Have you had a chance to look at the little café I sent you?",
+          originalText:
+            "Bonjour ! Tu as pu regarder le petit café que je t’ai envoyé ?",
+          translatedText:
+            "Good morning! Have you had a chance to look at the little café I sent you?",
+          contentType: "text",
+        },
+        {
+          id: "a2",
+          contactId: contacts[0].id,
+          timestamp: 1791370400000,
+          isFromMe: true,
+          text: "Yes, it looks lovely. Shall we meet there around 3?",
+          originalText: "Yes, it looks lovely. Shall we meet there around 3?",
+          translatedText:
+            "Oui, ça a l’air charmant. On se retrouve là-bas vers 15h ?",
+          contentType: "text",
+          deliveryStatus: "read",
+        },
+        {
+          id: "a3",
+          contactId: contacts[0].id,
+          timestamp: 1791370600000,
+          isFromMe: false,
+          text: "Perfect! I’ll save us a table by the window ☀️",
+          originalText:
+            "Parfait ! Je nous garde une table près de la fenêtre ☀️",
+          translatedText: "Perfect! I’ll save us a table by the window ☀️",
+          contentType: "text",
+        },
+        {
+          id: "a4",
+          contactId: contacts[0].id,
+          timestamp: 1791370800000,
+          isFromMe: false,
+          text: "À tout à l’heure !",
+          originalText: "À tout à l’heure !",
+          contentType: "text",
+        },
+      ];
+      if (options.xss) contacts[0].name = "<img src=x onerror=alert(1)>";
+      window.calls = [];
+      let listFailures = options.error ? 1 : 0;
+      let sendFailures = options.sendError ? 1 : 0;
+      function send(data) {
+        document
+          .getElementById("app")
+          .contentWindow.postMessage({ jsonrpc: "2.0", ...data }, "*");
+      }
+      function notify(method, params) {
+        send({ method, params });
+      }
+      window.notify = notify;
+      const structured = (data) => ({ content: [], structuredContent: data });
+      const initial = () =>
+        options.empty
+          ? {
+              contacts: [],
+              nextCursor: null,
+              totalMatched: 0,
+              permissions: { read: true, send: !options.readonly },
+            }
+          : {
+              contacts: contacts.slice(0, 2),
+              nextCursor: 2,
+              totalMatched: 3,
+              permissions: { read: true, send: !options.readonly },
+            };
+      window.addEventListener("message", async (event) => {
+        if (event.source !== document.getElementById("app").contentWindow)
+          return;
+        const request = event.data;
+        if (!request || request.jsonrpc !== "2.0") return;
+        if (request.method === "ui/notifications/initialized") {
+          notify("ui/notifications/tool-result", structured(initial()));
+          return;
+        }
+        if (request.id === undefined) return;
+        try {
+          let result = {};
+          if (request.method === "ui/initialize")
+            result = {
+              protocolVersion: request.params.protocolVersion,
+              hostInfo: { name: "fixture", version: "1.0" },
+              hostCapabilities: { serverTools: {}, updateModelContext: {} },
+              hostContext: {
+                theme: options.dark ? "dark" : "light",
+                displayMode: "fullscreen",
+                availableDisplayModes: ["inline", "fullscreen"],
+                ...(options.deep
+                  ? {
+                      "openai/deepLink": { url: "/chats/dan%40s.whatsapp.net" },
+                    }
+                  : {}),
+              },
+            };
+          else if (request.method === "tools/call") {
+            const { name, arguments: args } = request.params;
+            window.calls.push({ name, args });
+            if (name === "list_contacts") {
+              if (listFailures-- > 0)
+                throw Error("Synthetic connection failure");
+              if (options.slowSearch && args.query === "Alice")
+                await new Promise((resolve) => setTimeout(resolve, 600));
+              let found = options.empty
+                ? []
+                : contacts.filter(
+                    (c) =>
+                      c.name
+                        .toLowerCase()
+                        .includes((args.query || "").toLowerCase()) &&
+                      (!args.unread_only || c.unreadCount) &&
+                      (args.contact_type !== "group" || c.type === "group"),
+                  );
+              const offset = args.cursor || 0;
+              result = structured({
+                contacts: found.slice(offset, offset + 2),
+                nextCursor: offset + 2 < found.length ? offset + 2 : null,
+                totalMatched: found.length,
+              });
+            } else if (name === "read_messages" || name === "open_chat") {
+              if (options.slowChat && args.contact_id === contacts[0].id)
+                await new Promise((resolve) => setTimeout(resolve, 600));
+              const contact = contacts.find((c) => c.id === args.contact_id);
+              if (!contact) throw Error("Unknown contact_id");
+              const page = args.before_message_id
+                ? [
+                    {
+                      ...messages[0],
+                      id: "older",
+                      timestamp: 1791280000000,
+                      text: "Earlier conversation",
+                    },
+                  ]
+                : args.contact_id === contacts[0].id
+                  ? messages
+                  : [];
+              result = structured({
+                contact,
+                messages: page,
+                hasMore: !args.before_message_id && page.length > 0,
+                nextCursor:
+                  !args.before_message_id && page.length
+                    ? {
+                        beforeTimestamp: messages[0].timestamp,
+                        beforeMessageId: "a1",
+                      }
+                    : null,
+                permissions: { read: true, send: !options.readonly },
+              });
+            } else if (name === "prepare_message") {
+              if (options.slowPrepare)
+                await new Promise((resolve) => setTimeout(resolve, 500));
+              result = structured({
+                preparationToken: "synthetic-preview",
+                expiresAt: options.expired
+                  ? Date.now() - 1
+                  : Date.now() + 60000,
+                recipient: contacts.find((c) => c.id === args.contact_id),
+                originalText: args.text,
+                finalText: "À bientôt !",
+                translated: true,
+                targetLanguage: "French",
+                replyToMessageId: args.reply_to_message_id,
+              });
+            } else if (name === "send_message" || name === "reply_to_message") {
+              if (sendFailures-- > 0) throw Error("Synthetic timeout");
+              result = structured({ success: true });
+            } else if (name === "translate_message") {
+              messages[3].translatedText = "See you soon!";
+              messages[3].text = "See you soon!";
+              result = structured({ success: true });
+            } else if (
+              name === "react_to_message" ||
+              name === "mark_conversation_read"
+            )
+              result = structured({ success: true });
+            else throw Error("Unexpected tool " + name);
+          } else if (request.method === "ui/request-display-mode")
+            result = { mode: request.params.mode };
+          send({ id: request.id, result });
+        } catch (error) {
+          send({
+            id: request.id,
+            error: { code: -32000, message: error.message },
+          });
+        }
+      });
+    </script>
+  </body>
+</html>

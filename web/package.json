@@ -6,10 +6,22 @@
   "scripts": {
     "test": "node --test",
     "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build"
+    "build-storybook": "storybook build",
+    "build:extension": "node extensions/build.mjs",
+    "check:extension": "node extensions/build.mjs --check",
+    "typecheck:extension": "tsc -p extensions/tsconfig.json",
+    "test:extension": "playwright test -c extensions/playwright.config.ts",
+    "lint:extension": "prettier --check \"extensions/src/**/*\" \"extensions/*.mjs\" \"extensions/*.ts\" \"extensions/*.json\" \"extensions/tests/**/*\""
   },
   "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@openai/mcp-extensions": "0.1.0",
+    "@playwright/test": "1.63.0",
+    "@storybook/html-vite": "^10.3.5",
+    "esbuild": "0.28.2",
+    "prettier": "3.9.4",
     "storybook": "^10.3.5",
-    "@storybook/html-vite": "^10.3.5"
+    "typescript": "5.9.3"
   }
 }

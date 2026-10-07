@@ -55,3 +55,22 @@ jobs:
       - name: Test frontend
         working-directory: web
         run: npm test
+
+      - name: Check Extension types and committed resource
+        working-directory: web
+        run: npm run lint:extension && npm run typecheck:extension && npm run check:extension
+
+      - name: Install Extension browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Test Extension host bridge and UI
+        working-directory: web
+        run: CHROMIUM_PATH="$(node -e 'process.stdout.write(require("playwright").chromium.executablePath())')" npm run test:extension
+
+      - name: Upload Extension screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-browser-evidence
+          path: output/playwright/
