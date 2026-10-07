@@ -204,9 +204,19 @@ The Streamable HTTP endpoint is `/mcp`. OAuth permissions are split into:
 - `whatsapp.send` — sending prepared messages and replies, reactions, and read
   receipts; this scope requires `whatsapp.read`
 
-If a client does not request a scope, it receives read-only access. The legacy
-`mcp` scope remains accepted for previously registered clients and grants both
-read and send access.
+If an authorization request omits scope, it receives read-only access. A DCR
+registration that omits scope is eligible to request both supported scopes later;
+registration itself grants no access. Explicit read-only registrations remain
+restricted to read-only authorization. Password consent, PKCE and exact registered
+redirect matching are required before any tokens are issued. The legacy `mcp`
+scope retains its existing behavior for previously registered clients.
+
+If ChatGPT reports "Requested scope is not registered for this OAuth client",
+its existing registration does not permit the requested send scope. Read-only
+connection remains possible by selecting only `whatsapp.read`. For send access,
+recreate the DCR connection after the corrected server release so registration can
+include both supported scopes. Reauthorization alone does not update existing
+registration metadata, and this release does not migrate clients or token grants.
 
 The read workflow exposes `get_status`, `list_contacts`, `search_contacts`,
 `read_messages`, `search_messages`, and `prepare_message`. External writes are

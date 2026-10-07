@@ -37,6 +37,15 @@ remain required. Explicit OAuth `resource` values must match this instance's
 canonical `/mcp` URL; existing clients that omit it remain compatible because the
 opaque tokens are bound to this instance's token database and single MCP resource.
 
+DCR scope metadata describes client eligibility, separately from user consent.
+When DCR omits scope, the client may later request both `whatsapp.read` and
+`whatsapp.send`. An authorization request that omits scope still defaults to read
+only. Explicit registration limits and legacy behavior are preserved. Send access
+requires an explicit read/send authorization request, password consent and PKCE.
+Existing registrations limited to read are not automatically widened: use read
+only now or recreate the ChatGPT DCR connection after the corrected release to
+register for send access. Existing tokens and grants are unchanged.
+
 Existing standalone tools remain available without opening the UI:
 `get_status`, `list_contacts`, `search_contacts`, `read_messages`, `search_messages`,
 `prepare_message`, `send_message`, `reply_to_message`, `react_to_message`,

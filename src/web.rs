@@ -4189,7 +4189,8 @@ fn resolve_oauth_authorization_scope(
     registered_scope: &str,
 ) -> Result<String, String> {
     let requested_scope = match requested_scope.map(str::trim) {
-        None | Some("") => registered_scope.to_string(),
+        None | Some("") if registered_scope == "mcp" => "mcp".to_string(),
+        None | Some("") => "whatsapp.read".to_string(),
         Some(scope) => normalize_oauth_scope(Some(scope))?,
     };
     if registered_scope == "mcp" {
@@ -4299,7 +4300,13 @@ fn validate_oauth_client_request(req: &ClientRegistrationRequest) -> Result<Stri
         }
     }
 
-    normalize_oauth_scope(req.scope.as_deref())
+    // Registration declares the scopes a client may later request, not a user
+    // grant. Hosted clients may omit scope here and select it at authorization.
+    // Keep explicit registration limits; authorization defaults to read-only.
+    match req.scope.as_deref() {
+        None => Ok("whatsapp.read whatsapp.send".to_string()),
+        Some(scope) => normalize_oauth_scope(Some(scope)),
+    }
 }
 
 /// OAuth 2.0 Authorization Server Metadata (RFC 8414)
@@ -6539,11 +6546,57 @@ mod tests {
     }
 
     #[test]
+    fn oauth_dcr_omitted_scope_allows_supported_permissions_but_defaults_grants_to_read() {
+        let mut request = ClientRegistrationRequest {
+            redirect_uris: vec!["https://chatgpt.com/connector/oauth/fixture-callback".into()],
+            client_name: None,
+            client_uri: None,
+            scope: None,
+            grant_types: None,
+            response_types: None,
+            token_endpoint_auth_method: None,
+        };
+        let eligibility = validate_oauth_client_request(&request).unwrap();
+        assert_eq!(eligibility, "whatsapp.read whatsapp.send");
+        assert_eq!(
+            resolve_oauth_authorization_scope(None, &eligibility).unwrap(),
+            "whatsapp.read"
+        );
+        assert_eq!(
+            resolve_oauth_authorization_scope(Some(""), &eligibility).unwrap(),
+            "whatsapp.read"
+        );
+        assert_eq!(
+            resolve_oauth_authorization_scope(Some("whatsapp.read whatsapp.send"), &eligibility)
+                .unwrap(),
+            eligibility
+        );
+        for scope in ["whatsapp.read", "", " "] {
+            request.scope = Some(scope.into());
+            let limited = validate_oauth_client_request(&request).unwrap();
+            assert_eq!(limited, "whatsapp.read");
+            assert!(resolve_oauth_authorization_scope(
+                Some("whatsapp.read whatsapp.send"),
+                &limited
+            )
+            .is_err());
+        }
+        for invalid in ["whatsapp.send", "unknown"] {
+            request.scope = Some(invalid.into());
+            assert!(validate_oauth_client_request(&request).is_err());
+        }
+        assert_eq!(
+            resolve_oauth_authorization_scope(None, "mcp").unwrap(),
+            "mcp"
+        );
+    }
+
+    #[test]
     fn oauth_authorization_can_narrow_registered_permissions() {
         assert_eq!(
             resolve_oauth_authorization_scope(None, "whatsapp.read whatsapp.send")
                 .expect("registered default"),
-            "whatsapp.read whatsapp.send"
+            "whatsapp.read"
         );
         assert_eq!(
             resolve_oauth_authorization_scope(Some("whatsapp.read"), "whatsapp.read whatsapp.send")
@@ -8053,6 +8106,34 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_chatgpt_dcr_discovery_approval_pkce_and_read_only_access() {
+        oauth_chatgpt_fixture_flow(
+            Some("whatsapp.read"),
+            Some("whatsapp.read"),
+            "whatsapp.read",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn oauth_chatgpt_dcr_without_scope_allows_explicit_read_send_consent() {
+        oauth_chatgpt_fixture_flow(
+            None,
+            Some("whatsapp.read whatsapp.send"),
+            "whatsapp.read whatsapp.send",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn oauth_chatgpt_dcr_without_scope_and_authorization_without_scope_grants_only_read() {
+        oauth_chatgpt_fixture_flow(None, None, "whatsapp.read").await;
+    }
+
+    async fn oauth_chatgpt_fixture_flow(
+        registration_scope: Option<&str>,
+        requested_scope: Option<&str>,
+        granted_scope: &str,
+    ) {
         use sha2::Digest;
         let (state, dir) = test_state(Some("fixture-password"));
         let callback = "https://chatgpt.com/connector/oauth/fixture-callback";
@@ -8101,17 +8182,31 @@ mod tests {
         assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(unauthenticated.headers()["www-authenticate"], format!("Bearer resource_metadata=\"{issuer}/.well-known/oauth-protected-resource\", scope=\"whatsapp.read\""));
 
-        let registered = oauth_fixture_request(state.clone(), "POST", "/oauth/register", "application/json", serde_json::json!({"redirect_uris":[callback],"client_name":"Synthetic ChatGPT","grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none","scope":"whatsapp.read"}).to_string()).await;
+        let mut registration_request = serde_json::json!({"redirect_uris":[callback],"client_name":"Synthetic ChatGPT","grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"});
+        if let Some(scope) = registration_scope {
+            registration_request["scope"] = scope.into();
+        }
+        let registered = oauth_fixture_request(
+            state.clone(),
+            "POST",
+            "/oauth/register",
+            "application/json",
+            registration_request.to_string(),
+        )
+        .await;
         assert_eq!(registered.status(), StatusCode::CREATED);
         let registration = oauth_fixture_json(registered).await;
         let client_id = registration["client_id"].as_str().unwrap();
-        assert_eq!(registration["scope"], "whatsapp.read");
+        assert_eq!(
+            registration["scope"],
+            registration_scope.unwrap_or("whatsapp.read whatsapp.send")
+        );
         assert!(registration.get("client_secret").is_none());
         let auth_pairs = [
             ("response_type", "code"),
             ("client_id", client_id),
             ("redirect_uri", callback),
-            ("scope", "whatsapp.read"),
+            ("scope", requested_scope.unwrap_or("whatsapp.read")),
             ("state", "fixture state & value"),
             ("code_challenge", challenge.as_str()),
             ("code_challenge_method", "S256"),
@@ -8119,7 +8214,14 @@ mod tests {
         ];
         for (index, bad_value) in [
             (2, "https://chatgpt.com/connector/oauth/different"),
-            (3, "whatsapp.read whatsapp.send"),
+            (
+                3,
+                if registration_scope == Some("whatsapp.read") {
+                    "whatsapp.read whatsapp.send"
+                } else {
+                    "unsupported.scope"
+                },
+            ),
             (6, "plain"),
             (7, "https://other.example.test/mcp"),
         ] {
@@ -8135,10 +8237,18 @@ mod tests {
             .await;
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         }
+        let authorization_pairs: Vec<_> = auth_pairs
+            .iter()
+            .copied()
+            .filter(|(key, _)| *key != "scope" || requested_scope.is_some())
+            .collect();
         let page = oauth_fixture_request(
             state.clone(),
             "GET",
-            &format!("/oauth/authorize?{}", oauth_fixture_form(&auth_pairs)),
+            &format!(
+                "/oauth/authorize?{}",
+                oauth_fixture_form(&authorization_pairs)
+            ),
             "application/json",
             String::new(),
         )
@@ -8152,6 +8262,9 @@ mod tests {
         )
         .unwrap();
         assert!(html.contains("name=\"password\""));
+        assert!(html.contains(&format!(
+            "<strong>Requested permissions:</strong> {granted_scope}<br>"
+        )));
         let session_key = html
             .split("name=\"session_key\" value=\"")
             .nth(1)
@@ -8179,7 +8292,10 @@ mod tests {
         let page = oauth_fixture_request(
             state.clone(),
             "GET",
-            &format!("/oauth/authorize?{}", oauth_fixture_form(&auth_pairs)),
+            &format!(
+                "/oauth/authorize?{}",
+                oauth_fixture_form(&authorization_pairs)
+            ),
             "application/json",
             String::new(),
         )
@@ -8250,7 +8366,7 @@ mod tests {
         .await;
         assert_eq!(token.status(), StatusCode::OK);
         let token = oauth_fixture_json(token).await;
-        assert_eq!(token["scope"], "whatsapp.read");
+        assert_eq!(token["scope"], granted_scope);
         let auth = format!("Bearer {}", token["access_token"].as_str().unwrap());
         let replay = oauth_fixture_request(
             state.clone(),
@@ -8272,11 +8388,31 @@ mod tests {
         )
         .await;
         assert_ne!(opened["result"]["isError"], true);
-        let write = extension_rpc_body(extension_rpc(state.clone(), Some(&auth), "tools/call", serde_json::json!({"name":"mark_conversation_read","arguments":{"contact_id":"fixture"}})).await).await;
-        assert!(write["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("whatsapp.send"));
+        let tools = extension_rpc_body(
+            extension_rpc(
+                state.clone(),
+                Some(&auth),
+                "tools/list",
+                serde_json::json!({}),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            tools["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == "send_message"),
+            granted_scope.contains("whatsapp.send")
+        );
+        if !granted_scope.contains("whatsapp.send") {
+            let write = extension_rpc_body(extension_rpc(state.clone(), Some(&auth), "tools/call", serde_json::json!({"name":"mark_conversation_read","arguments":{"contact_id":"fixture"}})).await).await;
+            assert!(write["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("whatsapp.send"));
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
