@@ -81,10 +81,12 @@ Hosted deploy recommendation:
 - `WA_PASSWORD` is required on non-loopback hosts; startup fails without it
 - attach a persistent volume at `/data`
 - if `WA_PORT` is not set, the app will use Railway's `PORT`
-- MCP OAuth is intended for local MCP clients you explicitly approve. Dynamic
-  client registration only accepts loopback `http://localhost`, `http://127.0.0.1`,
-  or `http://[::1]` redirect URIs, and authorization requires an exact registered
-  redirect match.
+- MCP OAuth supports explicitly approved local clients and ChatGPT. Dynamic client
+  registration accepts loopback HTTP/HTTPS callbacks and the documented HTTPS
+  callbacks on `chatgpt.com`: `/connector/oauth/{callback_id}` and the legacy
+  `/connector_platform_oauth_redirect`. Other remote hosts, callback paths,
+  credentials, nonstandard ports, queries and fragments are rejected. Authorization
+  still requires an exact registered redirect match, password approval and S256 PKCE.
 
 ## Pasting images
 

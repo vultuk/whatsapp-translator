@@ -19,6 +19,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
 COPY build.rs ./
+COPY web/extensions/dist/chats.html ./web/extensions/dist/chats.html
 
 # Skip Go build in Rust build script (we build it separately)
 ENV SKIP_GO_BUILD=1

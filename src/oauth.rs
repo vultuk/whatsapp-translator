@@ -244,6 +244,7 @@ pub struct AuthorizeRequest {
     pub state: Option<String>,
     pub code_challenge: String,
     pub code_challenge_method: String,
+    pub resource: Option<String>,
 }
 
 /// Token request parameters (form encoded)
@@ -255,6 +256,7 @@ pub struct TokenRequest {
     pub code_verifier: Option<String>,
     pub refresh_token: Option<String>,
     pub client_id: Option<String>,
+    pub resource: Option<String>,
 }
 
 /// Token revocation request

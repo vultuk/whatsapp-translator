@@ -29,6 +29,14 @@ it changes the locally stored translation and may incur AI usage. The legacy
 `mcp` scope retains its existing behavior. The iframe never receives a bearer token
 or bypasses the host via web API calls. Account reset continues to revoke tokens.
 
+ChatGPT setup uses the existing `/mcp` URL with OAuth and Dynamic Client
+Registration. CIMD is not advertised or implemented. The callback allowlist accepts
+only OpenAI's documented HTTPS paths on `chatgpt.com` and existing loopback
+callbacks. Password approval, exact registered redirect matching and S256 PKCE
+remain required. Explicit OAuth `resource` values must match this instance's
+canonical `/mcp` URL; existing clients that omit it remain compatible because the
+opaque tokens are bound to this instance's token database and single MCP resource.
+
 Existing standalone tools remain available without opening the UI:
 `get_status`, `list_contacts`, `search_contacts`, `read_messages`, `search_messages`,
 `prepare_message`, `send_message`, `reply_to_message`, `react_to_message`,
@@ -86,6 +94,8 @@ the existing hosting/deployment path. Rebuild it after frontend edits. CI verifi
 that the committed resource matches its sources. The bundle contains no externally
 loaded JavaScript, CSS, fonts or credential material. Run `cargo fmt --check`,
 `cargo test --locked`, `cargo clippy --locked` and Go bridge tests from the repository.
+The production Docker Rust build copies the committed resource before compilation;
+CI also builds that Docker stage to verify the real build context and toolchain.
 
 The browser suite loads the actual compiled resource inside an iframe and exercises
 its real SDK handshake against a **local simulated host** with synthetic data and
