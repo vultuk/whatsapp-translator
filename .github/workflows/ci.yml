@@ -48,7 +48,17 @@ jobs:
         run: cargo fmt --check
 
       - name: Install audio conversion dependency
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        timeout-minutes: 10
+        run: |
+          apt_options=(
+            -o Acquire::Retries=2
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+          )
+          sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
+          sudo apt-get "${apt_options[@]}" install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
 
       - name: Test Rust backend
         run: cargo test
