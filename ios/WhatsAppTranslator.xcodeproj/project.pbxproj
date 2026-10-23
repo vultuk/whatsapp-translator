@@ -166,8 +166,10 @@
 		E24F781912F793780C3959DB /* WhatsAppTranslatorSendActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 8EDDF0705924D6B6857E8A4F /* WhatsAppTranslatorSendActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E709F7EEA9205981C93684EC /* CarPlaySceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E1F293A98F9CF5DBD135082 /* CarPlaySceneDelegate.swift */; };
 		E84668D4B3B45801759C432E /* bb-orbit.wav in Resources */ = {isa = PBXBuildFile; fileRef = 623E4D9D9D6EDB6EEAD02730 /* bb-orbit.wav */; };
+		E8D3AC340C9A92717DDBB138 /* ServerSignOutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66D8692F72C55C3E1989A365 /* ServerSignOutTests.swift */; };
 		EA961E6FE2A5E1C0DAF697EB /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485D8A29673EDFD9E9DC6B01 /* ConversationView.swift */; };
 		ECA44D720EB496F4E1DACB3E /* bb-bloom.wav in Resources */ = {isa = PBXBuildFile; fileRef = 592B7D143FC3A806E452ECDB /* bb-bloom.wav */; };
+		F3022E0F5B0C2DAB2159A796 /* ServerSignOutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66D8692F72C55C3E1989A365 /* ServerSignOutTests.swift */; };
 		F3E88AD0304911E58FDD0280 /* message-tones.json in Resources */ = {isa = PBXBuildFile; fileRef = D1C73CE227D5A532FBE89BC4 /* message-tones.json */; };
 		F4B369790F927264F727B13B /* WatchPhoneCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E26FC9BCFCF0921E8B50917 /* WatchPhoneCoordinator.swift */; };
 		F4E469181B519B3F008E7F59 /* MessageTonePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26734588D5BD2168DA54230 /* MessageTonePickerView.swift */; };
@@ -326,6 +328,7 @@
 		592B7D143FC3A806E452ECDB /* bb-bloom.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "bb-bloom.wav"; sourceTree = "<group>"; };
 		6010E7F3A59C4304404C23EE /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
 		623E4D9D9D6EDB6EEAD02730 /* bb-orbit.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "bb-orbit.wav"; sourceTree = "<group>"; };
+		66D8692F72C55C3E1989A365 /* ServerSignOutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerSignOutTests.swift; sourceTree = "<group>"; };
 		6D76A610B739758653D9DE58 /* ConversationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSettingsView.swift; sourceTree = "<group>"; };
 		7128F02B9C33490FD1284C13 /* ImagePasteSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePasteSupport.swift; sourceTree = "<group>"; };
 		72CC4F00FF6C7ECF1540C253 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -526,6 +529,7 @@
 				CE8A65C7E1D75E6963BEC9E1 /* MessageEditDeliveryTests.swift */,
 				78B304C0DE351D146ED39609 /* MessageToneTests.swift */,
 				F3F1BC03AFEBB4E9E5DC7F77 /* ReactionDeliveryTests.swift */,
+				66D8692F72C55C3E1989A365 /* ServerSignOutTests.swift */,
 				49AC7E0E1E7E70A1AE70D2FE /* ServerURLTests.swift */,
 				7C4AB57C27AB24B095BFB943 /* WhatsAppConnectionTests.swift */,
 			);
@@ -1162,6 +1166,7 @@
 				FD6A227DD85657B7A1B132CA /* MessageToneTests.swift in Sources */,
 				ACB7ADC28DAE754A2AF1AD63 /* ReactionDeliveryTests.swift in Sources */,
 				A7F844F22CE8F780B83A4464 /* SendRecoveryTests.swift in Sources */,
+				E8D3AC340C9A92717DDBB138 /* ServerSignOutTests.swift in Sources */,
 				0C5EF3A21B44F5583214EBFB /* ServerURLTests.swift in Sources */,
 				F6460EF1F222112E6EFDD85E /* VoicePlaybackTests.swift in Sources */,
 				1B8A6A59E33F76E9BC3328A4 /* WhatsAppConnectionTests.swift in Sources */,
@@ -1295,6 +1300,7 @@
 				644DBFBD20B07F78BB3B4A11 /* MessageToneTests.swift in Sources */,
 				9E8FF7255A0349C585345260 /* ReactionDeliveryTests.swift in Sources */,
 				6C37C3EF729A6AA8C422BDE8 /* SendRecoveryTests.swift in Sources */,
+				F3022E0F5B0C2DAB2159A796 /* ServerSignOutTests.swift in Sources */,
 				B67977F43559EA44AA54862C /* ServerURLTests.swift in Sources */,
 				C791937334C503A087B751D0 /* VideoPlaybackTests.swift in Sources */,
 				279B83945EECB15DE7A24F57 /* VoicePlaybackTests.swift in Sources */,

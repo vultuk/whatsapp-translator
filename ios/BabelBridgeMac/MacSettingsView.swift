@@ -176,7 +176,7 @@ struct MacSettingsView: View {
                 .foregroundStyle(.secondary)
             Button("Change Server…", role: .destructive) {
                 dismiss()
-                session.forgetServer()
+                Task { await session.forgetServer() }
             }
         }
     }

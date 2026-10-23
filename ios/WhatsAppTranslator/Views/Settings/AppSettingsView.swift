@@ -81,7 +81,7 @@ struct AppSettingsView: View {
                 Section {
                     Button("Change server", role: .destructive) {
                         dismiss()
-                        session.forgetServer()
+                        Task { await session.forgetServer() }
                     }
                 } footer: {
                     Text("This forgets the address and password on this device. It does not log WhatsApp out or delete backend data.")

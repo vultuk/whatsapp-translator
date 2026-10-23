@@ -1,7 +1,13 @@
 import Foundation
 import Security
 
-struct CredentialStore: Sendable {
+protocol ServerCredentialStoring: Sendable {
+    func load() -> ServerConfiguration?
+    func save(_ configuration: ServerConfiguration) throws
+    func clear()
+}
+
+struct CredentialStore: Sendable, ServerCredentialStoring {
     private let service = "com.vultuk.whatsapptranslator.backend"
     private var sharedAccessGroup: String? {
         guard let rawValue = Bundle.main.object(forInfoDictionaryKey: "KeychainAccessGroup") as? String else {

@@ -353,7 +353,7 @@ final class AppSession {
     }
 
     private let api: APIClient
-    private let credentials: CredentialStore
+    private let credentials: any ServerCredentialStoring
     private let cache: ChatCacheStore
     private let mediaCache: MediaCacheStore
     private let demoMode: Bool
@@ -369,7 +369,7 @@ final class AppSession {
 
     init(
         api: APIClient = APIClient(),
-        credentials: CredentialStore = CredentialStore(),
+        credentials: any ServerCredentialStoring = CredentialStore(),
         cache: ChatCacheStore = .shared,
         mediaCache: MediaCacheStore = .shared,
         draftStore: DraftStore = DraftStore(),
@@ -1153,7 +1153,18 @@ final class AppSession {
         try await api.updateOpenAISettings(settings)
     }
 
-    func forgetServer() {
+    func forgetServer() async {
+        let installationID = PushNotificationCoordinator.shared.currentInstallationID
+        PushNotificationCoordinator.shared.deactivate()
+        if demoMode {
+            await api.disconnectLiveEvents()
+        } else {
+            await api.revokeDeviceAccess(installationID: installationID)
+        }
+        forgetServerLocally()
+    }
+
+    private func forgetServerLocally() {
         applyBackendStatus(BackendStatus(connected: false, phone: nil, name: nil, connectionState: "connecting"))
         #if os(iOS)
         MessageVideoPlayback.stopAll()
@@ -1162,7 +1173,6 @@ final class AppSession {
         recoveryTask?.cancel()
         liveUpdatesReconnecting = false
         Task {
-            await api.disconnectLiveEvents()
             await cache.clear()
             await mediaCache.clear()
         }

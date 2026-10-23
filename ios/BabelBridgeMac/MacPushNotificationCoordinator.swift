@@ -55,6 +55,12 @@ final class PushNotificationCoordinator {
 
     private init() {}
 
+    func deactivate() {
+        session = nil
+    }
+
+    var currentInstallationID: String { installationID }
+
     func activate(for session: AppSession) async {
         self.session = session
         registerMessagingCategory()

@@ -310,6 +310,7 @@ targets:
       - path: SharedTests/ReactionDeliveryTests.swift
       - path: SharedTests/MessageEditDeliveryTests.swift
       - path: SharedTests/WhatsAppConnectionTests.swift
+      - path: SharedTests/ServerSignOutTests.swift
       - path: SharedTests/ChatMediaGalleryTests.swift
       - path: SharedTests/ImagePasteTests.swift
       - path: SharedTests/AppIconTests.swift
@@ -344,6 +345,7 @@ targets:
       - path: SharedTests/ReactionDeliveryTests.swift
       - path: SharedTests/MessageEditDeliveryTests.swift
       - path: SharedTests/WhatsAppConnectionTests.swift
+      - path: SharedTests/ServerSignOutTests.swift
       - path: SharedTests/ChatMediaGalleryTests.swift
       - path: SharedTests/ImagePasteTests.swift
       - path: SharedTests/AppIconTests.swift

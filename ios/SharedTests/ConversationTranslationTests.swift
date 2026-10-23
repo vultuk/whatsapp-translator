@@ -48,7 +48,7 @@ final class ConversationTranslationTests: XCTestCase {
         session.handle(event)
         XCTAssertEqual(session.savedConversationSettings["family@g.us"]?.translationEnabled, true)
         XCTAssertNil(session.savedConversationSettings["person@s.whatsapp.net"])
-        session.forgetServer()
+        await session.forgetServer()
         XCTAssertTrue(session.savedConversationSettings.isEmpty)
     }
 
