@@ -23,12 +23,13 @@ struct RootView: View {
                     } else {
                         MainMessagesView()
                             .safeAreaInset(edge: .top, spacing: 0) {
-                                if !session.backendStatus.connected {
-                                    Label("Reconnecting to WhatsApp…", systemImage: "arrow.triangle.2.circlepath")
+                                if session.connectionBanner.showsBanner {
+                                    Label(session.connectionBanner.title, systemImage: session.connectionBanner.systemImage)
                                         .font(.footnote)
                                         .padding(10)
                                         .frame(maxWidth: .infinity)
                                         .background(.regularMaterial)
+                                        .accessibilityIdentifier("whatsapp-connection-banner")
                                 }
                             }
                     }

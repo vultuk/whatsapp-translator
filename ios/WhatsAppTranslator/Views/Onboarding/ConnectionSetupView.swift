@@ -12,7 +12,7 @@ struct WhatsAppLinkView: View {
                     TranslatorMark(size: 64)
                     Text("Link WhatsApp")
                         .font(.largeTitle.bold())
-                    Text("Your WhatsApp session needs linking. Your chats and server settings are saved.")
+                    Text(WhatsAppConnectionBanner.relinkHint)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                     Group {

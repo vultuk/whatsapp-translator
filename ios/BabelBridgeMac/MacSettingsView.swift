@@ -73,7 +73,7 @@ struct MacSettingsView: View {
         SettingsGroup(title: "Connection", systemImage: "network") {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
                 settingsRow("Server", session.configuration?.baseURL.host() ?? "Not configured")
-                settingsRow("WhatsApp", session.backendStatus.connected ? "Connected" : "Disconnected")
+                settingsRow("WhatsApp", session.connectionBanner.statusLabel)
             }
         }
     }

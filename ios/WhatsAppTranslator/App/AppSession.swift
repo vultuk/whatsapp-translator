@@ -19,7 +19,10 @@ final class AppSession {
     var whatsAppLinkError: String?
     private var connectionRevision = UUID()
     var requiresWhatsAppLink: Bool {
-        !backendStatus.connected && (backendStatus.connectionState == "linking_required" || whatsAppQRCode != nil)
+        connectionBanner.kind == .linkingRequired || (!backendStatus.connected && whatsAppQRCode != nil)
+    }
+    var connectionBanner: WhatsAppConnectionBanner {
+        WhatsAppConnectionBanner.resolve(connected: backendStatus.connected, connectionState: backendStatus.connectionState)
     }
     var contacts: [Contact] = []
     var avatarURLs: [String: URL] = [:]
@@ -1365,8 +1368,11 @@ final class AppSession {
                 return
             }
             if event.type == "disconnected" {
-                applyBackendStatus(BackendStatus(connected: false, phone: nil, name: nil,
-                    connectionState: requiresWhatsAppLink ? "linking_required" : "reconnecting"))
+                // This event has no connection_state. A retry and a permanent stop both
+                // send it after a status event, so keep the state that status just set.
+                // With nothing to keep, this is a stop: do not claim a retry.
+                let state = event.connectionState ?? WhatsAppConnectionBanner.statePreservedByBareDisconnect(current: backendStatus.connectionState)
+                applyBackendStatus(BackendStatus(connected: false, phone: nil, name: nil, connectionState: state))
                 return
             }
             if let connected = event.connected {

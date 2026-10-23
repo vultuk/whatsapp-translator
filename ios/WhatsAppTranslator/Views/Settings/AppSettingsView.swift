@@ -28,7 +28,7 @@ struct AppSettingsView: View {
 
                 Section("Connection") {
                     LabeledContent("Server", value: session.configuration?.baseURL.host() ?? "Not configured")
-                    LabeledContent("WhatsApp", value: session.backendStatus.connected ? "Connected" : "Disconnected")
+                    LabeledContent("WhatsApp", value: session.connectionBanner.statusLabel)
                 }
 
                 Section {
