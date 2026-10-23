@@ -58,7 +58,7 @@ urlencoding = "2"
 regex = "1"
 
 # MCP (Model Context Protocol) server
-rmcp = { version = "0.13", features = ["server", "macros", "schemars", "transport-streamable-http-server"] }
+rmcp = { version = "2.1", features = ["server", "macros", "schemars", "transport-streamable-http-server"] }
 schemars = "1"
 async-trait = "0.1"
 
